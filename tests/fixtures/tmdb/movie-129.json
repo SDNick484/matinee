@@ -1,0 +1,55 @@
+{
+ "adult": false,
+ "id": 129,
+ "imdb_id": "tt0245429",
+ "title": "Spirited Away",
+ "original_title": "千と千尋の神隠し",
+ "original_language": "en",
+ "release_date": "2001-07-20",
+ "runtime": 125,
+ "status": "Released",
+ "overview": "Spirited Away (2001).",
+ "tagline": "",
+ "vote_average": 8.5,
+ "vote_count": 10000,
+ "poster_path": "/poster129.jpg",
+ "backdrop_path": "/backdrop129.jpg",
+ "belongs_to_collection": null,
+ "genres": [
+  {
+   "id": 16,
+   "name": "Animation"
+  },
+  {
+   "id": 10751,
+   "name": "Family"
+  },
+  {
+   "id": 14,
+   "name": "Fantasy"
+  }
+ ],
+ "release_dates": {
+  "results": [
+   {
+    "iso_3166_1": "US",
+    "release_dates": [
+     {
+      "certification": "PG",
+      "iso_639_1": "",
+      "note": "",
+      "release_date": "2000-01-01T00:00:00.000Z",
+      "type": 3
+     },
+     {
+      "certification": "",
+      "iso_639_1": "",
+      "note": "",
+      "release_date": "2001-01-01T00:00:00.000Z",
+      "type": 4
+     }
+    ]
+   }
+  ]
+ }
+}

@@ -1,0 +1,51 @@
+{
+ "adult": false,
+ "id": 11597,
+ "imdb_id": "tt0105629",
+ "title": "Toys",
+ "original_title": "Toys",
+ "original_language": "en",
+ "release_date": "1992-12-18",
+ "runtime": 118,
+ "status": "Released",
+ "overview": "Toys (1992).",
+ "tagline": "",
+ "vote_average": 5.4,
+ "vote_count": 10000,
+ "poster_path": "/poster11597.jpg",
+ "backdrop_path": "/backdrop11597.jpg",
+ "belongs_to_collection": null,
+ "genres": [
+  {
+   "id": 35,
+   "name": "Comedy"
+  },
+  {
+   "id": 14,
+   "name": "Fantasy"
+  }
+ ],
+ "release_dates": {
+  "results": [
+   {
+    "iso_3166_1": "US",
+    "release_dates": [
+     {
+      "certification": "PG-13",
+      "iso_639_1": "",
+      "note": "",
+      "release_date": "2000-01-01T00:00:00.000Z",
+      "type": 3
+     },
+     {
+      "certification": "",
+      "iso_639_1": "",
+      "note": "",
+      "release_date": "2001-01-01T00:00:00.000Z",
+      "type": 4
+     }
+    ]
+   }
+  ]
+ }
+}

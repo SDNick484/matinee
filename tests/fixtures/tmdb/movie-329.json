@@ -1,0 +1,56 @@
+{
+ "adult": false,
+ "id": 329,
+ "imdb_id": "tt0107290",
+ "title": "Jurassic Park",
+ "original_title": "Jurassic Park",
+ "original_language": "en",
+ "release_date": "1993-06-11",
+ "runtime": 127,
+ "status": "Released",
+ "overview": "Jurassic Park (1993).",
+ "tagline": "",
+ "vote_average": 7.9,
+ "vote_count": 10000,
+ "poster_path": "/poster329.jpg",
+ "backdrop_path": "/backdrop329.jpg",
+ "belongs_to_collection": {
+  "id": 328,
+  "name": "Jurassic Park Collection",
+  "poster_path": null,
+  "backdrop_path": null
+ },
+ "genres": [
+  {
+   "id": 12,
+   "name": "Adventure"
+  },
+  {
+   "id": 878,
+   "name": "Science Fiction"
+  }
+ ],
+ "release_dates": {
+  "results": [
+   {
+    "iso_3166_1": "US",
+    "release_dates": [
+     {
+      "certification": "PG-13",
+      "iso_639_1": "",
+      "note": "",
+      "release_date": "2000-01-01T00:00:00.000Z",
+      "type": 3
+     },
+     {
+      "certification": "",
+      "iso_639_1": "",
+      "note": "",
+      "release_date": "2001-01-01T00:00:00.000Z",
+      "type": 4
+     }
+    ]
+   }
+  ]
+ }
+}

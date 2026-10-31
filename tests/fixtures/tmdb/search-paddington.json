@@ -1,0 +1,39 @@
+{
+ "page": 1,
+ "results": [
+  {
+   "adult": false,
+   "id": 116149,
+   "title": "Paddington",
+   "original_title": "Paddington",
+   "release_date": "2014-11-24",
+   "overview": "",
+   "poster_path": "/poster116149.jpg",
+   "backdrop_path": "/backdrop116149.jpg",
+   "popularity": 40.0,
+   "genre_ids": [],
+   "original_language": "en",
+   "video": false,
+   "vote_average": 7.0,
+   "vote_count": 1000
+  },
+  {
+   "adult": false,
+   "id": 346648,
+   "title": "Paddington 2",
+   "original_title": "Paddington 2",
+   "release_date": "2017-11-09",
+   "overview": "",
+   "poster_path": "/poster346648.jpg",
+   "backdrop_path": "/backdrop346648.jpg",
+   "popularity": 38.0,
+   "genre_ids": [],
+   "original_language": "en",
+   "video": false,
+   "vote_average": 7.0,
+   "vote_count": 1000
+  }
+ ],
+ "total_pages": 1,
+ "total_results": 2
+}

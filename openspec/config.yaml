@@ -1,0 +1,29 @@
+# openspec/config.yaml — movie collection tracker
+schema: spec-driven
+
+context: |
+  App: Matinee, a self-hosted family movie collection tracker (physical + digital) at movies.example.com.
+  Hosting: Alpine Linux (LXC/VM), OpenRC service, exposed through Cloudflare tunnel + Cloudflare Access.
+  Conventions: standard Python backend, project layout, deploy pattern.
+  Access: browsing and the recommender open to the family; add/edit requires login.
+  People: User 1 (green), User 2 (blue), User 3 (red), User 4 (pink), User 5 (purple).
+  Devices: Android Chrome phones first (camera barcode scanning), desktop second.
+  Core model: Title (the movie, keyed by TMDB id) vs Package (a UPC product; may contain many titles, e.g. box sets)
+    vs Copy (one owned instance: physical or digital, format, edition, location or service, digital-code status).
+  External APIs: TMDB for metadata/posters (attribution on About page; refresh cached data older than 6 months),
+    OMDb for IMDb/RT/Metacritic (1,000 requests/day), UPCitemdb trial endpoint (100 lookups/day). No scraping.
+  Long-form product vision: docs/vision.md.
+  Non-goals: video playback, social features, ML-based recommendations.
+
+rules:
+  proposal:
+    - Keep each change independently shippable; list what is explicitly deferred to later changes
+  specs:
+    - Every requirement that calls an external API has scenarios for a lookup miss and for quota exhaustion
+    - Scenarios use concrete examples (real movie titles, realistic retail product strings), not placeholders
+  design:
+    - Note any divergence from SDNick484/roasted conventions and why
+    - Record data-model decisions (tables, keys, migrations) explicitly
+  tasks:
+    - Put tests next to the implementation tasks they cover, not in a final testing phase
+    - Last task group is deploy plus a smoke test on an Android phone

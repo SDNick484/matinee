@@ -1,0 +1,55 @@
+{
+ "adult": false,
+ "id": 536869,
+ "imdb_id": "tt5697572",
+ "title": "Cats",
+ "original_title": "Cats",
+ "original_language": "en",
+ "release_date": "2019-12-19",
+ "runtime": 110,
+ "status": "Released",
+ "overview": "Cats (2019).",
+ "tagline": "",
+ "vote_average": 4.1,
+ "vote_count": 10000,
+ "poster_path": "/poster536869.jpg",
+ "backdrop_path": "/backdrop536869.jpg",
+ "belongs_to_collection": null,
+ "genres": [
+  {
+   "id": 35,
+   "name": "Comedy"
+  },
+  {
+   "id": 14,
+   "name": "Fantasy"
+  },
+  {
+   "id": 18,
+   "name": "Drama"
+  }
+ ],
+ "release_dates": {
+  "results": [
+   {
+    "iso_3166_1": "US",
+    "release_dates": [
+     {
+      "certification": "PG",
+      "iso_639_1": "",
+      "note": "",
+      "release_date": "2000-01-01T00:00:00.000Z",
+      "type": 3
+     },
+     {
+      "certification": "",
+      "iso_639_1": "",
+      "note": "",
+      "release_date": "2001-01-01T00:00:00.000Z",
+      "type": 4
+     }
+    ]
+   }
+  ]
+ }
+}

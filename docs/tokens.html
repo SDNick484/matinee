@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Matinee — design tokens (proposal for review)</title>
+<style>
+@font-face { font-family: Figtree; src: url(../static/fonts/figtree-latin-wght.woff2) format("woff2"); font-weight: 300 900; font-display: swap; }
+@font-face { font-family: Figtree; src: url(../static/fonts/figtree-latin-ext-wght.woff2) format("woff2"); font-weight: 300 900; font-display: swap;
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF; }
+
+/* ===== proposed tokens: these move into static/style.css :root once approved ===== */
+:root {
+  /* surfaces: near-black, slightly blue so posters pop */
+  --page: #0b0b0e;
+  --card: #16161c;
+  --raised: #202029;
+  --line: #2c2c38;
+  /* ink: warm ivory, like a lit screen in a dark room */
+  --ink: #f3ead8;
+  --ink-2: #b8b0a1;       /* secondary text: year, runtime, labels */
+  --ink-3: #938d80;       /* hints, captions (≥ 4.5:1 on every surface) */
+  /* accents */
+  --accent: #c8272d;      /* cinema red: primary buttons, focus ring, active filter */
+  --accent-ink: #f3ead8;
+  --accent-text: #ef5a52; /* red used as text/links on dark */
+  --amber: #f2b544;       /* marquee bulb: TMDB score, "In collection" badge; sparingly */
+  /* format chips: solid fill + near-black text */
+  --chip-4k: #e3b54d;      --chip-4k-ink: #17120a;     /* 4K UHD, Digital 4K */
+  --chip-bluray: #5b9cf0;  --chip-bluray-ink: #08111e; /* Blu-ray, 3D Blu-ray */
+  --chip-sd: #a3a3ad;      --chip-sd-ink: #0b0b0e;     /* DVD, VHS */
+  --chip-digital: #3fc0ad; --chip-digital-ink: #04150f;/* Digital HD, Digital SD */
+  /* people: reserved now, used from phase 5 (seen dots, ratings) */
+  --p-user1: #5cc178; --p-user2: #5b9cf0; --p-user3: #ef5a52; --p-user4: #f27fb8; --p-user5: #a98bf5;
+  /* type: Figtree (bundled from roasted), one family, weight does the work */
+  --font: Figtree, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --fs-xs: .75rem;  /* 12  chips, captions */
+  --fs-sm: .875rem; /* 14  card title, meta line */
+  --fs-md: 1rem;    /* 16  body, inputs (16 stops Android zoom-on-focus) */
+  --fs-lg: 1.25rem; /* 20  section heads */
+  --fs-xl: 1.75rem; /* 28  detail title on phones */
+  --fs-2xl: 2.5rem; /* 40  detail title on desktop */
+  /* spacing: 4 px steps */
+  --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 24px; --s6: 32px; --s7: 48px;
+  /* radii */
+  --r-chip: 999px; --r-card: 8px; --r-sheet: 16px;
+  --shadow: 0 6px 24px rgb(0 0 0 / .45);
+}
+/* ===== end of tokens ===== */
+
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--ink); font: 400 var(--fs-md)/1.5 var(--font); }
+main { max-width: 960px; margin: 0 auto; padding: var(--s5) var(--s4) var(--s7); }
+h1 { font-size: var(--fs-xl); font-weight: 800; margin: 0 0 var(--s1); letter-spacing: -.01em; }
+h2 { font-size: var(--fs-lg); font-weight: 700; margin: var(--s7) 0 var(--s3); }
+p.lead { color: var(--ink-2); margin: 0 0 var(--s5); }
+code { font-size: .85em; color: var(--ink-2); }
+.swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: var(--s3); }
+.sw { background: var(--card); border: 1px solid var(--line); border-radius: var(--r-card); overflow: hidden; font-size: var(--fs-sm); }
+.sw .c { height: 56px; }
+.sw div.t { padding: var(--s2) var(--s3); }
+.sw b { display: block; font-weight: 700; }
+.chip { display: inline-flex; align-items: center; height: 24px; padding: 0 var(--s2); border-radius: var(--r-chip);
+  font-size: var(--fs-xs); font-weight: 700; letter-spacing: .01em; white-space: nowrap; }
+.k4 { background: var(--chip-4k); color: var(--chip-4k-ink); }
+.kb { background: var(--chip-bluray); color: var(--chip-bluray-ink); }
+.ks { background: var(--chip-sd); color: var(--chip-sd-ink); }
+.kd { background: var(--chip-digital); color: var(--chip-digital-ink); }
+table { border-collapse: collapse; width: 100%; font-size: var(--fs-sm); }
+td, th { text-align: left; padding: var(--s2) var(--s3); border-bottom: 1px solid var(--line); }
+th { color: var(--ink-2); font-weight: 600; }
+.pass { color: var(--p-user1); font-weight: 700; } .fail { color: var(--accent-text); font-weight: 700; }
+.type > div { display: flex; gap: var(--s4); align-items: baseline; padding: var(--s2) 0; border-bottom: 1px solid var(--line); }
+.type code { width: 110px; flex: none; }
+/* sample: poster grid + detail */
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: var(--s3); max-width: 412px;
+  background: var(--page); border: 1px dashed var(--line); padding: var(--s3); border-radius: var(--r-card); }
+.poster { aspect-ratio: 2/3; border-radius: var(--r-card); background: linear-gradient(160deg, #3a2a4a, #141018);
+  display: flex; align-items: flex-end; padding: var(--s2); box-shadow: var(--shadow); }
+.poster.ph { background: var(--card); border: 1px solid var(--line); align-items: center; justify-content: center; text-align: center;
+  font-size: var(--fs-sm); font-weight: 700; color: var(--ink-2); }
+.card-t { font-size: var(--fs-sm); font-weight: 600; margin-top: var(--s1); line-height: 1.25; }
+.card-y { font-size: var(--fs-xs); color: var(--ink-3); }
+.chips { display: flex; gap: var(--s1); flex-wrap: wrap; margin-top: var(--s1); }
+.btn { display: inline-flex; align-items: center; height: 44px; padding: 0 var(--s4); border-radius: var(--r-card); border: 0;
+  font: 700 var(--fs-md) var(--font); background: var(--accent); color: var(--accent-ink); }
+.btn.ghost { background: transparent; color: var(--ink); border: 1px solid var(--line); }
+.hero { position: relative; border-radius: var(--r-sheet); overflow: hidden; max-width: 412px; padding: var(--s5) var(--s4);
+  background: var(--card); isolation: isolate; }
+.hero::before { content: ""; position: absolute; inset: -20px; z-index: -1; background: linear-gradient(120deg, #6a3b1f, #1d3b56);
+  filter: blur(18px) brightness(.55); }
+.score { color: var(--amber); font-weight: 800; }
+.dots span { display: inline-block; width: 14px; height: 14px; border-radius: 50%; margin-right: var(--s2); vertical-align: middle; }
+</style>
+</head>
+<body>
+<main>
+<h1>Matinee: design tokens</h1>
+<p class="lead">Proposal for review (task 3.1). Dark-only "home theater" look: near-black surfaces, warm ivory ink, a cinema-red accent and a
+marquee-amber highlight. Approve or edit the values below; once approved they go into <code>static/style.css</code> <code>:root</code>.
+Contrast ratios on this page are measured live from the CSS values.</p>
+
+<h2>Surfaces and ink</h2>
+<div class="swatches" id="base"></div>
+
+<h2>Accents</h2>
+<div class="swatches" id="accents"></div>
+<p style="margin-top:var(--s4)"><button class="btn">Add a copy</button> &nbsp; <button class="btn ghost">Refresh from TMDB</button>
+ &nbsp; <span class="score">★ 7.9</span> &nbsp; <a style="color:var(--accent-text)" href="#">themoviedb.org</a></p>
+
+<h2>Format chips</h2>
+<p class="chips"><span class="chip k4">4K UHD</span><span class="chip k4">Digital 4K · Apple TV</span>
+<span class="chip kb">Blu-ray</span><span class="chip kb">3D Blu-ray</span><span class="chip ks">DVD</span><span class="chip ks">VHS</span>
+<span class="chip kd">Digital HD · Movies Anywhere</span><span class="chip kd">Digital SD</span></p>
+<p class="card-y">Digital 4K uses gold because resolution wins over medium. Its service text tells it apart from a physical 4K UHD disc.</p>
+
+<h2>Contrast (WCAG AA needs ≥ 4.5:1 for text)</h2>
+<table><thead><tr><th>Pairing</th><th>Sample</th><th>Ratio</th><th></th></tr></thead><tbody id="contrast"></tbody></table>
+
+<h2>Type scale (Figtree, bundled)</h2>
+<div class="type" id="type"></div>
+<p class="card-y">No separate display face is proposed: Figtree at 800 weight carries titles. A condensed marquee face for the wordmark only
+(for example Bebas Neue, OFL) is an option if you want more "cinema".</p>
+
+<h2>Spacing and radii</h2>
+<div id="space"></div>
+
+<h2>People (reserved, unused until phase 5)</h2>
+<p class="dots"><span style="background:var(--p-user1)"></span>Member 1 <span style="background:var(--p-user2);margin-left:var(--s4)"></span>Member 2
+<span style="background:var(--p-user3);margin-left:var(--s4)"></span>Member 3 <span style="background:var(--p-user4);margin-left:var(--s4)"></span>Member 4
+<span style="background:var(--p-user5);margin-left:var(--s4)"></span>Member 5</p>
+
+<h2>In context (412 px phone width)</h2>
+<div class="grid">
+  <div><div class="poster"></div><div class="card-t">Dune</div><div class="card-y">2021</div>
+    <div class="chips"><span class="chip k4">4K UHD</span><span class="chip k4">Digital 4K</span></div></div>
+  <div><div class="poster" style="background:linear-gradient(160deg,#2a4a6a,#0e1620)"></div><div class="card-t">Paddington 2</div><div class="card-y">2017</div>
+    <div class="chips"><span class="chip kb">Blu-ray</span><span class="chip kd">Digital HD</span></div></div>
+  <div><div class="poster ph">Kantara<br>2022</div><div class="card-t">Kantara</div><div class="card-y">2022</div>
+    <div class="chips"><span class="chip ks">DVD</span></div></div>
+</div>
+<div class="hero" style="margin-top:var(--s5)">
+  <h1>The Lion King</h1>
+  <div style="color:var(--ink-2)">1994 · 1h 29m · <span class="chip" style="border:1px solid var(--ink-3);color:var(--ink)">G</span> · <span class="score">★ 8.3</span></div>
+  <div class="chips" style="margin-top:var(--s3)"><span class="chip ks">DVD</span><span class="chip k4">Digital 4K · Movies Anywhere</span></div>
+</div>
+</main>
+<script>
+const css = getComputedStyle(document.documentElement), v = n => css.getPropertyValue(n).trim();
+function lum(hex) {
+  const [r, g, b] = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255)
+    .map(c => c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+const ratio = (a, b) => { const [x, y] = [lum(v(a)), lum(v(b))].sort((p, q) => q - p); return (x + 0.05) / (y + 0.05); };
+const sw = (el, names) => document.getElementById(el).innerHTML = names.map(([n, use]) =>
+  `<div class="sw"><div class="c" style="background:var(${n})"></div><div class="t"><b>${n}</b>${v(n)}<br><span class="card-y">${use}</span></div></div>`).join("");
+sw("base", [["--page", "page background"], ["--card", "cards, sheets"], ["--raised", "inputs, menus"], ["--line", "borders, dividers"],
+            ["--ink", "main text"], ["--ink-2", "secondary text"], ["--ink-3", "hints, captions"]]);
+sw("accents", [["--accent", "primary buttons, focus"], ["--accent-text", "links on dark"], ["--amber", "score, In collection"]]);
+const pairs = [
+  ["--ink", "--page"], ["--ink", "--card"], ["--ink", "--raised"], ["--ink-2", "--page"], ["--ink-2", "--card"], ["--ink-2", "--raised"],
+  ["--ink-3", "--page"], ["--ink-3", "--card"], ["--ink-3", "--raised"], ["--accent-ink", "--accent"], ["--accent-text", "--page"],
+  ["--accent-text", "--card"], ["--amber", "--page"], ["--amber", "--card"],
+  ["--chip-4k-ink", "--chip-4k"], ["--chip-bluray-ink", "--chip-bluray"], ["--chip-sd-ink", "--chip-sd"], ["--chip-digital-ink", "--chip-digital"]];
+document.getElementById("contrast").innerHTML = pairs.map(([fg, bg]) => {
+  const r = ratio(fg, bg);
+  return `<tr><td><code>${fg}</code> on <code>${bg}</code></td><td><span class="chip" style="background:var(${bg});color:var(${fg})">Sample Aa</span></td>
+    <td>${r.toFixed(2)}:1</td><td class="${r >= 4.5 ? "pass" : "fail"}">${r >= 4.5 ? "AA ✓" : "below AA"}</td></tr>`;
+}).join("");
+document.getElementById("type").innerHTML = [["--fs-2xl", 800], ["--fs-xl", 800], ["--fs-lg", 700], ["--fs-md", 400], ["--fs-sm", 600], ["--fs-xs", 700]]
+  .map(([n, w]) => `<div><code>${n} ${v(n)}</code><span style="font-size:var(${n});font-weight:${w}">Spirited Away · 2001</span></div>`).join("");
+document.getElementById("space").innerHTML = ["--s1", "--s2", "--s3", "--s4", "--s5", "--s6", "--s7"].map(n =>
+  `<div style="display:flex;align-items:center;gap:var(--s3);margin:2px 0"><code style="width:90px">${n} ${v(n)}</code><span style="height:12px;width:var(${n});background:var(--amber)"></span></div>`).join("")
+  + ["--r-chip", "--r-card", "--r-sheet"].map(n => `<div style="display:inline-block;margin:var(--s3) var(--s3) 0 0;width:72px;height:48px;border:1px solid var(--ink-3);border-radius:var(${n})"></div><code>${n} ${v(n)}</code> `).join("");
+</script>
+</body>
+</html>

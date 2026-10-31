@@ -1,0 +1,53 @@
+#!/bin/sh
+# Nightly backup of Matinee, the movie collection (installed by setup-matinee.sh). Runs from /etc/periodic/daily:
+#   $LOCAL_DIR/<date>/matinee-matinee.db.gz          (kept KEEP_DAYS days)
+#   $BACKUP_TARGET/db/<date>/...  + $BACKUP_TARGET/files/matinee/images/   (if BACKUP_TARGET is set)
+# The images are TMDB art and can be re-fetched; copying them just makes a restore instant.
+# Config: /etc/conf.d/ops     Log: /var/log/ops.log
+# (MATINEE_DATA and LOG may be overridden for a local test run.)
+set -u
+OPS_CONF=${OPS_CONF:-/etc/conf.d/ops}
+[ -f /etc/conf.d/ct210-ops ] && OPS_CONF=/etc/conf.d/ct210-ops
+[ -f "$OPS_CONF" ] && . "$OPS_CONF"
+LOCAL_DIR=${LOCAL_DIR:-/var/backups/matinee}
+KEEP_DAYS=${KEEP_DAYS:-14}
+BACKUP_TARGET=${BACKUP_TARGET:-}
+STAMP=$(date +%Y-%m-%d)
+LOG=${LOG:-/var/log/ops.log}
+DATA=${MATINEE_DATA:-/var/lib/matinee}
+DB=$DATA/matinee.db
+log() { echo "$(date '+%F %T') matinee-backup: $*" >> "$LOG"; }
+
+fail=0
+mkdir -p "$LOCAL_DIR/$STAMP"
+out="$LOCAL_DIR/$STAMP/matinee-matinee.db"
+if [ -f "$DB" ]; then
+  if sqlite3 "$DB" ".backup '$out'" && [ "$(sqlite3 "$out" 'PRAGMA integrity_check;')" = "ok" ]; then
+    gzip -f "$out"
+    log "ok matinee/matinee.db ($(du -h "$out.gz" | cut -f1))"
+  else
+    log "FAILED matinee/matinee.db"; fail=1
+  fi
+fi
+find "$LOCAL_DIR" -mindepth 1 -maxdepth 1 -type d -mtime +"$KEEP_DAYS" -exec rm -rf {} + 2>/dev/null
+
+if [ -n "$BACKUP_TARGET" ]; then
+  if [ -d "$BACKUP_TARGET" ] && [ -w "$BACKUP_TARGET" ]; then
+    mkdir -p "$BACKUP_TARGET/db/$STAMP" "$BACKUP_TARGET/files/matinee/images"
+    cp -a "$out.gz" "$BACKUP_TARGET/db/$STAMP/" 2>/dev/null || fail=1
+    # a refresh rewrites an image under the same name, so -u copies new and updated files only
+    cp -au "$DATA/images/." "$BACKUP_TARGET/files/matinee/images/" || fail=1
+    log "matinee copied to $BACKUP_TARGET"
+  else
+    log "FAILED: BACKUP_TARGET $BACKUP_TARGET is not a writable directory (is it mounted?)"; fail=1
+  fi
+fi
+
+if [ "$fail" != 0 ]; then
+  if [ -x /usr/local/bin/ops-notify ]; then
+    /usr/local/bin/ops-notify "Matinee backup" down "Last night's Matinee backup had a problem. See $LOG."
+  elif [ -x /usr/local/bin/ct210-notify ]; then
+    /usr/local/bin/ct210-notify "Matinee backup" down "Last night's Matinee backup had a problem. See $LOG."
+  fi
+fi
+exit $fail

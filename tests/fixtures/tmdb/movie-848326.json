@@ -1,0 +1,48 @@
+{
+ "adult": false,
+ "id": 848326,
+ "imdb_id": "tt15327088",
+ "title": "Kantara",
+ "original_title": "ಕಾಂತಾರ",
+ "original_language": "en",
+ "release_date": "2022-09-30",
+ "runtime": 148,
+ "status": "Released",
+ "overview": "Kantara (2022).",
+ "tagline": "",
+ "vote_average": 7.5,
+ "vote_count": 10000,
+ "poster_path": "/poster848326.jpg",
+ "backdrop_path": "/backdrop848326.jpg",
+ "belongs_to_collection": null,
+ "genres": [
+  {
+   "id": 28,
+   "name": "Action"
+  },
+  {
+   "id": 18,
+   "name": "Drama"
+  },
+  {
+   "id": 53,
+   "name": "Thriller"
+  }
+ ],
+ "release_dates": {
+  "results": [
+   {
+    "iso_3166_1": "IN",
+    "release_dates": [
+     {
+      "certification": "UA",
+      "iso_639_1": "",
+      "note": "",
+      "release_date": "2022-09-30T00:00:00.000Z",
+      "type": 3
+     }
+    ]
+   }
+  ]
+ }
+}

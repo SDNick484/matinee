@@ -1,0 +1,71 @@
+{
+ "page": 1,
+ "results": [
+  {
+   "adult": false,
+   "id": 862,
+   "title": "Toy Story",
+   "original_title": "Toy Story",
+   "release_date": "1995-11-22",
+   "overview": "",
+   "poster_path": "/poster862.jpg",
+   "backdrop_path": "/backdrop862.jpg",
+   "popularity": 120.0,
+   "genre_ids": [],
+   "original_language": "en",
+   "video": false,
+   "vote_average": 7.0,
+   "vote_count": 1000
+  },
+  {
+   "adult": false,
+   "id": 863,
+   "title": "Toy Story 2",
+   "original_title": "Toy Story 2",
+   "release_date": "1999-10-30",
+   "overview": "",
+   "poster_path": "/poster863.jpg",
+   "backdrop_path": "/backdrop863.jpg",
+   "popularity": 90.0,
+   "genre_ids": [],
+   "original_language": "en",
+   "video": false,
+   "vote_average": 7.0,
+   "vote_count": 1000
+  },
+  {
+   "adult": false,
+   "id": 10193,
+   "title": "Toy Story 3",
+   "original_title": "Toy Story 3",
+   "release_date": "2010-06-16",
+   "overview": "",
+   "poster_path": "/poster10193.jpg",
+   "backdrop_path": "/backdrop10193.jpg",
+   "popularity": 88.0,
+   "genre_ids": [],
+   "original_language": "en",
+   "video": false,
+   "vote_average": 7.0,
+   "vote_count": 1000
+  },
+  {
+   "adult": false,
+   "id": 301528,
+   "title": "Toy Story 4",
+   "original_title": "Toy Story 4",
+   "release_date": "2019-06-19",
+   "overview": "",
+   "poster_path": "/poster301528.jpg",
+   "backdrop_path": "/backdrop301528.jpg",
+   "popularity": 85.0,
+   "genre_ids": [],
+   "original_language": "en",
+   "video": false,
+   "vote_average": 7.0,
+   "vote_count": 1000
+  }
+ ],
+ "total_pages": 1,
+ "total_results": 4
+}

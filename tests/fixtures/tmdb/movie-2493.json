@@ -1,0 +1,63 @@
+{
+ "adult": false,
+ "id": 2493,
+ "imdb_id": "tt0093779",
+ "title": "The Princess Bride",
+ "original_title": "The Princess Bride",
+ "original_language": "en",
+ "release_date": "1987-09-25",
+ "runtime": 98,
+ "status": "Released",
+ "overview": "The Princess Bride (1987).",
+ "tagline": "",
+ "vote_average": 7.7,
+ "vote_count": 10000,
+ "poster_path": "/poster2493.jpg",
+ "backdrop_path": "/backdrop2493.jpg",
+ "belongs_to_collection": null,
+ "genres": [
+  {
+   "id": 12,
+   "name": "Adventure"
+  },
+  {
+   "id": 10751,
+   "name": "Family"
+  },
+  {
+   "id": 14,
+   "name": "Fantasy"
+  },
+  {
+   "id": 35,
+   "name": "Comedy"
+  },
+  {
+   "id": 10749,
+   "name": "Romance"
+  }
+ ],
+ "release_dates": {
+  "results": [
+   {
+    "iso_3166_1": "US",
+    "release_dates": [
+     {
+      "certification": "PG",
+      "iso_639_1": "",
+      "note": "",
+      "release_date": "2000-01-01T00:00:00.000Z",
+      "type": 3
+     },
+     {
+      "certification": "",
+      "iso_639_1": "",
+      "note": "",
+      "release_date": "2001-01-01T00:00:00.000Z",
+      "type": 4
+     }
+    ]
+   }
+  ]
+ }
+}

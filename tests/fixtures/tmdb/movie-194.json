@@ -1,0 +1,51 @@
+{
+ "adult": false,
+ "id": 194,
+ "imdb_id": "tt0211915",
+ "title": "Amélie",
+ "original_title": "Le Fabuleux Destin d'Amélie Poulain",
+ "original_language": "en",
+ "release_date": "2001-04-25",
+ "runtime": 122,
+ "status": "Released",
+ "overview": "Amélie (2001).",
+ "tagline": "",
+ "vote_average": 7.9,
+ "vote_count": 10000,
+ "poster_path": "/poster194.jpg",
+ "backdrop_path": "/backdrop194.jpg",
+ "belongs_to_collection": null,
+ "genres": [
+  {
+   "id": 35,
+   "name": "Comedy"
+  },
+  {
+   "id": 10749,
+   "name": "Romance"
+  }
+ ],
+ "release_dates": {
+  "results": [
+   {
+    "iso_3166_1": "US",
+    "release_dates": [
+     {
+      "certification": "R",
+      "iso_639_1": "",
+      "note": "",
+      "release_date": "2000-01-01T00:00:00.000Z",
+      "type": 3
+     },
+     {
+      "certification": "",
+      "iso_639_1": "",
+      "note": "",
+      "release_date": "2001-01-01T00:00:00.000Z",
+      "type": 4
+     }
+    ]
+   }
+  ]
+ }
+}

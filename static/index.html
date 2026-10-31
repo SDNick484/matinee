@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Matinee</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <header class="site-header">
+    <div class="header-inner">
+      <a href="#/" class="brand" id="brand-link">
+        <span>Matinee</span>
+      </a>
+      <nav class="nav-actions" id="nav-actions">
+        <!-- Rendered by app.js based on admin status / route -->
+      </nav>
+    </div>
+  </header>
+
+  <main id="view" role="main">
+    <div style="text-align:center;padding:48px 16px;color:var(--ink-2)">Loading collection…</div>
+  </main>
+
+  <div id="modal-root"></div>
+
+  <footer class="site-footer">
+    <div>
+      <a href="#/">Collection</a> &nbsp;·&nbsp;
+      <a href="#/about">About &amp; TMDB Attribution</a>
+    </div>
+    <div>Matinee — the family movie collection</div>
+  </footer>
+
+  <div id="toast" class="toast-container" role="status" aria-live="polite"></div>
+</body>
+</html>

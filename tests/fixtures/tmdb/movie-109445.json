@@ -1,0 +1,64 @@
+{
+ "adult": false,
+ "id": 109445,
+ "imdb_id": "tt2294629",
+ "title": "Frozen",
+ "original_title": "Frozen",
+ "original_language": "en",
+ "release_date": "2013-11-20",
+ "runtime": 102,
+ "status": "Released",
+ "overview": "Frozen (2013).",
+ "tagline": "",
+ "vote_average": 7.2,
+ "vote_count": 10000,
+ "poster_path": "/poster109445.jpg",
+ "backdrop_path": "/backdrop109445.jpg",
+ "belongs_to_collection": {
+  "id": 386382,
+  "name": "Frozen Collection",
+  "poster_path": null,
+  "backdrop_path": null
+ },
+ "genres": [
+  {
+   "id": 16,
+   "name": "Animation"
+  },
+  {
+   "id": 10751,
+   "name": "Family"
+  },
+  {
+   "id": 12,
+   "name": "Adventure"
+  },
+  {
+   "id": 14,
+   "name": "Fantasy"
+  }
+ ],
+ "release_dates": {
+  "results": [
+   {
+    "iso_3166_1": "US",
+    "release_dates": [
+     {
+      "certification": "PG",
+      "iso_639_1": "",
+      "note": "",
+      "release_date": "2000-01-01T00:00:00.000Z",
+      "type": 3
+     },
+     {
+      "certification": "",
+      "iso_639_1": "",
+      "note": "",
+      "release_date": "2001-01-01T00:00:00.000Z",
+      "type": 4
+     }
+    ]
+   }
+  ]
+ }
+}

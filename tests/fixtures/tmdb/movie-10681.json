@@ -1,0 +1,55 @@
+{
+ "adult": false,
+ "id": 10681,
+ "imdb_id": "tt0910970",
+ "title": "WALL·E",
+ "original_title": "WALL·E",
+ "original_language": "en",
+ "release_date": "2008-06-22",
+ "runtime": 98,
+ "status": "Released",
+ "overview": "WALL·E (2008).",
+ "tagline": "",
+ "vote_average": 8.1,
+ "vote_count": 10000,
+ "poster_path": "/poster10681.jpg",
+ "backdrop_path": "/backdrop10681.jpg",
+ "belongs_to_collection": null,
+ "genres": [
+  {
+   "id": 16,
+   "name": "Animation"
+  },
+  {
+   "id": 10751,
+   "name": "Family"
+  },
+  {
+   "id": 878,
+   "name": "Science Fiction"
+  }
+ ],
+ "release_dates": {
+  "results": [
+   {
+    "iso_3166_1": "US",
+    "release_dates": [
+     {
+      "certification": "G",
+      "iso_639_1": "",
+      "note": "",
+      "release_date": "2000-01-01T00:00:00.000Z",
+      "type": 3
+     },
+     {
+      "certification": "",
+      "iso_639_1": "",
+      "note": "",
+      "release_date": "2001-01-01T00:00:00.000Z",
+      "type": 4
+     }
+    ]
+   }
+  ]
+ }
+}

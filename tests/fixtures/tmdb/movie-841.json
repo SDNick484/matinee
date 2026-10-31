@@ -1,0 +1,55 @@
+{
+ "adult": false,
+ "id": 841,
+ "imdb_id": "tt0087182",
+ "title": "Dune",
+ "original_title": "Dune",
+ "original_language": "en",
+ "release_date": "1984-12-14",
+ "runtime": 137,
+ "status": "Released",
+ "overview": "Dune (1984).",
+ "tagline": "",
+ "vote_average": 6.2,
+ "vote_count": 10000,
+ "poster_path": "/poster841.jpg",
+ "backdrop_path": "/backdrop841.jpg",
+ "belongs_to_collection": null,
+ "genres": [
+  {
+   "id": 28,
+   "name": "Action"
+  },
+  {
+   "id": 878,
+   "name": "Science Fiction"
+  },
+  {
+   "id": 12,
+   "name": "Adventure"
+  }
+ ],
+ "release_dates": {
+  "results": [
+   {
+    "iso_3166_1": "US",
+    "release_dates": [
+     {
+      "certification": "PG-13",
+      "iso_639_1": "",
+      "note": "",
+      "release_date": "2000-01-01T00:00:00.000Z",
+      "type": 3
+     },
+     {
+      "certification": "",
+      "iso_639_1": "",
+      "note": "",
+      "release_date": "2001-01-01T00:00:00.000Z",
+      "type": 4
+     }
+    ]
+   }
+  ]
+ }
+}

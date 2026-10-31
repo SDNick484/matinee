@@ -1,0 +1,8 @@
+data/
+dist/
+__pycache__/
+.pytest_cache/
+*.pyc
+.env
+.venv/
+docs/movie-app-prompt.md

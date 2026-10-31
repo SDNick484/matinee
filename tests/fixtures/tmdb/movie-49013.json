@@ -1,0 +1,64 @@
+{
+ "adult": false,
+ "id": 49013,
+ "imdb_id": "tt1216475",
+ "title": "Cars 2",
+ "original_title": "Cars 2",
+ "original_language": "en",
+ "release_date": "2011-06-11",
+ "runtime": 106,
+ "status": "Released",
+ "overview": "Cars 2 (2011).",
+ "tagline": "",
+ "vote_average": 6.1,
+ "vote_count": 10000,
+ "poster_path": "/poster49013.jpg",
+ "backdrop_path": "/backdrop49013.jpg",
+ "belongs_to_collection": {
+  "id": 87118,
+  "name": "Cars Collection",
+  "poster_path": null,
+  "backdrop_path": null
+ },
+ "genres": [
+  {
+   "id": 16,
+   "name": "Animation"
+  },
+  {
+   "id": 10751,
+   "name": "Family"
+  },
+  {
+   "id": 12,
+   "name": "Adventure"
+  },
+  {
+   "id": 35,
+   "name": "Comedy"
+  }
+ ],
+ "release_dates": {
+  "results": [
+   {
+    "iso_3166_1": "US",
+    "release_dates": [
+     {
+      "certification": "G",
+      "iso_639_1": "",
+      "note": "",
+      "release_date": "2000-01-01T00:00:00.000Z",
+      "type": 3
+     },
+     {
+      "certification": "",
+      "iso_639_1": "",
+      "note": "",
+      "release_date": "2001-01-01T00:00:00.000Z",
+      "type": 4
+     }
+    ]
+   }
+  ]
+ }
+}

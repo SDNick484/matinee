@@ -1,0 +1,23 @@
+{
+ "page": 1,
+ "results": [
+  {
+   "adult": false,
+   "id": 841,
+   "title": "Dune",
+   "original_title": "Dune",
+   "release_date": "1984-12-14",
+   "overview": "",
+   "poster_path": "/poster841.jpg",
+   "backdrop_path": "/backdrop841.jpg",
+   "popularity": 30.1,
+   "genre_ids": [],
+   "original_language": "en",
+   "video": false,
+   "vote_average": 7.0,
+   "vote_count": 1000
+  }
+ ],
+ "total_pages": 1,
+ "total_results": 1
+}
