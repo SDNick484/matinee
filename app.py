@@ -109,6 +109,13 @@ FORMATS = {"physical": ["4K UHD", "Blu-ray", "3D Blu-ray", "DVD", "VHS"],
            "digital": ["Digital 4K", "Digital HD", "Digital SD"]}
 FORMAT_ORDER = FORMATS["physical"] + FORMATS["digital"]
 SERVICES = ["Movies Anywhere", "Apple TV", "Fandango at Home", "Amazon", "Google Play", "Plex/Jellyfin", "Other"]
+SERVICE_ALIASES = {
+    "vudu": "Fandango at Home",
+    "fandango": "Fandango at Home",
+    "itunes": "Apple TV",
+    "prime": "Amazon",
+    "prime video": "Amazon",
+}
 
 
 def connect():
@@ -604,9 +611,11 @@ def copy_values(data):
                             f"{', '.join(FORMATS[kind][:-1])} or {FORMATS[kind][-1]}."))
     service = None
     if kind == "digital":
-        if not clean(data.get("service")):
+        raw_srv = clean(data.get("service"))
+        if not raw_srv:
             abort(make_err(400, f"Which service is it on? Pick {', '.join(SERVICES[:-1])} or {SERVICES[-1]}."))
-        service = match(data.get("service"), SERVICES)
+        aliased = SERVICE_ALIASES.get(fold(raw_srv)) or raw_srv
+        service = match(aliased, SERVICES)
         if not service:
             abort(make_err(400, f"Unknown service. Pick {', '.join(SERVICES[:-1])} or {SERVICES[-1]}."))
     return {"kind": kind, "format": fmt, "service": service}

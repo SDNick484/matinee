@@ -117,6 +117,8 @@ def test_copy_values():
         assert "Which service" in e.value.response.get_json()["error"]
         assert matinee.copy_values({"kind": "physical", "format": "4K UHD", "service": "Apple TV"}) == \
             {"kind": "physical", "format": "4K UHD", "service": None}
+        assert matinee.copy_values({"kind": "digital", "format": "Digital HD", "service": "Vudu"}) == \
+            {"kind": "digital", "format": "Digital HD", "service": "Fandango at Home"}
         assert matinee.copy_values({"kind": "digital", "format": "digital hd", "service": "movies anywhere"}) == \
             {"kind": "digital", "format": "Digital HD", "service": "Movies Anywhere"}
 
