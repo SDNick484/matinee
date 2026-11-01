@@ -34,6 +34,8 @@
       medium: [],
       quality: [],
       genre: [],
+      rating: "",
+      watched: "",
       kind: "",
       format: "",
       service: "",
@@ -149,6 +151,40 @@
       return `${copy.format}${copy.service ? " · " + copy.service : ""}`;
     }
     return copy.format;
+  }
+
+  function formatRelativeDate(isoDateStr) {
+    if (!isoDateStr) return "Never";
+    const parts = isoDateStr.split("-").map(Number);
+    const target = new Date(parts[0], parts[1] - 1, parts[2]);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const diffMs = today - target;
+    const diffDays = Math.round(diffMs / (1000 * 60 * 60 * 24));
+
+    if (diffDays <= 0) return "today";
+    if (diffDays === 1) return "yesterday";
+    if (diffDays < 7) return `${diffDays} days ago`;
+    const diffWeeks = Math.floor(diffDays / 7);
+    if (diffWeeks < 5) return diffWeeks === 1 ? "1 week ago" : `${diffWeeks} weeks ago`;
+    const diffMonths = Math.floor(diffDays / 30.4375);
+    if (diffMonths < 12) return diffMonths === 1 ? "1 month ago" : `${diffMonths} months ago`;
+    const diffYears = Math.floor(diffDays / 365.25);
+    return diffYears === 1 ? "1 year ago" : `${diffYears} years ago`;
+  }
+
+  function formatReadableDate(isoDateStr) {
+    if (!isoDateStr) return "";
+    const parts = isoDateStr.split("-").map(Number);
+    const date = new Date(parts[0], parts[1] - 1, parts[2]);
+    return date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+  }
+
+  function formatLastWatched(lastWatchedDate) {
+    if (!lastWatchedDate) return "Never watched";
+    const relative = formatRelativeDate(lastWatchedDate);
+    const readable = formatReadableDate(lastWatchedDate);
+    return `Watched ${relative} (${readable})`;
   }
 
   // ================================================================= Router
@@ -284,6 +320,8 @@
     const mediumStr = state.route.query.get("medium") || "";
     const qualityStr = state.route.query.get("quality") || "";
     const genreStr = state.route.query.get("genre") || "";
+    const rating = state.route.query.get("rating") || "";
+    const watched = state.route.query.get("watched") || "";
     const kind = state.route.query.get("kind") || "";
     const both = state.route.query.get("both") || "";
     const format = state.route.query.get("format") || "";
@@ -310,6 +348,8 @@
     state.grid.medium = medium;
     state.grid.quality = quality;
     state.grid.genre = genre;
+    state.grid.rating = rating;
+    state.grid.watched = watched;
     state.grid.kind = kind;
     state.grid.both = both;
     state.grid.format = format;
@@ -335,6 +375,10 @@
               <option value="title" ${sort === "title" ? "selected" : ""}>Title (A–Z)</option>
               <option value="added" ${sort === "added" ? "selected" : ""}>Recently Added</option>
               <option value="year" ${sort === "year" ? "selected" : ""}>Release Year</option>
+              <option value="rating" ${sort === "rating" ? "selected" : ""}>Highest Rated</option>
+              <option value="unrated" ${sort === "unrated" ? "selected" : ""}>Unrated</option>
+              <option value="last_watched" ${sort === "last_watched" ? "selected" : ""}>Last Watched</option>
+              <option value="least_watched" ${sort === "least_watched" ? "selected" : ""}>Least Recently / Never Watched</option>
             </select>
           </div>
         </div>
@@ -433,6 +477,20 @@
     return `Genre (${genre.length})`;
   }
 
+  function getWatchedLabel(watched) {
+    if (!watched) return "Watched: All";
+    if (watched === "watched") return "Watched: Seen";
+    if (watched === "unwatched") return "Watched: Unseen";
+    return `Watched: ${watched}`;
+  }
+
+  function getRatingLabel(rating) {
+    if (!rating) return "Rating: All";
+    if (rating === "8+" || rating === "8") return "Rating: 8.0+ ★";
+    if (rating === "unrated") return "Rating: Unrated";
+    return `Rating: ${rating}`;
+  }
+
   function renderFilterBar() {
     const bar = document.getElementById("filter-bar");
     if (!bar) return;
@@ -441,11 +499,15 @@
     const medium = state.grid.medium || [];
     const quality = state.grid.quality || [];
     const genre = state.grid.genre || [];
+    const rating = state.grid.rating || "";
+    const watched = state.grid.watched || "";
 
     const hasFilters =
       medium.length > 0 ||
       quality.length > 0 ||
       genre.length > 0 ||
+      Boolean(rating) ||
+      Boolean(watched) ||
       state.grid.kind ||
       state.grid.both ||
       state.grid.format ||
@@ -454,6 +516,8 @@
     const mediumLabel = getMediumLabel(medium);
     const qualityLabel = getQualityLabel(quality);
     const genreLabel = getGenreLabel(genre);
+    const watchedLabel = getWatchedLabel(watched);
+    const ratingLabel = getRatingLabel(rating);
 
     const genresList = f.genres || [];
 
@@ -531,6 +595,50 @@
           `
             )
             .join("")}
+        </div>
+      </div>
+
+      <!-- Watched Dropdown -->
+      <div class="filter-popover" id="popover-watched">
+        <button type="button" class="filter-btn ${watched ? "active" : ""}" data-toggle="popover" aria-expanded="false" aria-haspopup="true">
+          <span>${esc(watchedLabel)}</span>
+          <span class="caret">▾</span>
+        </button>
+        <div class="popover-menu" role="menu">
+          <label class="popover-item is-all">
+            <input type="checkbox" data-facet="watched" data-val="" ${!watched ? "checked" : ""}>
+            <span>All Movies</span>
+          </label>
+          <label class="popover-item">
+            <input type="checkbox" data-facet="watched" data-val="watched" ${watched === "watched" ? "checked" : ""}>
+            <span>Watched (Seen)</span>
+          </label>
+          <label class="popover-item">
+            <input type="checkbox" data-facet="watched" data-val="unwatched" ${watched === "unwatched" ? "checked" : ""}>
+            <span>Unwatched (Never seen)</span>
+          </label>
+        </div>
+      </div>
+
+      <!-- Rating Dropdown -->
+      <div class="filter-popover" id="popover-rating">
+        <button type="button" class="filter-btn ${rating ? "active" : ""}" data-toggle="popover" aria-expanded="false" aria-haspopup="true">
+          <span>${esc(ratingLabel)}</span>
+          <span class="caret">▾</span>
+        </button>
+        <div class="popover-menu" role="menu">
+          <label class="popover-item is-all">
+            <input type="checkbox" data-facet="rating" data-val="" ${!rating ? "checked" : ""}>
+            <span>All Ratings</span>
+          </label>
+          <label class="popover-item">
+            <input type="checkbox" data-facet="rating" data-val="8+" ${rating === "8+" || rating === "8" ? "checked" : ""}>
+            <span>Rated 8.0+ ★</span>
+          </label>
+          <label class="popover-item">
+            <input type="checkbox" data-facet="rating" data-val="unrated" ${rating === "unrated" ? "checked" : ""}>
+            <span>Unrated</span>
+          </label>
         </div>
       </div>
 
@@ -631,6 +739,18 @@
           } else {
             q.delete("genre");
           }
+        } else if (facet === "watched") {
+          if (!val || (val === state.grid.watched && !checked)) {
+            q.delete("watched");
+          } else {
+            q.set("watched", val);
+          }
+        } else if (facet === "rating") {
+          if (!val || (val === state.grid.rating && !checked)) {
+            q.delete("rating");
+          } else {
+            q.set("rating", val);
+          }
         }
 
         const qStr = q.toString();
@@ -646,6 +766,8 @@
       q.delete("medium");
       q.delete("quality");
       q.delete("genre");
+      q.delete("rating");
+      q.delete("watched");
       q.delete("kind");
       q.delete("both");
       q.delete("format");
@@ -667,6 +789,8 @@
         (state.grid.medium && state.grid.medium.length > 0) ||
         (state.grid.quality && state.grid.quality.length > 0) ||
         (state.grid.genre && state.grid.genre.length > 0) ||
+        Boolean(state.grid.rating) ||
+        Boolean(state.grid.watched) ||
         state.grid.kind ||
         state.grid.both ||
         state.grid.format ||
@@ -718,6 +842,9 @@
               : `<div class="poster-ph"><span>${esc(t.title)}<br><small style="font-weight:400;color:var(--ink-3)">${t.year || ""}</small></span></div>`;
 
             const bothBadge = t.has_both ? `<span class="badge-both" title="Disc + Digital">💿☁️</span>` : "";
+            const ratingBadge = (t.user_rating !== null && t.user_rating !== undefined)
+              ? `<span class="badge-rating" title="Personal Rating: ${Number(t.user_rating).toFixed(1)}">★ ${Number(t.user_rating).toFixed(1)}</span>`
+              : "";
             const chipsHtml = (t.formats || [])
               .map((fmt) => `<span class="chip ${getChipClass(fmt)}">${getChipIcon(fmt)}${esc(fmt)}</span>`)
               .join("");
@@ -726,6 +853,7 @@
               <a href="#/t/${t.id}" class="movie-card" data-id="${t.id}">
                 <div class="poster-wrap">
                   ${bothBadge}
+                  ${ratingBadge}
                   ${posterHtml}
                 </div>
                 <div class="card-title">${esc(t.title)}</div>
@@ -860,6 +988,33 @@
                     </div>`
                   : ""
               }
+              ${
+                isAdmin
+                  ? `
+                <div class="rating-widget" id="rating-widget">
+                  <div class="rating-header">
+                    <span class="rating-label">Personal Rating</span>
+                    <span class="rating-score-display" id="rating-display">
+                      ${title.user_rating !== null && title.user_rating !== undefined ? `★ ${Number(title.user_rating).toFixed(1)} <small style="font-size:var(--fs-xs);font-weight:400;color:var(--ink-2)">/ 10</small>` : "Unrated"}
+                    </span>
+                  </div>
+                  <div class="rating-controls">
+                    <button type="button" class="btn btn-sm btn-ghost rating-step-btn" id="btn-rating-minus" aria-label="Decrease rating by 0.5">−</button>
+                    <input type="range" class="rating-slider" id="rating-slider" min="0" max="10" step="0.5" value="${title.user_rating !== null && title.user_rating !== undefined ? title.user_rating : 7.0}">
+                    <button type="button" class="btn btn-sm btn-ghost rating-step-btn" id="btn-rating-plus" aria-label="Increase rating by 0.5">+</button>
+                    <button type="button" class="btn btn-sm btn-ghost" id="btn-rating-clear" ${title.user_rating === null || title.user_rating === undefined ? "disabled" : ""}>Clear</button>
+                  </div>
+                </div>
+              `
+                  : title.user_rating !== null && title.user_rating !== undefined
+                  ? `
+                <div class="rating-widget-public">
+                  <span class="rating-label">Personal Rating:</span>
+                  <span class="badge-rating-detail">★ ${Number(title.user_rating).toFixed(1)} / 10</span>
+                </div>
+              `
+                  : ""
+              }
             </div>
           </div>
         </section>
@@ -874,6 +1029,66 @@
         `
             : ""
         }
+
+        <section class="detail-section watch-section">
+          <div class="watch-section-header">
+            <div>
+              <h3 style="margin-bottom:2px">Watch History</h3>
+              <div class="last-watched-tag" id="last-watched-tag">
+                ${formatLastWatched(title.last_watched)}
+              </div>
+            </div>
+            ${
+              isAdmin
+                ? `
+              <div class="watch-header-actions">
+                <button type="button" class="btn btn-sm" id="btn-watched-today">+ Watched Today</button>
+              </div>
+            `
+                : ""
+            }
+          </div>
+
+          ${
+            isAdmin
+              ? `
+            <div class="watch-log-form">
+              <input type="date" id="input-watch-date" class="watch-date-input" max="${new Date().toISOString().slice(0, 10)}">
+              <button type="button" class="btn btn-sm btn-ghost" id="btn-log-watch">Log Past Date</button>
+            </div>
+          `
+              : ""
+          }
+
+          ${
+            !title.watches || title.watches.length === 0
+              ? `<div style="color:var(--ink-2);padding:var(--s2) 0">No recorded watches yet.</div>`
+              : `
+            <div class="watch-log-list" id="watch-log-list">
+              ${title.watches
+                .map(
+                  (w, idx) => `
+                <div class="watch-row ${idx >= 3 ? "watch-row-extra hidden" : ""}" data-watch-id="${w.id}">
+                  <span class="watch-row-date">📅 ${formatReadableDate(w.watched_date)}</span>
+                  <span class="watch-row-rel">(${formatRelativeDate(w.watched_date)})</span>
+                  ${
+                    isAdmin
+                      ? `<button type="button" class="btn btn-sm btn-danger btn-delete-watch" data-id="${w.id}" title="Delete watch entry" style="margin-left:auto;padding:2px 8px;font-size:var(--fs-xs)">✕</button>`
+                      : ""
+                  }
+                </div>
+              `
+                )
+                .join("")}
+              ${
+                title.watches.length > 3
+                  ? `<button type="button" class="btn btn-sm btn-ghost watch-toggle-btn" id="btn-toggle-watches">Show all ${title.watches.length} watches</button>`
+                  : ""
+              }
+            </div>
+          `
+          }
+        </section>
 
         <section class="detail-section">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--s3)">
@@ -998,7 +1213,123 @@
           toast(err.message || "Failed to delete title");
         }
       });
+
+      // Rating control listeners
+      const slider = document.getElementById("rating-slider");
+      const display = document.getElementById("rating-display");
+      const clearBtn = document.getElementById("btn-rating-clear");
+      const minusBtn = document.getElementById("btn-rating-minus");
+      const plusBtn = document.getElementById("btn-rating-plus");
+
+      let currentRating = title.user_rating;
+      let saveTimer = null;
+
+      const triggerSave = (val) => {
+        currentRating = val;
+        if (display) {
+          display.innerHTML =
+            val !== null && val !== undefined
+              ? `★ ${Number(val).toFixed(1)} <small style="font-size:var(--fs-xs);font-weight:400;color:var(--ink-2)">/ 10</small>`
+              : "Unrated";
+        }
+        if (clearBtn) clearBtn.disabled = val === null || val === undefined;
+        if (slider && val !== null && val !== undefined) slider.value = val;
+
+        clearTimeout(saveTimer);
+        saveTimer = setTimeout(async () => {
+          try {
+            await api(`${apiPrefix}/titles/${titleId}/rating`, {
+              method: "PUT",
+              body: { rating: val },
+            });
+            title.user_rating = val;
+            if (state.grid.titles) {
+              const gt = state.grid.titles.find((t) => t.id === Number(titleId));
+              if (gt) gt.user_rating = val;
+            }
+            toast(val !== null && val !== undefined ? `Rating saved (★ ${Number(val).toFixed(1)})` : "Rating cleared");
+          } catch (e) {
+            toast(e.message || "Failed to save rating");
+          }
+        }, 300);
+      };
+
+      slider?.addEventListener("input", (e) => {
+        triggerSave(Number(e.target.value));
+      });
+
+      minusBtn?.addEventListener("click", () => {
+        const base = currentRating !== null && currentRating !== undefined ? currentRating : 7.0;
+        const val = Math.max(0.0, Math.round((base - 0.5) * 2) / 2);
+        triggerSave(val);
+      });
+
+      plusBtn?.addEventListener("click", () => {
+        const base = currentRating !== null && currentRating !== undefined ? currentRating : 7.0;
+        const val = Math.min(10.0, Math.round((base + 0.5) * 2) / 2);
+        triggerSave(val);
+      });
+
+      clearBtn?.addEventListener("click", () => {
+        triggerSave(null);
+      });
+
+      // Watch history listeners
+      document.getElementById("btn-watched-today")?.addEventListener("click", async () => {
+        try {
+          await api(`${apiPrefix}/titles/${titleId}/watches`, {
+            method: "POST",
+            body: {},
+          });
+          toast("Marked as watched today!");
+          await renderDetail(container, titleId);
+        } catch (e) {
+          toast(e.message || "Failed to mark as watched");
+        }
+      });
+
+      document.getElementById("btn-log-watch")?.addEventListener("click", async () => {
+        const input = document.getElementById("input-watch-date");
+        const val = input?.value?.trim();
+        if (!val) {
+          toast("Please choose a date to log");
+          return;
+        }
+        try {
+          await api(`${apiPrefix}/titles/${titleId}/watches`, {
+            method: "POST",
+            body: { watched_date: val },
+          });
+          toast(`Logged watch date: ${val}`);
+          await renderDetail(container, titleId);
+        } catch (e) {
+          toast(e.message || "Failed to log watch date");
+        }
+      });
+
+      container.querySelectorAll(".btn-delete-watch").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const watchId = btn.dataset.id;
+          if (!confirm("Remove this watch date?")) return;
+          try {
+            await api(`${apiPrefix}/titles/${titleId}/watches/${watchId}`, { method: "DELETE" });
+            toast("Watch entry removed");
+            await renderDetail(container, titleId);
+          } catch (e) {
+            toast(e.message || "Failed to delete watch entry");
+          }
+        });
+      });
     }
+
+    // Toggle extra watches
+    const toggleWatchesBtn = document.getElementById("btn-toggle-watches");
+    toggleWatchesBtn?.addEventListener("click", () => {
+      const extras = container.querySelectorAll(".watch-row-extra");
+      const isHidden = extras[0]?.classList.contains("hidden");
+      extras.forEach((el) => el.classList.toggle("hidden", !isHidden));
+      toggleWatchesBtn.textContent = isHidden ? "Show fewer" : `Show all ${title.watches.length} watches`;
+    });
   }
 
   // ================================================================= 8.1 / 8.2 Add Flow & Barcode Scanner
@@ -2138,6 +2469,8 @@
     const formats = data.formats || [];
     const genres = data.genres || [];
     const services = data.services || [];
+    const ws = data.watched_stats || {};
+    const rs = data.rating_stats || {};
 
     const maxGenreCount = Math.max(1, ...genres.map((g) => g.count));
 
@@ -2274,19 +2607,40 @@
           }
         </section>
 
-        <!-- Future Features / Placeholders -->
+        <!-- Activity & Ratings Breakdown -->
         <section>
-          <h2 class="stats-section-title" style="color:var(--ink-2)">Upcoming Features</h2>
-          <div class="placeholders-grid">
-            <div class="placeholder-card">
-              <span class="placeholder-badge">Coming Soon</span>
-              <h3>Watched Status</h3>
-              <p>Track which movies you and family members have watched, seen-it counts, and movie-night history.</p>
+          <h2 class="stats-section-title">Activity &amp; Ratings</h2>
+          <div class="stats-activity-grid">
+            <div class="stat-activity-card">
+              <div class="stat-activity-head">
+                <span class="stat-activity-title">Watched Movies</span>
+                <span class="stat-activity-metric">${ws.total_watched_titles ?? 0} / ${ov.titles_count ?? 0} (${ws.watched_percent ?? 0}%)</span>
+              </div>
+              <div class="stat-progress-bar">
+                <div class="stat-progress-fill" style="width: ${Math.min(100, ws.watched_percent ?? 0)}%; background: #22c55e;"></div>
+              </div>
+              <div class="stat-activity-meta">
+                <span>${ws.watched_this_year ?? 0} watched this year</span>
+                <span>·</span>
+                <span>${ws.watched_this_month ?? 0} this month</span>
+                <span>·</span>
+                <span>${ws.total_watch_events ?? 0} total plays</span>
+              </div>
             </div>
-            <div class="placeholder-card">
-              <span class="placeholder-badge">Coming Soon</span>
-              <h3>Family Ratings</h3>
-              <p>Record star ratings, kid-friendly recommendations, and custom favorites across your household.</p>
+
+            <div class="stat-activity-card">
+              <div class="stat-activity-head">
+                <span class="stat-activity-title">Family Ratings</span>
+                <span class="stat-activity-metric">${rs.average_rating ? `★ ${Number(rs.average_rating).toFixed(1)} / 10` : "No ratings yet"}</span>
+              </div>
+              <div class="stat-progress-bar">
+                <div class="stat-progress-fill" style="width: ${Math.min(100, rs.rated_percent ?? 0)}%; background: var(--amber);"></div>
+              </div>
+              <div class="stat-activity-meta">
+                <span>${rs.rated_titles_count ?? 0} rated (${rs.rated_percent ?? 0}%)</span>
+                <span>·</span>
+                <span>${rs.high_rated_count ?? 0} rated 8.0+ ★</span>
+              </div>
             </div>
           </div>
         </section>

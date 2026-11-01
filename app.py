@@ -22,6 +22,7 @@ from functools import wraps
 from pathlib import Path
 
 from flask import Flask, abort, g, jsonify, make_response, redirect, request, send_from_directory, has_app_context
+from werkzeug.wrappers import Response as WerkzeugResponse
 
 APP_NAME = "Matinee"
 APP_DIR = Path(__file__).resolve().parent
@@ -109,8 +110,27 @@ CREATE TABLE IF NOT EXISTS upc_cache (
   created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS upc_cache_created ON upc_cache(created_at);
+
+CREATE TABLE IF NOT EXISTS user_ratings (
+  id INTEGER PRIMARY KEY,
+  title_id INTEGER NOT NULL UNIQUE REFERENCES titles(id) ON DELETE CASCADE,
+  rating REAL NOT NULL CHECK (rating >= 0.0 AND rating <= 10.0),
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS user_ratings_title ON user_ratings(title_id);
+CREATE INDEX IF NOT EXISTS user_ratings_score ON user_ratings(rating);
+
+CREATE TABLE IF NOT EXISTS watches (
+  id INTEGER PRIMARY KEY,
+  title_id INTEGER NOT NULL REFERENCES titles(id) ON DELETE CASCADE,
+  watched_date TEXT NOT NULL,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS watches_title_date ON watches(title_id, watched_date DESC);
+CREATE INDEX IF NOT EXISTS watches_date ON watches(watched_date DESC);
 """
-SCHEMA_VERSION = "1"
+SCHEMA_VERSION = "2"
 
 # Checked in the app (not the schema) so a new format or service needs no table rebuild.
 FORMATS = {"physical": ["4K UHD", "Blu-ray", "3D Blu-ray", "DVD", "VHS"],
@@ -156,7 +176,27 @@ def _close(_exc):
 
 
 def migrate(con):
-    """Add columns that newer versions expect to an older database (none yet: schema 1 is the first)."""
+    """Add tables and columns that newer versions expect to an older database."""
+    con.executescript("""
+    CREATE TABLE IF NOT EXISTS user_ratings (
+      id INTEGER PRIMARY KEY,
+      title_id INTEGER NOT NULL UNIQUE REFERENCES titles(id) ON DELETE CASCADE,
+      rating REAL NOT NULL CHECK (rating >= 0.0 AND rating <= 10.0),
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS user_ratings_title ON user_ratings(title_id);
+    CREATE INDEX IF NOT EXISTS user_ratings_score ON user_ratings(rating);
+
+    CREATE TABLE IF NOT EXISTS watches (
+      id INTEGER PRIMARY KEY,
+      title_id INTEGER NOT NULL REFERENCES titles(id) ON DELETE CASCADE,
+      watched_date TEXT NOT NULL,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS watches_title_date ON watches(title_id, watched_date DESC);
+    CREATE INDEX IF NOT EXISTS watches_date ON watches(watched_date DESC);
+    """)
 
 
 def init_db():
@@ -240,9 +280,25 @@ def clean_upc_title(raw_title: str) -> tuple[str, str]:
 
 
 def make_err(code, msg, **extra):
-    r = jsonify(error=msg, **extra)
-    r.status_code = code
-    return r
+    if has_app_context():
+        r = jsonify(error=msg, **extra)
+        r.status_code = code
+        return r
+    return WerkzeugResponse(json.dumps({"error": msg, **extra}), status=code, mimetype="application/json")
+
+
+def validate_rating(val):
+    if val is None or val == "":
+        return None
+    if isinstance(val, bool):
+        abort(make_err(400, "Rating must be a number between 0.0 and 10.0 in 0.5 increments."))
+    try:
+        r = float(val)
+    except (ValueError, TypeError):
+        abort(make_err(400, "Rating must be a number between 0.0 and 10.0 in 0.5 increments."))
+    if not (0.0 <= r <= 10.0) or ((r * 2) % 1 != 0):
+        abort(make_err(400, "Rating must be between 0.0 and 10.0 in 0.5 increments."))
+    return round(r, 1)
 
 
 def now_iso():
@@ -588,13 +644,24 @@ def title_detail(title_id, private):
     d["poster_large_url"] = image_url(p780, t["fetched_at"]) if (IMAGE_DIR / p780).exists() else d["poster_url"]
     d["backdrop_url"] = image_url(t["backdrop_file"], t["fetched_at"])
     d["tmdb_url"] = f"https://www.themoviedb.org/movie/{t['tmdb_id']}"
+    rating_row = con.execute("SELECT rating FROM user_ratings WHERE title_id=?", (title_id,)).fetchone()
+    d["user_rating"] = rating_row["rating"] if rating_row else None
+    watches = con.execute("SELECT id, watched_date, created_at FROM watches WHERE title_id=? ORDER BY watched_date DESC, id DESC",
+                          (title_id,)).fetchall()
+    d["watches"] = [dict(w) for w in watches]
+    d["last_watched"] = watches[0]["watched_date"] if watches else None
+    d["watch_count"] = len(watches)
     return d
 
 
 # ============================================================================ browse
 SORTS = {"added": "added DESC, t.id DESC",
          "title": "t.sort_title, t.year",
-         "year": "t.year IS NULL, t.year DESC, t.sort_title"}
+         "year": "t.year IS NULL, t.year DESC, t.sort_title",
+         "rating": "user_rating IS NULL, user_rating DESC, t.sort_title",
+         "unrated": "user_rating IS NOT NULL, t.sort_title",
+         "last_watched": "last_watched IS NULL, last_watched DESC, t.sort_title",
+         "least_watched": "last_watched IS NOT NULL, last_watched ASC, t.sort_title"}
 
 
 def like_escape(s):
@@ -680,20 +747,38 @@ def list_titles(private):
                      f"WHERE tg.title_id=t.id AND gn.name IN ({g_q}) COLLATE NOCASE)")
         args += genre_tokens
 
+    raw_rating = (a.get("rating") or "").strip().lower()
+    if raw_rating in ("8+", "8", "8 "):
+        where.append("EXISTS (SELECT 1 FROM user_ratings r WHERE r.title_id=t.id AND r.rating >= 8.0)")
+    elif raw_rating == "unrated":
+        where.append("NOT EXISTS (SELECT 1 FROM user_ratings r WHERE r.title_id=t.id)")
+
+    watched_param = (a.get("watched") or "").strip().lower()
+    if watched_param == "watched":
+        where.append("EXISTS (SELECT 1 FROM watches w WHERE w.title_id=t.id)")
+    elif watched_param == "unwatched":
+        where.append("NOT EXISTS (SELECT 1 FROM watches w WHERE w.title_id=t.id)")
+
     sort = a.get("sort") if a.get("sort") in SORTS else "title"
     rows = db().execute(
         f"""SELECT t.id, t.title, t.year, t.poster_file, t.fetched_at,
               (SELECT MIN(c.created_at) FROM copies c WHERE c.title_id=t.id) AS added,
               (SELECT group_concat(DISTINCT c.format) FROM copies c WHERE c.title_id=t.id) AS formats,
               (EXISTS (SELECT 1 FROM copies c WHERE c.title_id=t.id AND c.kind='physical')
-               AND EXISTS (SELECT 1 FROM copies c WHERE c.title_id=t.id AND c.kind='digital')) AS has_both
+               AND EXISTS (SELECT 1 FROM copies c WHERE c.title_id=t.id AND c.kind='digital')) AS has_both,
+              (SELECT rating FROM user_ratings r WHERE r.title_id=t.id) AS user_rating,
+              (SELECT MAX(watched_date) FROM watches w WHERE w.title_id=t.id) AS last_watched,
+              (SELECT count(*) FROM watches w WHERE w.title_id=t.id) AS watch_count
             FROM titles t WHERE {' AND '.join(where)} ORDER BY {SORTS[sort]}""", args).fetchall()
     titles = [{"id": r["id"], "title": r["title"], "year": r["year"],
                "poster_url": image_url(r["poster_file"], r["fetched_at"]),
                "poster_file": r["poster_file"],
                "formats": sorted_formats((r["formats"] or "").split(",")) if r["formats"] else [],
                "has_both": bool(r["has_both"]),
-               "added_on": (r["added"] or "")[:10] or None} for r in rows]
+               "added_on": (r["added"] or "")[:10] or None,
+               "user_rating": r["user_rating"],
+               "last_watched": r["last_watched"],
+               "watch_count": r["watch_count"]} for r in rows]
     return jsonify(titles=titles, count=len(titles), sort=sort)
 
 
@@ -766,6 +851,33 @@ def collection_stats(private):
         ).fetchall()
     ]
 
+    now = dt.date.today()
+    year_start = f"{now.year:04d}-01-01"
+    month_start = f"{now.year:04d}-{now.month:02d}-01"
+    total_watched_titles = con.execute("SELECT count(DISTINCT title_id) FROM watches").fetchone()[0]
+    watched_pct = round((total_watched_titles / titles_count * 100), 1) if titles_count else 0.0
+    watched_year = con.execute("SELECT count(*) FROM watches WHERE watched_date >= ?", (year_start,)).fetchone()[0]
+    watched_month = con.execute("SELECT count(*) FROM watches WHERE watched_date >= ?", (month_start,)).fetchone()[0]
+    total_watches = con.execute("SELECT count(*) FROM watches").fetchone()[0]
+    watched_stats = {
+        "total_watched_titles": total_watched_titles,
+        "watched_percent": watched_pct,
+        "watched_this_year": watched_year,
+        "watched_this_month": watched_month,
+        "total_watch_events": total_watches,
+    }
+
+    rated_titles = con.execute("SELECT count(*) FROM user_ratings").fetchone()[0]
+    rated_pct = round((rated_titles / titles_count * 100), 1) if titles_count else 0.0
+    avg_rating = con.execute("SELECT avg(rating) FROM user_ratings").fetchone()[0]
+    high_rated = con.execute("SELECT count(*) FROM user_ratings WHERE rating >= 8.0").fetchone()[0]
+    rating_stats = {
+        "rated_titles_count": rated_titles,
+        "rated_percent": rated_pct,
+        "average_rating": round(avg_rating, 1) if avg_rating is not None else 0.0,
+        "high_rated_count": high_rated,
+    }
+
     return jsonify(
         overview={
             "titles_count": titles_count,
@@ -777,6 +889,8 @@ def collection_stats(private):
         formats=formats,
         genres=genres,
         services=services,
+        watched_stats=watched_stats,
+        rating_stats=rating_stats,
     )
 
 
@@ -1021,6 +1135,62 @@ def delete_copy(copy_id):
     con.execute("DELETE FROM copies WHERE id=?", (copy_id,))
     con.commit()
     return jsonify(ok=True, title_id=cur["title_id"])
+
+
+@app.put("/admin/api/titles/<int:title_id>/rating")
+@editor_required
+def set_title_rating(title_id):
+    con = db()
+    row = con.execute("SELECT id FROM titles WHERE id=?", (title_id,)).fetchone()
+    if not row:
+        abort(make_err(404, "No such title"))
+    data = request.get_json(silent=True) or {}
+    rating = validate_rating(data.get("rating"))
+    if rating is None:
+        con.execute("DELETE FROM user_ratings WHERE title_id=?", (title_id,))
+    else:
+        con.execute(
+            """INSERT INTO user_ratings(title_id, rating, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)
+               ON CONFLICT(title_id) DO UPDATE SET rating=excluded.rating, updated_at=CURRENT_TIMESTAMP""",
+            (title_id, rating),
+        )
+    con.commit()
+    return jsonify(ok=True, title_id=title_id, user_rating=rating)
+
+
+@app.post("/admin/api/titles/<int:title_id>/watches")
+@editor_required
+def add_watch(title_id):
+    con = db()
+    row = con.execute("SELECT id FROM titles WHERE id=?", (title_id,)).fetchone()
+    if not row:
+        abort(make_err(404, "No such title"))
+    data = request.get_json(silent=True) or {}
+    raw_date = data.get("watched_date")
+    if not raw_date:
+        watched_date = dt.date.today().isoformat()
+    else:
+        try:
+            parsed = dt.date.fromisoformat(str(raw_date).strip())
+            watched_date = parsed.isoformat()
+        except (ValueError, TypeError):
+            abort(make_err(400, "Invalid watched_date: format must be YYYY-MM-DD"))
+        if parsed > dt.date.today() + dt.timedelta(days=1):
+            abort(make_err(400, "watched_date cannot be in the future."))
+    cur = con.execute("INSERT INTO watches(title_id, watched_date) VALUES (?, ?)", (title_id, watched_date))
+    con.commit()
+    return jsonify(ok=True, watch={"id": cur.lastrowid, "title_id": title_id, "watched_date": watched_date})
+
+
+@app.delete("/admin/api/titles/<int:title_id>/watches/<int:watch_id>")
+@editor_required
+def delete_watch(title_id, watch_id):
+    con = db()
+    cur = con.execute("DELETE FROM watches WHERE id=? AND title_id=?", (watch_id, title_id))
+    con.commit()
+    if cur.rowcount == 0:
+        abort(make_err(404, "No such watch entry"))
+    return jsonify(ok=True, deleted_id=watch_id)
 
 
 @app.post("/admin/api/titles/<int:title_id>/refresh")

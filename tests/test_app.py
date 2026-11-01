@@ -92,8 +92,9 @@ def test_env_example_lists_every_documented_variable():
 def test_schema_tables_indexes_and_cascade():
     con = matinee.connect()
     names = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type IN ('table','index')")}
-    assert {"meta", "titles", "genres", "title_genres", "copies", "titles_collection", "copies_title"} <= names
-    assert con.execute("SELECT v FROM meta WHERE k='schema'").fetchone()[0] == "1"
+    assert {"meta", "titles", "genres", "title_genres", "copies", "titles_collection", "copies_title",
+            "user_ratings", "watches", "user_ratings_title", "watches_title_date"} <= names
+    assert con.execute("SELECT v FROM meta WHERE k='schema'").fetchone()[0] == matinee.SCHEMA_VERSION
     assert con.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
     con.close()
     t = add(129)
@@ -652,5 +653,217 @@ def test_stats_privacy_behavior(monkeypatch):
     assert c.get("/api/stats").status_code == 403
     assert c.get("/admin/api/stats", headers={"Cf-Ray": "ext"}).status_code == 401
     assert c.get("/admin/api/stats").status_code == 200
+
+
+def test_validate_rating():
+    from app import validate_rating
+    import pytest
+    assert validate_rating(8.5) == 8.5
+    assert validate_rating("8.5") == 8.5
+    assert validate_rating(0) == 0.0
+    assert validate_rating(10) == 10.0
+    assert validate_rating(None) is None
+    assert validate_rating("") is None
+
+    with matinee.app.test_request_context():
+        for bad in (7.3, "7.3", -0.5, 10.5, "abc", True, False):
+            with pytest.raises(Exception) as exc:
+                validate_rating(bad)
+            assert exc.value.response.status_code == 400
+
+
+def test_migration_creates_tables():
+    con = matinee.connect()
+    # Verify tables exist
+    tables = [r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
+    con.close()
+    assert "user_ratings" in tables
+    assert "watches" in tables
+
+
+def test_title_rating(monkeypatch):
+    t1 = add(129)  # Spirited Away
+    t2 = add(194)  # Amelie
+    t3 = add(10681)  # WALL-E
+
+    # 1. Unauthenticated PUT fails with 401 when LAN_EDIT is off
+    monkeypatch.setattr(matinee, "LAN_EDIT", False)
+    res = c.put(f"/admin/api/titles/{t1['id']}/rating", json={"rating": 8.5})
+    assert res.status_code == 401
+    monkeypatch.setattr(matinee, "LAN_EDIT", True)
+
+    # 2. Set rating 8.5
+    res = c.put(f"/admin/api/titles/{t1['id']}/rating", json={"rating": 8.5})
+    assert res.status_code == 200
+    assert res.get_json()["user_rating"] == 8.5
+
+    # Check detail view
+    det = c.get(f"/api/titles/{t1['id']}").get_json()
+    assert det["user_rating"] == 8.5
+
+    # 3. Update rating to 9.0
+    res = c.put(f"/admin/api/titles/{t1['id']}/rating", json={"rating": 9.0})
+    assert res.status_code == 200
+    assert res.get_json()["user_rating"] == 9.0
+
+    # Rate t2 with 7.5
+    c.put(f"/admin/api/titles/{t2['id']}/rating", json={"rating": 7.5})
+
+    # 4. Catalog includes user_rating
+    titles = c.get("/api/titles").get_json()["titles"]
+    t1_entry = next(t for t in titles if t["id"] == t1["id"])
+    t2_entry = next(t for t in titles if t["id"] == t2["id"])
+    t3_entry = next(t for t in titles if t["id"] == t3["id"])
+    assert t1_entry["user_rating"] == 9.0
+    assert t2_entry["user_rating"] == 7.5
+    assert t3_entry["user_rating"] is None
+
+    # 5. Sort by rating (highest first, unrated last)
+    res_sorted = c.get("/api/titles?sort=rating").get_json()["titles"]
+    assert [t["id"] for t in res_sorted] == [t1["id"], t2["id"], t3["id"]]
+
+    # 6. Sort by unrated (unrated first)
+    res_unrated = c.get("/api/titles?sort=unrated").get_json()["titles"]
+    assert res_unrated[0]["id"] == t3["id"]
+
+    # 7. Filter rating=8+
+    res_8plus = c.get("/api/titles?rating=8+").get_json()["titles"]
+    assert [t["id"] for t in res_8plus] == [t1["id"]]
+
+    # 8. Filter rating=unrated
+    res_unrated_filter = c.get("/api/titles?rating=unrated").get_json()["titles"]
+    assert [t["id"] for t in res_unrated_filter] == [t3["id"]]
+
+    # 9. Clear rating by sending null
+    res_clear = c.put(f"/admin/api/titles/{t1['id']}/rating", json={"rating": None})
+    assert res_clear.status_code == 200
+    assert res_clear.get_json()["user_rating"] is None
+    det_cleared = c.get(f"/api/titles/{t1['id']}").get_json()
+    assert det_cleared["user_rating"] is None
+
+    # 10. Deleting title cascades and deletes rating
+    con = matinee.connect()
+    con.execute("DELETE FROM titles WHERE id=?", (t2["id"],))
+    con.commit()
+    assert con.execute("SELECT count(*) FROM user_ratings WHERE title_id=?", (t2["id"],)).fetchone()[0] == 0
+    con.close()
+
+
+def test_watches_api_and_filters(monkeypatch):
+    import datetime as dt
+    t1 = add(129)  # Spirited Away
+    t2 = add(194)  # Amelie
+    t3 = add(10681)  # WALL-E
+
+    # 1. Auth check: fails 401 when unauthenticated
+    monkeypatch.setattr(matinee, "LAN_EDIT", False)
+    res = c.post(f"/admin/api/titles/{t1['id']}/watches", json={})
+    assert res.status_code == 401
+    monkeypatch.setattr(matinee, "LAN_EDIT", True)
+
+    # 2. Add watch defaulting to today
+    today_iso = dt.date.today().isoformat()
+    res = c.post(f"/admin/api/titles/{t1['id']}/watches", json={})
+    assert res.status_code == 200
+    w1 = res.get_json()["watch"]
+    assert w1["watched_date"] == today_iso
+    assert w1["title_id"] == t1["id"]
+
+    # 3. Add explicit past watch date for t1
+    past_date = "2025-05-15"
+    res2 = c.post(f"/admin/api/titles/{t1['id']}/watches", json={"watched_date": past_date})
+    assert res2.status_code == 200
+    w2 = res2.get_json()["watch"]
+    assert w2["watched_date"] == past_date
+
+    # 4. Add watch for t2
+    t2_date = "2025-01-10"
+    res3 = c.post(f"/admin/api/titles/{t2['id']}/watches", json={"watched_date": t2_date})
+    assert res3.status_code == 200
+    w3 = res3.get_json()["watch"]
+
+    # 5. Invalid date rejected with 400
+    bad_res = c.post(f"/admin/api/titles/{t1['id']}/watches", json={"watched_date": "not-a-date"})
+    assert bad_res.status_code == 400
+
+    future_res = c.post(f"/admin/api/titles/{t1['id']}/watches", json={"watched_date": "2099-01-01"})
+    assert future_res.status_code == 400
+
+    # 6. Detail view includes watches, last_watched, watch_count
+    det = c.get(f"/api/titles/{t1['id']}").get_json()
+    assert det["last_watched"] == today_iso
+    assert det["watch_count"] == 2
+    assert [w["id"] for w in det["watches"]] == [w1["id"], w2["id"]]
+
+    # 7. Catalog list exposes last_watched and watch_count
+    titles = c.get("/api/titles").get_json()["titles"]
+    t1_c = next(t for t in titles if t["id"] == t1["id"])
+    t2_c = next(t for t in titles if t["id"] == t2["id"])
+    t3_c = next(t for t in titles if t["id"] == t3["id"])
+    assert t1_c["last_watched"] == today_iso
+    assert t1_c["watch_count"] == 2
+    assert t2_c["last_watched"] == t2_date
+    assert t2_c["watch_count"] == 1
+    assert t3_c["last_watched"] is None
+    assert t3_c["watch_count"] == 0
+
+    # 8. Sort last_watched (most recent first, unwatched last)
+    s_last = c.get("/api/titles?sort=last_watched").get_json()["titles"]
+    assert [t["id"] for t in s_last] == [t1["id"], t2["id"], t3["id"]]
+
+    # 9. Sort least_watched (unwatched first, then oldest watch ascending)
+    s_least = c.get("/api/titles?sort=least_watched").get_json()["titles"]
+    assert [t["id"] for t in s_least] == [t3["id"], t2["id"], t1["id"]]
+
+    # 10. Filter watched vs unwatched
+    f_watched = c.get("/api/titles?watched=watched").get_json()["titles"]
+    assert {t["id"] for t in f_watched} == {t1["id"], t2["id"]}
+
+    f_unwatched = c.get("/api/titles?watched=unwatched").get_json()["titles"]
+    assert [t["id"] for t in f_unwatched] == [t3["id"]]
+
+    # 11. Delete watch entry
+    del_res = c.delete(f"/admin/api/titles/{t1['id']}/watches/{w2['id']}")
+    assert del_res.status_code == 200
+    assert del_res.get_json()["deleted_id"] == w2["id"]
+
+    det_after = c.get(f"/api/titles/{t1['id']}").get_json()
+    assert det_after["watch_count"] == 1
+    assert [w["id"] for w in det_after["watches"]] == [w1["id"]]
+
+    # Delete non-existent watch returns 404
+    assert c.delete(f"/admin/api/titles/{t1['id']}/watches/999999").status_code == 404
+
+
+def test_stats_watched_and_rating():
+    import datetime as dt
+    t1 = add(129)
+    t2 = add(194)
+    t3 = add(10681)
+
+    c.put(f"/admin/api/titles/{t1['id']}/rating", json={"rating": 9.0})
+    c.put(f"/admin/api/titles/{t2['id']}/rating", json={"rating": 7.0})
+
+    today_iso = dt.date.today().isoformat()
+    c.post(f"/admin/api/titles/{t1['id']}/watches", json={"watched_date": today_iso})
+    c.post(f"/admin/api/titles/{t2['id']}/watches", json={"watched_date": "2020-01-01"})
+
+    stats = c.get("/api/stats").get_json()
+    ws = stats["watched_stats"]
+    rs = stats["rating_stats"]
+
+    assert ws["total_watched_titles"] == 2
+    assert ws["watched_percent"] == 66.7
+    assert ws["watched_this_year"] >= 1
+    assert ws["watched_this_month"] >= 1
+    assert ws["total_watch_events"] == 2
+
+    assert rs["rated_titles_count"] == 2
+    assert rs["rated_percent"] == 66.7
+    assert rs["average_rating"] == 8.0
+    assert rs["high_rated_count"] == 1
+
+
+
 
 
