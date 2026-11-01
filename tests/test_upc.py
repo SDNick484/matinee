@@ -16,6 +16,19 @@ def test_clean_upc_title_patterns():
     assert title == "The Dark Knight"
     assert fmt == "4K UHD"
 
+    # 3D Blu-ray variations
+    title, fmt = clean_upc_title("Avatar [3D Blu-ray]")
+    assert title == "Avatar"
+    assert fmt == "3D Blu-ray"
+
+    title, fmt = clean_upc_title("Tron: Legacy - 3D BluRay")
+    assert title == "Tron: Legacy"
+    assert fmt == "3D Blu-ray"
+
+    title, fmt = clean_upc_title("Gravity (Blu-ray 3D + Blu-ray + DVD)")
+    assert title == "Gravity"
+    assert fmt == "3D Blu-ray"
+
     # Standard Blu-ray
     title, fmt = clean_upc_title("Inception (Blu-ray + DVD + Digital Copy)")
     assert title == "Inception"

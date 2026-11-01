@@ -212,7 +212,9 @@ def clean_upc_title(raw_title: str) -> tuple[str, str]:
     raw = raw_title.strip()
     low = raw.lower()
 
-    if re.search(r"\b(4k|ultra hd|uhd)\b", low):
+    if re.search(r"\b3d\b", low) and re.search(r"\b(blu-ray|bluray|bd)\b", low):
+        fmt = "3D Blu-ray"
+    elif re.search(r"\b(4k|ultra hd|uhd)\b", low):
         fmt = "4K UHD"
     elif re.search(r"\b(blu-ray|bluray|bd)\b", low):
         fmt = "Blu-ray"
@@ -226,7 +228,7 @@ def clean_upc_title(raw_title: str) -> tuple[str, str]:
     cleaned = re.sub(r"\[.*?\]", " ", raw)
     cleaned = re.sub(r"\(.*?\)", " ", cleaned)
     noise = (
-        r"\b(4k|ultra hd|uhd|blu-ray|bluray|dvd|vhs|digital|steelbook|combo pack|widescreen|"
+        r"\b(4k|ultra hd|uhd|3d|blu-ray|bluray|bd|dvd|vhs|digital|steelbook|combo pack|widescreen|"
         r"special edition|collector's edition|anniversary edition|limited edition|2-disc|3-disc|multi-feature|"
         r"copy|hd|sd)\b"
     )

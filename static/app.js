@@ -120,7 +120,8 @@
 
   function getChipClass(format) {
     if (format === "4K UHD" || format === "Digital 4K") return "k4";
-    if (format === "Blu-ray" || format === "3D Blu-ray") return "kb";
+    if (format === "3D Blu-ray") return "k3d";
+    if (format === "Blu-ray") return "kb";
     if (format === "DVD" || format === "VHS") return "ks";
     if (format === "Digital HD" || format === "Digital SD") return "kd";
     return "ks";
@@ -517,7 +518,7 @@
               ? `<img class="poster-img" src="${posterSrc}" loading="lazy" alt="${esc(t.title)}" onerror="this.onerror=null;this.parentElement.innerHTML='<div class=\\'poster-ph\\'>${esc(t.title)}<br>${t.year || ''}</div>';">`
               : `<div class="poster-ph"><span>${esc(t.title)}<br><small style="font-weight:400;color:var(--ink-3)">${t.year || ""}</small></span></div>`;
 
-            const bothBadge = t.has_both ? `<span class="badge-both">Disc + Digital</span>` : "";
+            const bothBadge = t.has_both ? `<span class="badge-both" title="Disc + Digital">💿☁️</span>` : "";
             const chipsHtml = (t.formats || [])
               .map((fmt) => `<span class="chip ${getChipClass(fmt)}">${getChipIcon(fmt)}${esc(fmt)}</span>`)
               .join("");

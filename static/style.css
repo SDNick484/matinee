@@ -32,7 +32,8 @@
 
   /* format chips: solid fill + near-black text */
   --chip-4k: #e3b54d;      --chip-4k-ink: #17120a;     /* 4K UHD, Digital 4K */
-  --chip-bluray: #5b9cf0;  --chip-bluray-ink: #08111e; /* Blu-ray, 3D Blu-ray */
+  --chip-bluray: #5b9cf0;  --chip-bluray-ink: #08111e; /* Blu-ray */
+  --chip-3d: #02b4c8;      --chip-3d-ink: #041a1d;     /* 3D Blu-ray */
   --chip-sd: #a3a3ad;      --chip-sd-ink: #0b0b0e;     /* DVD, VHS */
   --chip-digital: #3fc0ad; --chip-digital-ink: #04150f;/* Digital HD, Digital SD */
 
@@ -228,6 +229,7 @@ main#view {
 }
 .chip.k4 { background: var(--chip-4k); color: var(--chip-4k-ink); }
 .chip.kb { background: var(--chip-bluray); color: var(--chip-bluray-ink); }
+.chip.k3d { background: var(--chip-3d); color: var(--chip-3d-ink); }
 .chip.ks { background: var(--chip-sd); color: var(--chip-sd-ink); }
 .chip.kd { background: var(--chip-digital); color: var(--chip-digital-ink); }
 
@@ -700,15 +702,18 @@ main#view {
   left: 6px;
   display: inline-flex;
   align-items: center;
-  height: 20px;
-  padding: 0 8px;
-  background: var(--amber);
-  color: #17120a;
+  justify-content: center;
+  gap: 2px;
+  height: 22px;
+  padding: 0 5px;
+  background: rgba(14, 14, 18, 0.82);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  border: 1px solid rgba(255, 255, 255, 0.2);
   border-radius: var(--r-chip);
   font-size: 11px;
-  font-weight: 800;
-  letter-spacing: 0.02em;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.7);
+  line-height: 1;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.6);
   z-index: 2;
   pointer-events: none;
 }
