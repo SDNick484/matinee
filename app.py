@@ -715,6 +715,76 @@ def api_owned(tmdb_id):
                    summary=" · ".join(c["label"] for c in copies) or None)
 
 
+@app.get("/admin/api/upc/<upc>")
+@editor_required
+def api_upc_lookup(upc):
+    clean_code = re.sub(r"[^\d]", "", upc or "")
+    if not (11 <= len(clean_code) <= 14):
+        abort(make_err(400, "Invalid barcode: must be 12 to 14 digits."))
+
+    con = db()
+    row = con.execute("SELECT raw_title, brand, data FROM upc_cache WHERE upc=?", (clean_code,)).fetchone()
+    raw_title = None
+    brand = None
+    if row:
+        raw_title = row["raw_title"]
+        brand = row["brand"]
+        try:
+            upc_data = json.loads(row["data"]) if row["data"] else {}
+        except Exception:
+            upc_data = {}
+    else:
+        # Fetch from UPCitemdb trial API
+        url = f"https://api.upcitemdb.com/prod/trial/lookup?upc={clean_code}"
+        try:
+            upc_data = http_json(url, timeout=8)
+        except Exception:
+            upc_data = None
+
+        if upc_data and upc_data.get("items"):
+            item = upc_data["items"][0]
+            raw_title = item.get("title") or ""
+            brand = item.get("brand") or ""
+            con.execute("INSERT OR REPLACE INTO upc_cache (upc, raw_title, brand, data) VALUES (?, ?, ?, ?)",
+                        (clean_code, raw_title, brand, json.dumps(upc_data)))
+            con.commit()
+        else:
+            con.execute("INSERT OR REPLACE INTO upc_cache (upc, raw_title, brand, data) VALUES (?, ?, ?, ?)",
+                        (clean_code, "", "", json.dumps(upc_data or {})))
+            con.commit()
+            abort(make_err(404, f"No product found for barcode {clean_code}."))
+
+    if not raw_title:
+        abort(make_err(404, f"No product found for barcode {clean_code}."))
+
+    cleaned_title, format_hint = clean_upc_title(raw_title)
+    results = tmdb_search(cleaned_title)
+
+    already_owned = False
+    owned_summary = None
+    existing_copies = []
+    if results:
+        top_tmdb_id = results[0]["tmdb_id"]
+        t = con.execute("SELECT id FROM titles WHERE tmdb_id=?", (top_tmdb_id,)).fetchone()
+        if t:
+            existing_copies = [copy_out(r, True) for r in con.execute(
+                "SELECT * FROM copies WHERE title_id=? ORDER BY created_at, id", (t["id"],))]
+            if existing_copies:
+                already_owned = True
+                owned_summary = " · ".join(c["label"] for c in existing_copies)
+
+    return jsonify({
+        "upc": clean_code,
+        "raw_title": raw_title,
+        "cleaned_title": cleaned_title,
+        "format_hint": format_hint,
+        "results": results,
+        "already_owned": already_owned,
+        "owned_summary": owned_summary,
+        "existing_copies": existing_copies,
+    })
+
+
 @app.post("/admin/api/copies")
 @editor_required
 def add_copy():

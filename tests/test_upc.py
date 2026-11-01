@@ -39,3 +39,66 @@ def test_upc_cache_schema(tmp_path, monkeypatch):
     assert "raw_title" in cols
     assert "data" in cols
     con.close()
+
+
+def test_api_upc_lookup_cached(tmp_path, monkeypatch):
+    import app, json
+    db_file = tmp_path / "test.db"
+    monkeypatch.setattr(app, "DB_PATH", db_file)
+    monkeypatch.setattr(app, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(app, "LAN_EDIT", True)
+    monkeypatch.setattr(app, "TMDB_READ_TOKEN", "fake_token")
+    init_db()
+
+    # Pre-populate cache
+    con = connect()
+    cached_data = json.dumps({"items": [{"title": "Interstellar [4K UHD]", "brand": "Paramount"}]})
+    con.execute("INSERT INTO upc_cache (upc, raw_title, brand, data) VALUES (?, ?, ?, ?)",
+                ("032429311239", "Interstellar [4K UHD]", "Paramount", cached_data))
+    con.commit()
+    con.close()
+
+    # Mock tmdb_search
+    monkeypatch.setattr(app, "tmdb_search", lambda q: [{"tmdb_id": 157336, "title": "Interstellar", "year": 2014, "owned": False}])
+
+    client = app.app.test_client()
+    resp = client.get("/admin/api/upc/032429311239")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["upc"] == "032429311239"
+    assert data["cleaned_title"] == "Interstellar"
+    assert data["format_hint"] == "4K UHD"
+    assert len(data["results"]) == 1
+    assert data["already_owned"] is False
+
+
+def test_api_upc_lookup_duplicate_warning(tmp_path, monkeypatch):
+    import app, json
+    db_file = tmp_path / "test.db"
+    monkeypatch.setattr(app, "DB_PATH", db_file)
+    monkeypatch.setattr(app, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(app, "LAN_EDIT", True)
+    monkeypatch.setattr(app, "TMDB_READ_TOKEN", "fake_token")
+    init_db()
+
+    # Pre-populate title + digital copy
+    con = connect()
+    cached_data = json.dumps({"items": [{"title": "The Dark Knight [4K Ultra HD]", "brand": "Warner"}]})
+    con.execute("INSERT INTO upc_cache (upc, raw_title, brand, data) VALUES (?, ?, ?, ?)",
+                ("883929624799", "The Dark Knight [4K Ultra HD]", "Warner", cached_data))
+    con.execute("""INSERT INTO titles (tmdb_id, title, sort_title, search_text, year, fetched_at)
+                   VALUES (155, 'The Dark Knight', 'dark knight', 'the dark knight', 2008, '2026-10-01')""")
+    t_id = con.execute("SELECT id FROM titles WHERE tmdb_id=155").fetchone()[0]
+    con.execute("INSERT INTO copies (title_id, kind, format, service) VALUES (?, 'digital', 'Digital HD', 'Movies Anywhere')", (t_id,))
+    con.commit()
+    con.close()
+
+    monkeypatch.setattr(app, "tmdb_search", lambda q: [{"tmdb_id": 155, "title": "The Dark Knight", "year": 2008, "owned": True}])
+
+    client = app.app.test_client()
+    resp = client.get("/admin/api/upc/883929624799")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["already_owned"] is True
+    assert "Digital HD (Movies Anywhere)" in data["owned_summary"]
+
