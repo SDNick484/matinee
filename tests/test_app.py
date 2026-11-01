@@ -666,7 +666,7 @@ def test_validate_rating():
     assert validate_rating("") is None
 
     with matinee.app.test_request_context():
-        for bad in (7.3, "7.3", -0.5, 10.5, "abc"):
+        for bad in (7.3, "7.3", -0.5, 10.5, "abc", True, False):
             with pytest.raises(Exception) as exc:
                 validate_rating(bad)
             assert exc.value.response.status_code == 400
@@ -785,6 +785,9 @@ def test_watches_api_and_filters(monkeypatch):
     # 5. Invalid date rejected with 400
     bad_res = c.post(f"/admin/api/titles/{t1['id']}/watches", json={"watched_date": "not-a-date"})
     assert bad_res.status_code == 400
+
+    future_res = c.post(f"/admin/api/titles/{t1['id']}/watches", json={"watched_date": "2099-01-01"})
+    assert future_res.status_code == 400
 
     # 6. Detail view includes watches, last_watched, watch_count
     det = c.get(f"/api/titles/{t1['id']}").get_json()

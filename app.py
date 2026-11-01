@@ -290,6 +290,8 @@ def make_err(code, msg, **extra):
 def validate_rating(val):
     if val is None or val == "":
         return None
+    if isinstance(val, bool):
+        abort(make_err(400, "Rating must be a number between 0.0 and 10.0 in 0.5 increments."))
     try:
         r = float(val)
     except (ValueError, TypeError):
@@ -1173,6 +1175,8 @@ def add_watch(title_id):
             watched_date = parsed.isoformat()
         except (ValueError, TypeError):
             abort(make_err(400, "Invalid watched_date: format must be YYYY-MM-DD"))
+        if parsed > dt.date.today() + dt.timedelta(days=1):
+            abort(make_err(400, "watched_date cannot be in the future."))
     cur = con.execute("INSERT INTO watches(title_id, watched_date) VALUES (?, ?)", (title_id, watched_date))
     con.commit()
     return jsonify(ok=True, watch={"id": cur.lastrowid, "title_id": title_id, "watched_date": watched_date})
