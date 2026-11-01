@@ -642,13 +642,24 @@ def title_detail(title_id, private):
     d["poster_large_url"] = image_url(p780, t["fetched_at"]) if (IMAGE_DIR / p780).exists() else d["poster_url"]
     d["backdrop_url"] = image_url(t["backdrop_file"], t["fetched_at"])
     d["tmdb_url"] = f"https://www.themoviedb.org/movie/{t['tmdb_id']}"
+    rating_row = con.execute("SELECT rating FROM user_ratings WHERE title_id=?", (title_id,)).fetchone()
+    d["user_rating"] = rating_row["rating"] if rating_row else None
+    watches = con.execute("SELECT id, watched_date, created_at FROM watches WHERE title_id=? ORDER BY watched_date DESC, id DESC",
+                          (title_id,)).fetchall()
+    d["watches"] = [dict(w) for w in watches]
+    d["last_watched"] = watches[0]["watched_date"] if watches else None
+    d["watch_count"] = len(watches)
     return d
 
 
 # ============================================================================ browse
 SORTS = {"added": "added DESC, t.id DESC",
          "title": "t.sort_title, t.year",
-         "year": "t.year IS NULL, t.year DESC, t.sort_title"}
+         "year": "t.year IS NULL, t.year DESC, t.sort_title",
+         "rating": "user_rating IS NULL, user_rating DESC, t.sort_title",
+         "unrated": "user_rating IS NOT NULL, t.sort_title",
+         "last_watched": "last_watched IS NULL, last_watched DESC, t.sort_title",
+         "least_watched": "last_watched IS NOT NULL, last_watched ASC, t.sort_title"}
 
 
 def like_escape(s):
@@ -734,20 +745,38 @@ def list_titles(private):
                      f"WHERE tg.title_id=t.id AND gn.name IN ({g_q}) COLLATE NOCASE)")
         args += genre_tokens
 
+    raw_rating = (a.get("rating") or "").strip().lower()
+    if raw_rating in ("8+", "8", "8 "):
+        where.append("EXISTS (SELECT 1 FROM user_ratings r WHERE r.title_id=t.id AND r.rating >= 8.0)")
+    elif raw_rating == "unrated":
+        where.append("NOT EXISTS (SELECT 1 FROM user_ratings r WHERE r.title_id=t.id)")
+
+    watched_param = (a.get("watched") or "").strip().lower()
+    if watched_param == "watched":
+        where.append("EXISTS (SELECT 1 FROM watches w WHERE w.title_id=t.id)")
+    elif watched_param == "unwatched":
+        where.append("NOT EXISTS (SELECT 1 FROM watches w WHERE w.title_id=t.id)")
+
     sort = a.get("sort") if a.get("sort") in SORTS else "title"
     rows = db().execute(
         f"""SELECT t.id, t.title, t.year, t.poster_file, t.fetched_at,
               (SELECT MIN(c.created_at) FROM copies c WHERE c.title_id=t.id) AS added,
               (SELECT group_concat(DISTINCT c.format) FROM copies c WHERE c.title_id=t.id) AS formats,
               (EXISTS (SELECT 1 FROM copies c WHERE c.title_id=t.id AND c.kind='physical')
-               AND EXISTS (SELECT 1 FROM copies c WHERE c.title_id=t.id AND c.kind='digital')) AS has_both
+               AND EXISTS (SELECT 1 FROM copies c WHERE c.title_id=t.id AND c.kind='digital')) AS has_both,
+              (SELECT rating FROM user_ratings r WHERE r.title_id=t.id) AS user_rating,
+              (SELECT MAX(watched_date) FROM watches w WHERE w.title_id=t.id) AS last_watched,
+              (SELECT count(*) FROM watches w WHERE w.title_id=t.id) AS watch_count
             FROM titles t WHERE {' AND '.join(where)} ORDER BY {SORTS[sort]}""", args).fetchall()
     titles = [{"id": r["id"], "title": r["title"], "year": r["year"],
                "poster_url": image_url(r["poster_file"], r["fetched_at"]),
                "poster_file": r["poster_file"],
                "formats": sorted_formats((r["formats"] or "").split(",")) if r["formats"] else [],
                "has_both": bool(r["has_both"]),
-               "added_on": (r["added"] or "")[:10] or None} for r in rows]
+               "added_on": (r["added"] or "")[:10] or None,
+               "user_rating": r["user_rating"],
+               "last_watched": r["last_watched"],
+               "watch_count": r["watch_count"]} for r in rows]
     return jsonify(titles=titles, count=len(titles), sort=sort)
 
 
@@ -1075,6 +1104,27 @@ def delete_copy(copy_id):
     con.execute("DELETE FROM copies WHERE id=?", (copy_id,))
     con.commit()
     return jsonify(ok=True, title_id=cur["title_id"])
+
+
+@app.put("/admin/api/titles/<int:title_id>/rating")
+@editor_required
+def set_title_rating(title_id):
+    con = db()
+    row = con.execute("SELECT id FROM titles WHERE id=?", (title_id,)).fetchone()
+    if not row:
+        abort(make_err(404, "No such title"))
+    data = request.get_json(silent=True) or {}
+    rating = validate_rating(data.get("rating"))
+    if rating is None:
+        con.execute("DELETE FROM user_ratings WHERE title_id=?", (title_id,))
+    else:
+        con.execute(
+            """INSERT INTO user_ratings(title_id, rating, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)
+               ON CONFLICT(title_id) DO UPDATE SET rating=excluded.rating, updated_at=CURRENT_TIMESTAMP""",
+            (title_id, rating),
+        )
+    con.commit()
+    return jsonify(ok=True, title_id=title_id, user_rating=rating)
 
 
 @app.post("/admin/api/titles/<int:title_id>/refresh")

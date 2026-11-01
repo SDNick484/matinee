@@ -681,4 +681,73 @@ def test_migration_creates_tables():
     assert "watches" in tables
 
 
+def test_title_rating(monkeypatch):
+    t1 = add(129)  # Spirited Away
+    t2 = add(194)  # Amelie
+    t3 = add(10681)  # WALL-E
+
+    # 1. Unauthenticated PUT fails with 401 when LAN_EDIT is off
+    monkeypatch.setattr(matinee, "LAN_EDIT", False)
+    res = c.put(f"/admin/api/titles/{t1['id']}/rating", json={"rating": 8.5})
+    assert res.status_code == 401
+    monkeypatch.setattr(matinee, "LAN_EDIT", True)
+
+    # 2. Set rating 8.5
+    res = c.put(f"/admin/api/titles/{t1['id']}/rating", json={"rating": 8.5})
+    assert res.status_code == 200
+    assert res.get_json()["user_rating"] == 8.5
+
+    # Check detail view
+    det = c.get(f"/api/titles/{t1['id']}").get_json()
+    assert det["user_rating"] == 8.5
+
+    # 3. Update rating to 9.0
+    res = c.put(f"/admin/api/titles/{t1['id']}/rating", json={"rating": 9.0})
+    assert res.status_code == 200
+    assert res.get_json()["user_rating"] == 9.0
+
+    # Rate t2 with 7.5
+    c.put(f"/admin/api/titles/{t2['id']}/rating", json={"rating": 7.5})
+
+    # 4. Catalog includes user_rating
+    titles = c.get("/api/titles").get_json()["titles"]
+    t1_entry = next(t for t in titles if t["id"] == t1["id"])
+    t2_entry = next(t for t in titles if t["id"] == t2["id"])
+    t3_entry = next(t for t in titles if t["id"] == t3["id"])
+    assert t1_entry["user_rating"] == 9.0
+    assert t2_entry["user_rating"] == 7.5
+    assert t3_entry["user_rating"] is None
+
+    # 5. Sort by rating (highest first, unrated last)
+    res_sorted = c.get("/api/titles?sort=rating").get_json()["titles"]
+    assert [t["id"] for t in res_sorted] == [t1["id"], t2["id"], t3["id"]]
+
+    # 6. Sort by unrated (unrated first)
+    res_unrated = c.get("/api/titles?sort=unrated").get_json()["titles"]
+    assert res_unrated[0]["id"] == t3["id"]
+
+    # 7. Filter rating=8+
+    res_8plus = c.get("/api/titles?rating=8+").get_json()["titles"]
+    assert [t["id"] for t in res_8plus] == [t1["id"]]
+
+    # 8. Filter rating=unrated
+    res_unrated_filter = c.get("/api/titles?rating=unrated").get_json()["titles"]
+    assert [t["id"] for t in res_unrated_filter] == [t3["id"]]
+
+    # 9. Clear rating by sending null
+    res_clear = c.put(f"/admin/api/titles/{t1['id']}/rating", json={"rating": None})
+    assert res_clear.status_code == 200
+    assert res_clear.get_json()["user_rating"] is None
+    det_cleared = c.get(f"/api/titles/{t1['id']}").get_json()
+    assert det_cleared["user_rating"] is None
+
+    # 10. Deleting title cascades and deletes rating
+    con = matinee.connect()
+    con.execute("DELETE FROM titles WHERE id=?", (t2["id"],))
+    con.commit()
+    assert con.execute("SELECT count(*) FROM user_ratings WHERE title_id=?", (t2["id"],)).fetchone()[0] == 0
+    con.close()
+
+
+
 
