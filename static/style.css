@@ -301,6 +301,116 @@ main#view {
   gap: var(--s3);
   flex-wrap: wrap;
 }
+.filter-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  flex-wrap: wrap;
+}
+.filter-popover {
+  position: relative;
+  display: inline-block;
+}
+.filter-btn {
+  height: 32px;
+  padding: 0 var(--s3);
+  border-radius: var(--r-chip);
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--ink-2);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s1);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s ease;
+}
+.filter-btn:hover {
+  background: var(--raised);
+  color: var(--ink);
+}
+.filter-btn.active {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-color: var(--accent);
+}
+.filter-btn .caret {
+  font-size: 0.65rem;
+  margin-left: 2px;
+  transition: transform 0.15s ease;
+  display: inline-block;
+}
+.filter-popover.open .filter-btn .caret {
+  transform: rotate(180deg);
+}
+.popover-menu {
+  position: absolute;
+  top: calc(100% + var(--s1));
+  left: 0;
+  min-width: 200px;
+  max-width: 90vw;
+  max-height: 320px;
+  overflow-y: auto;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--r-card);
+  box-shadow: var(--shadow);
+  padding: var(--s2) 0;
+  z-index: 100;
+  display: none;
+}
+.filter-popover.open .popover-menu {
+  display: block;
+}
+.popover-item {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  padding: var(--s2) var(--s3);
+  color: var(--ink);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.1s ease;
+}
+.popover-item:hover {
+  background: var(--raised);
+}
+.popover-item input[type="checkbox"] {
+  accent-color: var(--accent);
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  margin: 0;
+  flex-shrink: 0;
+}
+.popover-item.is-all {
+  border-bottom: 1px solid var(--line);
+  margin-bottom: var(--s1);
+  padding-bottom: var(--s2);
+  font-weight: 600;
+}
+.filter-reset-btn {
+  height: 32px;
+  padding: 0 var(--s2);
+  border: none;
+  background: transparent;
+  color: var(--accent-text);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: var(--r-card);
+  transition: opacity 0.15s ease;
+}
+.filter-reset-btn:hover {
+  text-decoration: underline;
+}
+
 .filter-scroll {
   display: flex;
   align-items: center;
@@ -337,6 +447,7 @@ main#view {
   color: var(--accent-ink);
   border-color: var(--accent);
 }
+
 
 .sort-select {
   height: 32px;
