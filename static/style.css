@@ -658,6 +658,47 @@ main#view {
   font-size: var(--fs-sm);
 }
 
+/* Activity & Ratings stats */
+.stats-activity-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: var(--s3);
+}
+.stat-activity-card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--r-card);
+  padding: var(--s4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
+.stat-activity-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--s2);
+}
+.stat-activity-title {
+  font-weight: 700;
+  font-size: var(--fs-md);
+  color: var(--ink);
+}
+.stat-activity-metric {
+  font-size: var(--fs-sm);
+  color: var(--ink-2);
+  font-weight: 600;
+}
+.stat-activity-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  font-size: var(--fs-xs);
+  color: var(--ink-3);
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+
 /* Placeholders */
 .placeholders-grid {
   display: grid;

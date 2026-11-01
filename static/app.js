@@ -2469,6 +2469,8 @@
     const formats = data.formats || [];
     const genres = data.genres || [];
     const services = data.services || [];
+    const ws = data.watched_stats || {};
+    const rs = data.rating_stats || {};
 
     const maxGenreCount = Math.max(1, ...genres.map((g) => g.count));
 
@@ -2605,19 +2607,40 @@
           }
         </section>
 
-        <!-- Future Features / Placeholders -->
+        <!-- Activity & Ratings Breakdown -->
         <section>
-          <h2 class="stats-section-title" style="color:var(--ink-2)">Upcoming Features</h2>
-          <div class="placeholders-grid">
-            <div class="placeholder-card">
-              <span class="placeholder-badge">Coming Soon</span>
-              <h3>Watched Status</h3>
-              <p>Track which movies you and family members have watched, seen-it counts, and movie-night history.</p>
+          <h2 class="stats-section-title">Activity &amp; Ratings</h2>
+          <div class="stats-activity-grid">
+            <div class="stat-activity-card">
+              <div class="stat-activity-head">
+                <span class="stat-activity-title">Watched Movies</span>
+                <span class="stat-activity-metric">${ws.total_watched_titles ?? 0} / ${ov.titles_count ?? 0} (${ws.watched_percent ?? 0}%)</span>
+              </div>
+              <div class="stat-progress-bar">
+                <div class="stat-progress-fill" style="width: ${Math.min(100, ws.watched_percent ?? 0)}%; background: #22c55e;"></div>
+              </div>
+              <div class="stat-activity-meta">
+                <span>${ws.watched_this_year ?? 0} watched this year</span>
+                <span>·</span>
+                <span>${ws.watched_this_month ?? 0} this month</span>
+                <span>·</span>
+                <span>${ws.total_watch_events ?? 0} total plays</span>
+              </div>
             </div>
-            <div class="placeholder-card">
-              <span class="placeholder-badge">Coming Soon</span>
-              <h3>Family Ratings</h3>
-              <p>Record star ratings, kid-friendly recommendations, and custom favorites across your household.</p>
+
+            <div class="stat-activity-card">
+              <div class="stat-activity-head">
+                <span class="stat-activity-title">Family Ratings</span>
+                <span class="stat-activity-metric">${rs.average_rating ? `★ ${Number(rs.average_rating).toFixed(1)} / 10` : "No ratings yet"}</span>
+              </div>
+              <div class="stat-progress-bar">
+                <div class="stat-progress-fill" style="width: ${Math.min(100, rs.rated_percent ?? 0)}%; background: var(--amber);"></div>
+              </div>
+              <div class="stat-activity-meta">
+                <span>${rs.rated_titles_count ?? 0} rated (${rs.rated_percent ?? 0}%)</span>
+                <span>·</span>
+                <span>${rs.high_rated_count ?? 0} rated 8.0+ ★</span>
+              </div>
             </div>
           </div>
         </section>
