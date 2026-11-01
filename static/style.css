@@ -694,6 +694,24 @@ main#view {
   width: fit-content;
   margin-top: var(--s1);
 }
+.badge-both {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  background: var(--amber);
+  color: #17120a;
+  border-radius: var(--r-chip);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.7);
+  z-index: 2;
+  pointer-events: none;
+}
 
 /* Modal & Forms */
 .modal-overlay {

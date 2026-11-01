@@ -102,3 +102,38 @@ def test_api_upc_lookup_duplicate_warning(tmp_path, monkeypatch):
     assert data["already_owned"] is True
     assert "Digital HD (Movies Anywhere)" in data["owned_summary"]
 
+
+def test_titles_both_filter_and_has_both_flag(tmp_path, monkeypatch):
+    import app
+    db_file = tmp_path / "test.db"
+    monkeypatch.setattr(app, "DB_PATH", db_file)
+    monkeypatch.setattr(app, "DATA_DIR", tmp_path)
+    init_db()
+
+    con = connect()
+    # Title 1: Only Digital
+    con.execute("INSERT INTO titles (tmdb_id, title, sort_title, search_text, year, fetched_at) VALUES (1, 'Movie Digital Only', 'movie 1', 'm1', 2020, '2026-10-01')")
+    con.execute("INSERT INTO copies (title_id, kind, format, service) VALUES (1, 'digital', 'Digital HD', 'Movies Anywhere')")
+
+    # Title 2: Both Physical 4K UHD and Digital HD
+    con.execute("INSERT INTO titles (tmdb_id, title, sort_title, search_text, year, fetched_at) VALUES (2, 'Movie Both', 'movie 2', 'm2', 2021, '2026-10-01')")
+    con.execute("INSERT INTO copies (title_id, kind, format, service) VALUES (2, 'physical', '4K UHD', NULL)")
+    con.execute("INSERT INTO copies (title_id, kind, format, service) VALUES (2, 'digital', 'Digital HD', 'Fandango at Home')")
+
+    con.commit()
+    con.close()
+
+    client = app.app.test_client()
+    # All titles
+    res_all = client.get("/api/titles").get_json()["titles"]
+    m1 = next(t for t in res_all if t["id"] == 1)
+    m2 = next(t for t in res_all if t["id"] == 2)
+    assert m1["has_both"] is False
+    assert m2["has_both"] is True
+
+    # Filtered by both=1
+    res_both = client.get("/api/titles?both=1").get_json()["titles"]
+    assert len(res_both) == 1
+    assert res_both[0]["id"] == 2
+
+

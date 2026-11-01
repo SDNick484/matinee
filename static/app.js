@@ -126,6 +126,16 @@
     return "ks";
   }
 
+  function getChipIcon(format) {
+    if (format === "4K UHD" || format === "Blu-ray" || format === "3D Blu-ray" || format === "DVD" || format === "VHS") {
+      return "💿 ";
+    }
+    if (format === "Digital 4K" || format === "Digital HD" || format === "Digital SD") {
+      return "☁️ ";
+    }
+    return "";
+  }
+
   function formatCopyLabel(copy) {
     if (copy.kind === "digital") {
       return `${copy.format}${copy.service ? " · " + copy.service : ""}`;
@@ -220,6 +230,7 @@
   async function renderGrid(container) {
     const q = state.route.query.get("q") || "";
     const kind = state.route.query.get("kind") || "";
+    const both = state.route.query.get("both") || "";
     const format = state.route.query.get("format") || "";
     const service = state.route.query.get("service") || "";
     const genre = state.route.query.get("genre") || "";
@@ -227,6 +238,7 @@
 
     state.grid.q = q;
     state.grid.kind = kind;
+    state.grid.both = both;
     state.grid.format = format;
     state.grid.service = service;
     state.grid.genre = genre;
@@ -333,14 +345,14 @@
     const items = [];
 
     // All button
-    const hasFilters = state.grid.kind || state.grid.format || state.grid.service || state.grid.genre;
+    const hasFilters = state.grid.kind || state.grid.both || state.grid.format || state.grid.service || state.grid.genre;
     items.push(`
       <button class="filter-pill ${!hasFilters ? "active" : ""}" data-action="clear-filters">
         All
       </button>
     `);
 
-    // Kinds
+    // Kinds & Both
     if (f.kinds?.includes("physical") && f.kinds?.includes("digital")) {
       items.push(`
         <button class="filter-pill ${state.grid.kind === "physical" ? "active" : ""}" data-facet="kind" data-val="physical">
@@ -348,6 +360,13 @@
         </button>
         <button class="filter-pill ${state.grid.kind === "digital" ? "active" : ""}" data-facet="kind" data-val="digital">
           Digital
+        </button>
+      `);
+    }
+    if (f.has_both) {
+      items.push(`
+        <button class="filter-pill ${state.grid.both === "1" ? "active" : ""}" data-facet="both" data-val="1">
+          💿+☁️ Disc + Digital
         </button>
       `);
     }
@@ -386,6 +405,7 @@
         if (pill.dataset.action === "clear-filters") {
           const q = new URLSearchParams(state.route.query);
           q.delete("kind");
+          q.delete("both");
           q.delete("format");
           q.delete("service");
           q.delete("genre");
@@ -460,13 +480,15 @@
               ? `<img class="poster-img" src="${posterSrc}" loading="lazy" alt="${esc(t.title)}" onerror="this.onerror=null;this.parentElement.innerHTML='<div class=\\'poster-ph\\'>${esc(t.title)}<br>${t.year || ''}</div>';">`
               : `<div class="poster-ph"><span>${esc(t.title)}<br><small style="font-weight:400;color:var(--ink-3)">${t.year || ""}</small></span></div>`;
 
+            const bothBadge = t.has_both ? `<span class="badge-both">Disc + Digital</span>` : "";
             const chipsHtml = (t.formats || [])
-              .map((fmt) => `<span class="chip ${getChipClass(fmt)}">${esc(fmt)}</span>`)
+              .map((fmt) => `<span class="chip ${getChipClass(fmt)}">${getChipIcon(fmt)}${esc(fmt)}</span>`)
               .join("");
 
             return `
               <a href="#/t/${t.id}" class="movie-card" data-id="${t.id}">
                 <div class="poster-wrap">
+                  ${bothBadge}
                   ${posterHtml}
                 </div>
                 <div class="card-title">${esc(t.title)}</div>

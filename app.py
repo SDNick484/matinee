@@ -578,16 +578,22 @@ def list_titles(private):
         where.append("EXISTS (SELECT 1 FROM title_genres tg JOIN genres gn ON gn.id=tg.genre_id "
                      "WHERE tg.title_id=t.id AND gn.name = ? COLLATE NOCASE)")
         args.append(genre)
+    if a.get("both") == "1" or a.get("kind") == "both":
+        where.append("EXISTS (SELECT 1 FROM copies c WHERE c.title_id=t.id AND c.kind='physical')")
+        where.append("EXISTS (SELECT 1 FROM copies c WHERE c.title_id=t.id AND c.kind='digital')")
     sort = a.get("sort") if a.get("sort") in SORTS else "added"
     rows = db().execute(
         f"""SELECT t.id, t.title, t.year, t.poster_file, t.fetched_at,
               (SELECT MIN(c.created_at) FROM copies c WHERE c.title_id=t.id) AS added,
-              (SELECT group_concat(DISTINCT c.format) FROM copies c WHERE c.title_id=t.id) AS formats
+              (SELECT group_concat(DISTINCT c.format) FROM copies c WHERE c.title_id=t.id) AS formats,
+              (EXISTS (SELECT 1 FROM copies c WHERE c.title_id=t.id AND c.kind='physical')
+               AND EXISTS (SELECT 1 FROM copies c WHERE c.title_id=t.id AND c.kind='digital')) AS has_both
             FROM titles t WHERE {' AND '.join(where)} ORDER BY {SORTS[sort]}""", args).fetchall()
     titles = [{"id": r["id"], "title": r["title"], "year": r["year"],
                "poster_url": image_url(r["poster_file"], r["fetched_at"]),
                "poster_file": r["poster_file"],
                "formats": sorted_formats((r["formats"] or "").split(",")) if r["formats"] else [],
+               "has_both": bool(r["has_both"]),
                "added_on": (r["added"] or "")[:10] or None} for r in rows]
     return jsonify(titles=titles, count=len(titles), sort=sort)
 
@@ -600,12 +606,15 @@ def facets(private):
     con = db()
     formats = sorted_formats(r[0] for r in con.execute("SELECT DISTINCT format FROM copies"))
     kinds = [k for k in FORMATS if con.execute("SELECT 1 FROM copies WHERE kind=? LIMIT 1", (k,)).fetchone()]
+    has_both = bool(con.execute(
+        """SELECT 1 FROM copies c1 JOIN copies c2 ON c1.title_id=c2.title_id
+           WHERE c1.kind='physical' AND c2.kind='digital' LIMIT 1""").fetchone())
     present = {r[0] for r in con.execute("SELECT DISTINCT service FROM copies WHERE service IS NOT NULL")}
     services = [s for s in SERVICES if s in present] + sorted(present - set(SERVICES))
     genres = [r[0] for r in con.execute(
         """SELECT DISTINCT gn.name FROM genres gn JOIN title_genres tg ON tg.genre_id=gn.id
            WHERE EXISTS (SELECT 1 FROM copies c WHERE c.title_id=tg.title_id) ORDER BY gn.name""")]
-    return jsonify(kinds=kinds, formats=formats, services=services, genres=genres)
+    return jsonify(kinds=kinds, formats=formats, services=services, genres=genres, has_both=has_both)
 
 
 for prefix, private in (("/api", False), ("/admin/api", True)):
