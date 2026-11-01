@@ -34,6 +34,8 @@
       medium: [],
       quality: [],
       genre: [],
+      rating: "",
+      watched: "",
       kind: "",
       format: "",
       service: "",
@@ -284,6 +286,8 @@
     const mediumStr = state.route.query.get("medium") || "";
     const qualityStr = state.route.query.get("quality") || "";
     const genreStr = state.route.query.get("genre") || "";
+    const rating = state.route.query.get("rating") || "";
+    const watched = state.route.query.get("watched") || "";
     const kind = state.route.query.get("kind") || "";
     const both = state.route.query.get("both") || "";
     const format = state.route.query.get("format") || "";
@@ -310,6 +314,8 @@
     state.grid.medium = medium;
     state.grid.quality = quality;
     state.grid.genre = genre;
+    state.grid.rating = rating;
+    state.grid.watched = watched;
     state.grid.kind = kind;
     state.grid.both = both;
     state.grid.format = format;
@@ -335,6 +341,10 @@
               <option value="title" ${sort === "title" ? "selected" : ""}>Title (A–Z)</option>
               <option value="added" ${sort === "added" ? "selected" : ""}>Recently Added</option>
               <option value="year" ${sort === "year" ? "selected" : ""}>Release Year</option>
+              <option value="rating" ${sort === "rating" ? "selected" : ""}>Highest Rated</option>
+              <option value="unrated" ${sort === "unrated" ? "selected" : ""}>Unrated</option>
+              <option value="last_watched" ${sort === "last_watched" ? "selected" : ""}>Last Watched</option>
+              <option value="least_watched" ${sort === "least_watched" ? "selected" : ""}>Least Recently / Never Watched</option>
             </select>
           </div>
         </div>
@@ -433,6 +443,20 @@
     return `Genre (${genre.length})`;
   }
 
+  function getWatchedLabel(watched) {
+    if (!watched) return "Watched: All";
+    if (watched === "watched") return "Watched: Seen";
+    if (watched === "unwatched") return "Watched: Unseen";
+    return `Watched: ${watched}`;
+  }
+
+  function getRatingLabel(rating) {
+    if (!rating) return "Rating: All";
+    if (rating === "8+" || rating === "8") return "Rating: 8.0+ ★";
+    if (rating === "unrated") return "Rating: Unrated";
+    return `Rating: ${rating}`;
+  }
+
   function renderFilterBar() {
     const bar = document.getElementById("filter-bar");
     if (!bar) return;
@@ -441,11 +465,15 @@
     const medium = state.grid.medium || [];
     const quality = state.grid.quality || [];
     const genre = state.grid.genre || [];
+    const rating = state.grid.rating || "";
+    const watched = state.grid.watched || "";
 
     const hasFilters =
       medium.length > 0 ||
       quality.length > 0 ||
       genre.length > 0 ||
+      Boolean(rating) ||
+      Boolean(watched) ||
       state.grid.kind ||
       state.grid.both ||
       state.grid.format ||
@@ -454,6 +482,8 @@
     const mediumLabel = getMediumLabel(medium);
     const qualityLabel = getQualityLabel(quality);
     const genreLabel = getGenreLabel(genre);
+    const watchedLabel = getWatchedLabel(watched);
+    const ratingLabel = getRatingLabel(rating);
 
     const genresList = f.genres || [];
 
@@ -531,6 +561,50 @@
           `
             )
             .join("")}
+        </div>
+      </div>
+
+      <!-- Watched Dropdown -->
+      <div class="filter-popover" id="popover-watched">
+        <button type="button" class="filter-btn ${watched ? "active" : ""}" data-toggle="popover" aria-expanded="false" aria-haspopup="true">
+          <span>${esc(watchedLabel)}</span>
+          <span class="caret">▾</span>
+        </button>
+        <div class="popover-menu" role="menu">
+          <label class="popover-item is-all">
+            <input type="checkbox" data-facet="watched" data-val="" ${!watched ? "checked" : ""}>
+            <span>All Movies</span>
+          </label>
+          <label class="popover-item">
+            <input type="checkbox" data-facet="watched" data-val="watched" ${watched === "watched" ? "checked" : ""}>
+            <span>Watched (Seen)</span>
+          </label>
+          <label class="popover-item">
+            <input type="checkbox" data-facet="watched" data-val="unwatched" ${watched === "unwatched" ? "checked" : ""}>
+            <span>Unwatched (Never seen)</span>
+          </label>
+        </div>
+      </div>
+
+      <!-- Rating Dropdown -->
+      <div class="filter-popover" id="popover-rating">
+        <button type="button" class="filter-btn ${rating ? "active" : ""}" data-toggle="popover" aria-expanded="false" aria-haspopup="true">
+          <span>${esc(ratingLabel)}</span>
+          <span class="caret">▾</span>
+        </button>
+        <div class="popover-menu" role="menu">
+          <label class="popover-item is-all">
+            <input type="checkbox" data-facet="rating" data-val="" ${!rating ? "checked" : ""}>
+            <span>All Ratings</span>
+          </label>
+          <label class="popover-item">
+            <input type="checkbox" data-facet="rating" data-val="8+" ${rating === "8+" || rating === "8" ? "checked" : ""}>
+            <span>Rated 8.0+ ★</span>
+          </label>
+          <label class="popover-item">
+            <input type="checkbox" data-facet="rating" data-val="unrated" ${rating === "unrated" ? "checked" : ""}>
+            <span>Unrated</span>
+          </label>
         </div>
       </div>
 
@@ -631,6 +705,18 @@
           } else {
             q.delete("genre");
           }
+        } else if (facet === "watched") {
+          if (!val || (val === state.grid.watched && !checked)) {
+            q.delete("watched");
+          } else {
+            q.set("watched", val);
+          }
+        } else if (facet === "rating") {
+          if (!val || (val === state.grid.rating && !checked)) {
+            q.delete("rating");
+          } else {
+            q.set("rating", val);
+          }
         }
 
         const qStr = q.toString();
@@ -646,6 +732,8 @@
       q.delete("medium");
       q.delete("quality");
       q.delete("genre");
+      q.delete("rating");
+      q.delete("watched");
       q.delete("kind");
       q.delete("both");
       q.delete("format");
@@ -667,6 +755,8 @@
         (state.grid.medium && state.grid.medium.length > 0) ||
         (state.grid.quality && state.grid.quality.length > 0) ||
         (state.grid.genre && state.grid.genre.length > 0) ||
+        Boolean(state.grid.rating) ||
+        Boolean(state.grid.watched) ||
         state.grid.kind ||
         state.grid.both ||
         state.grid.format ||
@@ -718,6 +808,9 @@
               : `<div class="poster-ph"><span>${esc(t.title)}<br><small style="font-weight:400;color:var(--ink-3)">${t.year || ""}</small></span></div>`;
 
             const bothBadge = t.has_both ? `<span class="badge-both" title="Disc + Digital">💿☁️</span>` : "";
+            const ratingBadge = (t.user_rating !== null && t.user_rating !== undefined)
+              ? `<span class="badge-rating" title="Personal Rating: ${Number(t.user_rating).toFixed(1)}">★ ${Number(t.user_rating).toFixed(1)}</span>`
+              : "";
             const chipsHtml = (t.formats || [])
               .map((fmt) => `<span class="chip ${getChipClass(fmt)}">${getChipIcon(fmt)}${esc(fmt)}</span>`)
               .join("");
@@ -726,6 +819,7 @@
               <a href="#/t/${t.id}" class="movie-card" data-id="${t.id}">
                 <div class="poster-wrap">
                   ${bothBadge}
+                  ${ratingBadge}
                   ${posterHtml}
                 </div>
                 <div class="card-title">${esc(t.title)}</div>
