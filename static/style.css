@@ -30,12 +30,23 @@
   --accent-text: #ef5a52; /* red used as text/links on dark */
   --amber: #f2b544;       /* marquee bulb: TMDB score, "In collection" badge; sparingly */
 
-  /* format chips: solid fill + near-black text */
-  --chip-4k: #e3b54d;      --chip-4k-ink: #17120a;     /* 4K UHD, Digital 4K */
-  --chip-bluray: #5b9cf0;  --chip-bluray-ink: #08111e; /* Blu-ray */
-  --chip-3d: #02b4c8;      --chip-3d-ink: #041a1d;     /* 3D Blu-ray */
-  --chip-sd: #a3a3ad;      --chip-sd-ink: #0b0b0e;     /* DVD, VHS */
-  --chip-digital: #3fc0ad; --chip-digital-ink: #04150f;/* Digital HD, Digital SD */
+  /* format chips: solid fill + distinct shade per format */
+  --chip-4k-uhd: #c59424;     --chip-4k-uhd-ink: #17120a;
+  --chip-digital-4k: #f5d77f; --chip-digital-4k-ink: #231805;
+
+  --chip-bluray: #2563eb;     --chip-bluray-ink: #ffffff;
+  --chip-3d-bluray: #0284c7;  --chip-3d-bluray-ink: #ffffff;
+  --chip-digital-hd: #7dd3fc; --chip-digital-hd-ink: #082f49;
+
+  --chip-dvd: #475569;        --chip-dvd-ink: #ffffff;
+  --chip-vhs: #78716c;        --chip-vhs-ink: #ffffff;
+  --chip-digital-sd: #cbd5e1; --chip-digital-sd-ink: #0f172a;
+
+  /* legacy aliases */
+  --chip-4k: var(--chip-4k-uhd);          --chip-4k-ink: var(--chip-4k-uhd-ink);
+  --chip-3d: var(--chip-3d-bluray);       --chip-3d-ink: var(--chip-3d-bluray-ink);
+  --chip-sd: var(--chip-dvd);             --chip-sd-ink: var(--chip-dvd-ink);
+  --chip-digital: var(--chip-digital-hd); --chip-digital-ink: var(--chip-digital-hd-ink);
 
   /* people: reserved now, used from phase 5 (seen dots, ratings) */
   --p-user1: #5cc178;
@@ -227,11 +238,21 @@ main#view {
   white-space: nowrap;
   line-height: 1;
 }
-.chip.k4 { background: var(--chip-4k); color: var(--chip-4k-ink); }
+.chip.k-4k-uhd { background: var(--chip-4k-uhd); color: var(--chip-4k-uhd-ink); }
+.chip.k-digital-4k { background: var(--chip-digital-4k); color: var(--chip-digital-4k-ink); }
+.chip.k-bluray { background: var(--chip-bluray); color: var(--chip-bluray-ink); }
+.chip.k-3d-bluray { background: var(--chip-3d-bluray); color: var(--chip-3d-bluray-ink); }
+.chip.k-digital-hd { background: var(--chip-digital-hd); color: var(--chip-digital-hd-ink); }
+.chip.k-dvd { background: var(--chip-dvd); color: var(--chip-dvd-ink); }
+.chip.k-vhs { background: var(--chip-vhs); color: var(--chip-vhs-ink); }
+.chip.k-digital-sd { background: var(--chip-digital-sd); color: var(--chip-digital-sd-ink); }
+
+/* Legacy aliases */
+.chip.k4 { background: var(--chip-4k-uhd); color: var(--chip-4k-uhd-ink); }
 .chip.kb { background: var(--chip-bluray); color: var(--chip-bluray-ink); }
-.chip.k3d { background: var(--chip-3d); color: var(--chip-3d-ink); }
-.chip.ks { background: var(--chip-sd); color: var(--chip-sd-ink); }
-.chip.kd { background: var(--chip-digital); color: var(--chip-digital-ink); }
+.chip.k3d { background: var(--chip-3d-bluray); color: var(--chip-3d-bluray-ink); }
+.chip.ks { background: var(--chip-dvd); color: var(--chip-dvd-ink); }
+.chip.kd { background: var(--chip-digital-hd); color: var(--chip-digital-hd-ink); }
 
 /* Score */
 .score {

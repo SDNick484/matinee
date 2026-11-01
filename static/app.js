@@ -122,12 +122,15 @@
   }
 
   function getChipClass(format) {
-    if (format === "4K UHD" || format === "Digital 4K") return "k4";
-    if (format === "3D Blu-ray") return "k3d";
-    if (format === "Blu-ray") return "kb";
-    if (format === "DVD" || format === "VHS") return "ks";
-    if (format === "Digital HD" || format === "Digital SD") return "kd";
-    return "ks";
+    if (format === "4K UHD") return "k-4k-uhd";
+    if (format === "Digital 4K") return "k-digital-4k";
+    if (format === "3D Blu-ray") return "k-3d-bluray";
+    if (format === "Blu-ray") return "k-bluray";
+    if (format === "DVD") return "k-dvd";
+    if (format === "VHS") return "k-vhs";
+    if (format === "Digital HD") return "k-digital-hd";
+    if (format === "Digital SD") return "k-digital-sd";
+    return "k-dvd";
   }
 
   function getChipIcon(format) {
