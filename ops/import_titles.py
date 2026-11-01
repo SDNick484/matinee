@@ -101,7 +101,7 @@ def parse_input_file(path):
 
 def import_titles(file_path, kind="digital", default_format="Digital HD",
                   default_service="Movies Anywhere", unresolved_path="unresolved.txt",
-                  dry_run=False, delay=0.15, tmdb_token=None):
+                  dry_run=False, delay=0.15, tmdb_token=None, skip_existing=False):
     """Import movies from file into Matinee catalog."""
     with matinee.app.app_context():
         return _import_titles_impl(
@@ -113,12 +113,13 @@ def import_titles(file_path, kind="digital", default_format="Digital HD",
             dry_run=dry_run,
             delay=delay,
             tmdb_token=tmdb_token,
+            skip_existing=skip_existing,
         )
 
 
 def _import_titles_impl(file_path, kind="digital", default_format="Digital HD",
                         default_service="Movies Anywhere", unresolved_path="unresolved.txt",
-                        dry_run=False, delay=0.15, tmdb_token=None):
+                        dry_run=False, delay=0.15, tmdb_token=None, skip_existing=False):
     if tmdb_token:
         matinee.TMDB_READ_TOKEN = tmdb_token.strip()
 
@@ -171,6 +172,17 @@ def _import_titles_impl(file_path, kind="digital", default_format="Digital HD",
         tmdb_id = top["tmdb_id"]
         movie_title = top["title"]
         movie_year = top.get("year") or ""
+
+        # Skip if already in catalog under any format or service
+        if skip_existing:
+            already_in_catalog = con.execute(
+                "SELECT 1 FROM titles t JOIN copies c ON c.title_id = t.id WHERE t.tmdb_id = ? LIMIT 1",
+                (tmdb_id,)
+            ).fetchone()
+            if already_in_catalog:
+                print(f"[{idx}/{total}] SKIPPED (already in catalog): {movie_title} ({movie_year})")
+                stats["skipped"] += 1
+                continue
 
         # Check if this exact copy is already owned
         existing_copy = con.execute(
@@ -249,6 +261,8 @@ def main():
                         help="Delay in seconds between TMDB requests (default: 0.15)")
     parser.add_argument("--dry-run", action="store_true",
                         help="Perform search and show what would be added without writing to database")
+    parser.add_argument("--skip-existing", "--unique-only", dest="skip_existing", action="store_true",
+                        help="Skip movies already in your catalog under any format/service (only add unique titles)")
     parser.add_argument("--tmdb-token", default=None,
                         help="TMDB API Read Access Token (overrides TMDB_READ_TOKEN env/conf)")
 
@@ -277,6 +291,7 @@ def main():
         unresolved_path=args.unresolved,
         dry_run=args.dry_run,
         delay=args.delay,
+        skip_existing=args.skip_existing,
     )
 
 

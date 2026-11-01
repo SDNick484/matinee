@@ -98,3 +98,71 @@ def test_import_titles_token_argument(tmp_path, monkeypatch):
     import_titles(txt_file, dry_run=True, tmdb_token="custom_token_123")
     assert matinee.TMDB_READ_TOKEN == "custom_token_123"
 
+
+def test_import_titles_skip_existing(tmp_path, monkeypatch):
+    db_file = tmp_path / "test.db"
+    monkeypatch.setattr(matinee, "DB_PATH", db_file)
+    monkeypatch.setattr(matinee, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(matinee, "IMAGE_DIR", tmp_path / "images")
+    monkeypatch.setattr(matinee, "TMDB_READ_TOKEN", "fake_token")
+    matinee.init_db()
+
+    def fake_search(q):
+        if "interstellar" in q.lower():
+            return [{"tmdb_id": 157336, "title": "Interstellar", "year": 2014, "owned": False}]
+        return [{"tmdb_id": 155, "title": "The Dark Knight", "year": 2008, "owned": False}]
+
+    def fake_details(tmdb_id):
+        return {
+            "tmdb_id": tmdb_id,
+            "title": "Movie",
+            "sort_title": "movie",
+            "search_text": "movie",
+            "year": 2014,
+            "release_date": "2014-11-05",
+            "runtime": 120,
+            "overview": "Overview",
+            "certification": "PG-13",
+            "collection_tmdb_id": None,
+            "collection_name": None,
+            "tmdb_vote": 8.0,
+            "tmdb_votes": 1000,
+            "poster_path": None,
+            "backdrop_path": None,
+            "genres": [(28, "Action")],
+        }
+
+    monkeypatch.setattr(matinee, "tmdb_search", fake_search)
+    monkeypatch.setattr(matinee, "tmdb_details", fake_details)
+    monkeypatch.setattr(matinee, "fetch_images", lambda t: {"poster_file": None, "backdrop_file": None})
+
+    # Step 1: Add The Dark Knight under Movies Anywhere
+    con = matinee.connect()
+    t_id = matinee.write_title(con, fake_details(155), {"poster_file": None, "backdrop_file": None})
+    con.execute("INSERT INTO copies (title_id, kind, format, service) VALUES (?, 'digital', 'Digital HD', 'Movies Anywhere')", (t_id,))
+    con.commit()
+    con.close()
+
+    # Step 2: Import file with both The Dark Knight and Interstellar, with skip_existing=True
+    txt_file = tmp_path / "vudu.txt"
+    txt_file.write_text("The Dark Knight\nInterstellar\n")
+
+    res = import_titles(
+        txt_file,
+        kind="digital",
+        default_format="Digital HD",
+        default_service="Fandango at Home",
+        skip_existing=True,
+    )
+
+    assert res["total"] == 2
+    assert res["skipped"] == 1  # The Dark Knight skipped
+    assert res["added"] == 1    # Interstellar added
+
+    con = matinee.connect()
+    copies = con.execute("SELECT * FROM copies").fetchall()
+    assert len(copies) == 2
+    services = {c["service"] for c in copies}
+    assert services == {"Movies Anywhere", "Fandango at Home"}
+
+
