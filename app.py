@@ -560,29 +560,78 @@ def like_escape(s):
     return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
+QUALITY_MAP = {
+    "4k": ["4K UHD", "Digital 4K"],
+    "hd": ["Blu-ray", "3D Blu-ray", "Digital HD"],
+    "sd": ["DVD", "VHS", "Digital SD"],
+}
+
+
 def list_titles(private):
     a = request.args
     where, args = ["EXISTS (SELECT 1 FROM copies c WHERE c.title_id=t.id)"], []
     for w in words(a.get("q")):
         where.append("t.search_text LIKE ? ESCAPE '\\'")
         args.append(f"%{like_escape(w)}%")
-    sub, sub_args = [], []  # kind/format/service must all hold for the same copy
-    for col in ("kind", "format", "service"):
-        v = clean(a.get(col))
-        if v:
-            sub.append(f"c.{col} = ?")
-            sub_args.append(v)
-    if sub:
-        where.append(f"EXISTS (SELECT 1 FROM copies c WHERE c.title_id=t.id AND {' AND '.join(sub)})")
-        args += sub_args
-    genre = clean(a.get("genre"))
-    if genre:
-        where.append("EXISTS (SELECT 1 FROM title_genres tg JOIN genres gn ON gn.id=tg.genre_id "
-                     "WHERE tg.title_id=t.id AND gn.name = ? COLLATE NOCASE)")
-        args.append(genre)
-    if a.get("both") == "1" or a.get("kind") == "both":
+
+    medium_tokens = [m.strip().lower() for m in (a.get("medium") or "").split(",") if m.strip()]
+    quality_tokens = [q.strip().lower() for q in (a.get("quality") or "").split(",") if q.strip()]
+    genre_tokens = [g.strip() for g in (a.get("genre") or "").split(",") if g.strip()]
+
+    legacy_kind = clean(a.get("kind"))
+    legacy_format = clean(a.get("format"))
+    legacy_service = clean(a.get("service"))
+    legacy_both = a.get("both") == "1" or legacy_kind == "both"
+
+    target_formats = []
+    for q in quality_tokens:
+        target_formats.extend(QUALITY_MAP.get(q, []))
+    if legacy_format and legacy_format not in target_formats:
+        target_formats.append(legacy_format)
+
+    kinds = []
+    if "disc" in medium_tokens:
+        kinds.append("physical")
+    if "streaming" in medium_tokens:
+        kinds.append("digital")
+    if legacy_kind and legacy_kind in ("physical", "digital") and legacy_kind not in kinds:
+        kinds.append(legacy_kind)
+
+    is_both = "both" in medium_tokens or legacy_both
+
+    if is_both:
         where.append("EXISTS (SELECT 1 FROM copies c WHERE c.title_id=t.id AND c.kind='physical')")
         where.append("EXISTS (SELECT 1 FROM copies c WHERE c.title_id=t.id AND c.kind='digital')")
+        if target_formats:
+            fmt_q = ",".join("?" * len(target_formats))
+            where.append(f"EXISTS (SELECT 1 FROM copies c WHERE c.title_id=t.id AND c.format IN ({fmt_q}))")
+            args += target_formats
+        if legacy_service:
+            where.append("EXISTS (SELECT 1 FROM copies c WHERE c.title_id=t.id AND c.service=?)")
+            args.append(legacy_service)
+    else:
+        copy_conds, copy_args = [], []
+        if kinds:
+            k_q = ",".join("?" * len(kinds))
+            copy_conds.append(f"c.kind IN ({k_q})")
+            copy_args += kinds
+        if target_formats:
+            fmt_q = ",".join("?" * len(target_formats))
+            copy_conds.append(f"c.format IN ({fmt_q})")
+            copy_args += target_formats
+        if legacy_service:
+            copy_conds.append("c.service = ?")
+            copy_args.append(legacy_service)
+        if copy_conds:
+            where.append(f"EXISTS (SELECT 1 FROM copies c WHERE c.title_id=t.id AND {' AND '.join(copy_conds)})")
+            args += copy_args
+
+    if genre_tokens:
+        g_q = ",".join("?" * len(genre_tokens))
+        where.append("EXISTS (SELECT 1 FROM title_genres tg JOIN genres gn ON gn.id=tg.genre_id "
+                     f"WHERE tg.title_id=t.id AND gn.name IN ({g_q}) COLLATE NOCASE)")
+        args += genre_tokens
+
     sort = a.get("sort") if a.get("sort") in SORTS else "added"
     rows = db().execute(
         f"""SELECT t.id, t.title, t.year, t.poster_file, t.fetched_at,
@@ -598,6 +647,7 @@ def list_titles(private):
                "has_both": bool(r["has_both"]),
                "added_on": (r["added"] or "")[:10] or None} for r in rows]
     return jsonify(titles=titles, count=len(titles), sort=sort)
+
 
 
 def get_title(title_id, private):

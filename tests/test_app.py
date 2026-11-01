@@ -486,3 +486,53 @@ def test_detail_privacy_facets_and_public_writes():
     c.delete(f"/admin/api/copies/{cars['copies'][0]['id']}")
     assert c.get(f"/api/titles/{cars['id']}").status_code == 200
     assert "Comedy" not in c.get("/api/facets").get_json()["genres"]  # only from owned titles
+
+
+# ------------------------------------------------------------------- Task 1: multi-value and correlated filtering
+def test_filter_medium_disc_and_streaming():
+    add(194, "physical", "Blu-ray")  # Amélie
+    add(10681, "digital", "Digital HD", "Movies Anywhere")  # WALL·E
+    assert [x["title"] for x in grid(medium="disc")] == ["Amélie"]
+    assert [x["title"] for x in grid(medium="streaming")] == ["WALL·E"]
+    assert {x["title"] for x in grid(medium="disc,streaming")} == {"Amélie", "WALL·E"}
+
+
+def test_filter_medium_both():
+    add(194, "physical", "Blu-ray")
+    add(194, "digital", "Digital HD", "Apple TV")
+    add(10681, "digital", "Digital HD", "Movies Anywhere")
+    assert [x["title"] for x in grid(medium="both")] == ["Amélie"]
+
+
+def test_filter_quality_mapping():
+    add(194, "physical", "4K UHD")
+    add(10681, "digital", "Digital HD", "Movies Anywhere")
+    add(862, "physical", "DVD")
+    assert [x["title"] for x in grid(quality="4k")] == ["Amélie"]
+    assert [x["title"] for x in grid(quality="hd")] == ["WALL·E"]
+    assert [x["title"] for x in grid(quality="sd")] == ["Toy Story"]
+    assert {x["title"] for x in grid(quality="4k,hd")} == {"Amélie", "WALL·E"}
+
+
+def test_filter_correlated_medium_and_quality():
+    # Title with SD DVD and Digital 4K
+    add(194, "physical", "DVD")
+    add(194, "digital", "Digital 4K", "Apple TV")
+    # Title with physical 4K UHD
+    add(10681, "physical", "4K UHD")
+
+    # Disc + 4K should ONLY match WALL·E, NOT Amélie (Amélie's disc is DVD, not 4K)
+    assert [x["title"] for x in grid(medium="disc", quality="4k")] == ["WALL·E"]
+    # Streaming + 4K should match Amélie
+    assert [x["title"] for x in grid(medium="streaming", quality="4k")] == ["Amélie"]
+    # Disc + SD should match Amélie
+    assert [x["title"] for x in grid(medium="disc", quality="sd")] == ["Amélie"]
+
+
+def test_filter_multi_genre():
+    add(194)  # Amélie (Comedy, Romance)
+    add(155)  # The Dark Knight (Drama, Action, Crime, Thriller)
+    add(10681, "digital", "Digital HD", "Movies Anywhere")  # WALL·E (Animation, Family, Sci-Fi)
+    assert {x["title"] for x in grid(genre="Action,Animation")} == {"The Dark Knight", "WALL·E"}
+    assert [x["title"] for x in grid(genre="Romance")] == ["Amélie"]
+
