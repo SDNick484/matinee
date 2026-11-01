@@ -48,8 +48,8 @@ fi
 mkdir -p "$APP_DIR" "$DATA_DIR/images" /var/backups/matinee
 
 echo "==> Unpacking app"
-TMP=$(mktemp -d)
-sed -n '/^__PAYLOAD_BELOW__$/,$p' "$0" | tail -n +2 | base64 -d | tar xz -C "$TMP"
+TMP=$(mktemp -d /tmp/matinee-tmp.XXXXXX 2>/dev/null || mktemp -d -t matinee-tmp.XXXXXX 2>/dev/null || mktemp -d)
+sed -n '/^__PAYLOAD_BELOW__$/,$p' "$0" | tail -n +2 | base64 -d | ( cd "$TMP" && tar -xzf - )
 rm -rf "$APP_DIR.new" && mv "$TMP/matinee" "$APP_DIR.new"
 rm -rf "$APP_DIR.old"; [ -d "$APP_DIR" ] && mv "$APP_DIR" "$APP_DIR.old"
 mv "$APP_DIR.new" "$APP_DIR"; rm -rf "$APP_DIR.old" "$TMP"
