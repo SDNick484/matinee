@@ -196,6 +196,7 @@
 
   async function handleRoute() {
     closeModal();
+    stopBarcodeScanner();
     const prevRoute = state.route;
     state.route = parseHash(location.hash);
     updateHeader();

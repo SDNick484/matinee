@@ -745,10 +745,19 @@ def api_upc_lookup(upc):
     else:
         # Fetch from UPCitemdb trial API
         url = f"https://api.upcitemdb.com/prod/trial/lookup?upc={clean_code}"
+        upc_data = None
+        status_err = None
         try:
             upc_data = http_json(url, timeout=8)
+        except urllib.error.HTTPError as e:
+            if e.code == 429:
+                abort(make_err(429, "UPC lookup limit reached (100/day trial). Try entering the title manually."))
+            status_err = e.code
         except Exception:
-            upc_data = None
+            status_err = 502
+
+        if status_err:
+            abort(make_err(502, "UPC lookup service is temporarily unavailable. Try entering the title manually."))
 
         if upc_data and upc_data.get("items"):
             item = upc_data["items"][0]
@@ -758,6 +767,7 @@ def api_upc_lookup(upc):
                         (clean_code, raw_title, brand, json.dumps(upc_data)))
             con.commit()
         else:
+            # Genuine miss from UPCitemdb (200 with no items)
             con.execute("INSERT OR REPLACE INTO upc_cache (upc, raw_title, brand, data) VALUES (?, ?, ?, ?)",
                         (clean_code, "", "", json.dumps(upc_data or {})))
             con.commit()

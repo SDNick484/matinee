@@ -137,3 +137,29 @@ def test_titles_both_filter_and_has_both_flag(tmp_path, monkeypatch):
     assert res_both[0]["id"] == 2
 
 
+def test_api_upc_rate_limit_not_cached(tmp_path, monkeypatch):
+    import app, urllib.error
+    db_file = tmp_path / "test.db"
+    monkeypatch.setattr(app, "DB_PATH", db_file)
+    monkeypatch.setattr(app, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(app, "LAN_EDIT", True)
+    init_db()
+
+    def fake_http_json(url, **kw):
+        raise urllib.error.HTTPError(url, 429, "Too Many Requests", {}, None)
+
+    monkeypatch.setattr(app, "http_json", fake_http_json)
+
+    client = app.app.test_client()
+    resp = client.get("/admin/api/upc/012345678901")
+    assert resp.status_code == 429
+    assert "limit reached" in resp.get_json()["error"]
+
+    # Verify not cached as miss
+    con = connect()
+    row = con.execute("SELECT 1 FROM upc_cache WHERE upc='012345678901'").fetchone()
+    con.close()
+    assert row is None
+
+
+
