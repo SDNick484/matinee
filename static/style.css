@@ -849,6 +849,111 @@ main#view {
   flex-wrap: wrap;
 }
 
+/* Barcode Scanner */
+.scanner-tabs {
+  display: flex;
+  background: var(--raised);
+  padding: 4px;
+  border-radius: var(--r-card);
+  margin-bottom: var(--s4);
+  max-width: 440px;
+}
+.scanner-tab-btn {
+  flex: 1;
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  color: var(--ink-2);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.scanner-tab-btn.active {
+  background: var(--card);
+  color: var(--ink);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+}
+
+.scanner-viewport {
+  position: relative;
+  width: 100%;
+  max-width: 500px;
+  aspect-ratio: 4 / 3;
+  background: #000;
+  border-radius: var(--r-card);
+  overflow: hidden;
+  margin: 0 auto var(--s3);
+  box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.scanner-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.scanner-reticle {
+  position: absolute;
+  inset: 15% 10%;
+  border: 2px solid rgba(255, 255, 255, 0.4);
+  border-radius: 12px;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+  overflow: hidden;
+  transition: border-color 0.2s ease;
+}
+.scanner-reticle.success {
+  border-color: #5cc178;
+  box-shadow: 0 0 0 9999px rgba(92, 193, 120, 0.2);
+}
+.scanner-laser {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--accent-text);
+  box-shadow: 0 0 8px var(--accent-text);
+  animation: laserScan 2s infinite ease-in-out;
+}
+@keyframes laserScan {
+  0%, 100% { top: 5%; }
+  50% { top: 95%; }
+}
+
+.duplicate-banner {
+  background: rgba(242, 181, 68, 0.15);
+  border: 1px solid rgba(242, 181, 68, 0.4);
+  color: var(--amber);
+  padding: var(--s2) var(--s3);
+  border-radius: var(--r-card);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  margin-bottom: var(--s3);
+}
+
+.batch-panel {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--r-card);
+  padding: var(--s3);
+  margin-top: var(--s3);
+}
+.batch-queue-counter {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s2);
+  font-weight: 700;
+  font-size: var(--fs-sm);
+  color: var(--ink);
+}
+
 /* About View */
 .about-view {
   max-width: 600px;
