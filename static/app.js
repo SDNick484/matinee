@@ -31,12 +31,16 @@
     route: { path: "/", params: {}, query: new URLSearchParams() },
     grid: {
       q: "",
+      medium: [],
+      quality: [],
+      genre: [],
       kind: "",
       format: "",
       service: "",
-      genre: "",
-      sort: "added",
+      both: "",
+      sort: "title",
       scrollY: 0,
+      lastHash: "#/",
       titles: null,
       facets: null,
       loaded: false,
@@ -119,12 +123,15 @@
   }
 
   function getChipClass(format) {
-    if (format === "4K UHD" || format === "Digital 4K") return "k4";
-    if (format === "3D Blu-ray") return "k3d";
-    if (format === "Blu-ray") return "kb";
-    if (format === "DVD" || format === "VHS") return "ks";
-    if (format === "Digital HD" || format === "Digital SD") return "kd";
-    return "ks";
+    if (format === "4K UHD") return "k-4k-uhd";
+    if (format === "Digital 4K") return "k-digital-4k";
+    if (format === "3D Blu-ray") return "k-3d-bluray";
+    if (format === "Blu-ray") return "k-bluray";
+    if (format === "DVD") return "k-dvd";
+    if (format === "VHS") return "k-vhs";
+    if (format === "Digital HD") return "k-digital-hd";
+    if (format === "Digital SD") return "k-digital-sd";
+    return "k-dvd";
   }
 
   function getChipIcon(format) {
@@ -167,6 +174,9 @@
     if (segments[0] === "about") {
       return { path: "/about", params: {}, query };
     }
+    if (segments[0] === "stats") {
+      return { path: "/stats", params: {}, query };
+    }
 
     return { path: "/404", params: {}, query };
   }
@@ -181,6 +191,10 @@
 
     if (isAdmin) {
       nav.innerHTML = `
+        <a href="#/stats" class="btn btn-sm btn-ghost" id="btn-header-stats">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
+          Stats
+        </a>
         <a href="#/add" class="btn btn-sm" id="btn-header-add">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
           Add Movie
@@ -188,6 +202,10 @@
       `;
     } else {
       nav.innerHTML = `
+        <a href="#/stats" class="btn btn-sm btn-ghost" id="btn-header-stats">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
+          Stats
+        </a>
         <a href="/admin${location.hash || ""}" class="btn btn-sm btn-ghost" id="btn-header-signin">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>
           Sign In
@@ -200,12 +218,14 @@
       if (isAdmin) {
         footerLinks.innerHTML = `
           <a href="#/">Collection</a> &nbsp;·&nbsp;
+          <a href="#/stats">Stats</a> &nbsp;·&nbsp;
           <a href="#/about">About &amp; TMDB Attribution</a> &nbsp;·&nbsp;
           <a href="/${location.hash || ""}">Public View</a>
         `;
       } else {
         footerLinks.innerHTML = `
           <a href="#/">Collection</a> &nbsp;·&nbsp;
+          <a href="#/stats">Stats</a> &nbsp;·&nbsp;
           <a href="#/about">About &amp; TMDB Attribution</a> &nbsp;·&nbsp;
           <a href="/admin${location.hash || ""}">Admin Sign In</a>
         `;
@@ -228,11 +248,14 @@
     if (!view) return;
 
     if (state.route.path === "/") {
+      state.grid.lastHash = location.hash || "#/";
       await renderGrid(view);
     } else if (state.route.path === "/t/:id") {
-      // Save scroll position before leaving grid
+      // Save scroll position and active grid hash before leaving grid
       if (prevRoute.path === "/") {
         state.grid.scrollY = window.scrollY;
+        const qStr = prevRoute.query.toString();
+        state.grid.lastHash = qStr ? `#/?${qStr}` : "#/";
       }
       await renderDetail(view, state.route.params.id);
     } else if (state.route.path === "/add") {
@@ -240,6 +263,11 @@
         state.grid.scrollY = window.scrollY;
       }
       await renderAdd(view);
+    } else if (state.route.path === "/stats") {
+      if (prevRoute.path === "/") {
+        state.grid.scrollY = window.scrollY;
+      }
+      await renderStats(view);
     } else if (state.route.path === "/about") {
       if (prevRoute.path === "/") {
         state.grid.scrollY = window.scrollY;
@@ -253,19 +281,39 @@
   // ================================================================= 7.2 Poster Grid
   async function renderGrid(container) {
     const q = state.route.query.get("q") || "";
+    const mediumStr = state.route.query.get("medium") || "";
+    const qualityStr = state.route.query.get("quality") || "";
+    const genreStr = state.route.query.get("genre") || "";
     const kind = state.route.query.get("kind") || "";
     const both = state.route.query.get("both") || "";
     const format = state.route.query.get("format") || "";
     const service = state.route.query.get("service") || "";
-    const genre = state.route.query.get("genre") || "";
-    const sort = state.route.query.get("sort") || "added";
+    const sort = state.route.query.get("sort") || "title";
+
+    const medium = mediumStr ? mediumStr.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean) : [];
+    if (!medium.length) {
+      if (both === "1" || kind === "both") medium.push("both");
+      else if (kind === "physical") medium.push("disc");
+      else if (kind === "digital") medium.push("streaming");
+    }
+
+    const quality = qualityStr ? qualityStr.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean) : [];
+    if (!quality.length && format) {
+      if (format === "4K UHD" || format === "Digital 4K") quality.push("4k");
+      else if (format === "Blu-ray" || format === "3D Blu-ray" || format === "Digital HD") quality.push("hd");
+      else if (format === "DVD" || format === "VHS" || format === "Digital SD") quality.push("sd");
+    }
+
+    const genre = genreStr ? genreStr.split(",").map((s) => s.trim()).filter(Boolean) : [];
 
     state.grid.q = q;
+    state.grid.medium = medium;
+    state.grid.quality = quality;
+    state.grid.genre = genre;
     state.grid.kind = kind;
     state.grid.both = both;
     state.grid.format = format;
     state.grid.service = service;
-    state.grid.genre = genre;
     state.grid.sort = sort;
 
     container.innerHTML = `
@@ -279,13 +327,13 @@
         </div>
 
         <div class="filter-row">
-          <div class="filter-scroll" id="facets-bar">
+          <div class="filter-bar" id="filter-bar">
             <!-- Populated from facets -->
           </div>
           <div>
             <select id="grid-sort" class="sort-select" aria-label="Sort by">
-              <option value="added" ${sort === "added" ? "selected" : ""}>Recently Added</option>
               <option value="title" ${sort === "title" ? "selected" : ""}>Title (A–Z)</option>
+              <option value="added" ${sort === "added" ? "selected" : ""}>Recently Added</option>
               <option value="year" ${sort === "year" ? "selected" : ""}>Release Year</option>
             </select>
           </div>
@@ -329,7 +377,7 @@
       state.grid.facets = facetsData;
       state.grid.titles = titlesData.titles;
 
-      renderFacetsBar();
+      renderFilterBar();
       renderGridContent();
 
       // Restore scroll position if returning from a detail view
@@ -361,105 +409,249 @@
     location.hash = qStr ? `#/?${qStr}` : "#/";
   }
 
-  function renderFacetsBar() {
-    const bar = document.getElementById("facets-bar");
+  function getMediumLabel(medium) {
+    if (!medium || medium.length === 0) return "Medium: All";
+    if (medium.includes("both")) return "Medium: Disc + Stream 💿☁️";
+    const parts = [];
+    if (medium.includes("disc")) parts.push("Disc");
+    if (medium.includes("streaming")) parts.push("Streaming");
+    return parts.length ? `Medium: ${parts.join(", ")}` : "Medium: All";
+  }
+
+  function getQualityLabel(quality) {
+    if (!quality || quality.length === 0) return "Quality: All";
+    const map = { "4k": "4K", hd: "HD", sd: "SD" };
+    const parts = quality.map((q) => map[q] || q.toUpperCase());
+    return `Quality: ${parts.join(", ")}`;
+  }
+
+  function getGenreLabel(genre) {
+    if (!genre || genre.length === 0) return "Genre: All";
+    if (genre.length === 1) return `Genre: ${genre[0]}`;
+    const joined = genre.join(", ");
+    if (joined.length <= 16) return `Genre: ${joined}`;
+    return `Genre (${genre.length})`;
+  }
+
+  function renderFilterBar() {
+    const bar = document.getElementById("filter-bar");
     if (!bar) return;
 
     const f = state.grid.facets || {};
-    const items = [];
+    const medium = state.grid.medium || [];
+    const quality = state.grid.quality || [];
+    const genre = state.grid.genre || [];
 
-    // All button
-    const hasFilters = state.grid.kind || state.grid.both || state.grid.format || state.grid.service || state.grid.genre;
-    items.push(`
-      <button class="filter-pill ${!hasFilters ? "active" : ""}" data-action="clear-filters">
-        All
-      </button>
-    `);
+    const hasFilters =
+      medium.length > 0 ||
+      quality.length > 0 ||
+      genre.length > 0 ||
+      state.grid.kind ||
+      state.grid.both ||
+      state.grid.format ||
+      state.grid.service;
 
-    // Kinds & Both
-    if (f.kinds?.includes("physical") && f.kinds?.includes("digital")) {
-      items.push(`
-        <button class="filter-pill ${state.grid.kind === "physical" ? "active" : ""}" data-facet="kind" data-val="physical">
-          Physical
+    const mediumLabel = getMediumLabel(medium);
+    const qualityLabel = getQualityLabel(quality);
+    const genreLabel = getGenreLabel(genre);
+
+    const genresList = f.genres || [];
+
+    bar.innerHTML = `
+      <!-- Medium Dropdown -->
+      <div class="filter-popover" id="popover-medium">
+        <button type="button" class="filter-btn ${medium.length ? "active" : ""}" data-toggle="popover" aria-expanded="false" aria-haspopup="true">
+          <span>${esc(mediumLabel)}</span>
+          <span class="caret">▾</span>
         </button>
-        <button class="filter-pill ${state.grid.kind === "digital" ? "active" : ""}" data-facet="kind" data-val="digital">
-          Digital
+        <div class="popover-menu" role="menu">
+          <label class="popover-item is-all">
+            <input type="checkbox" data-facet="medium" data-val="" ${medium.length === 0 ? "checked" : ""}>
+            <span>All Mediums</span>
+          </label>
+          <label class="popover-item">
+            <input type="checkbox" data-facet="medium" data-val="disc" ${medium.includes("disc") ? "checked" : ""}>
+            <span>Disc (Physical)</span>
+          </label>
+          <label class="popover-item">
+            <input type="checkbox" data-facet="medium" data-val="streaming" ${medium.includes("streaming") ? "checked" : ""}>
+            <span>Streaming (Digital)</span>
+          </label>
+          <label class="popover-item">
+            <input type="checkbox" data-facet="medium" data-val="both" ${medium.includes("both") ? "checked" : ""}>
+            <span>Both Disc + Streaming 💿☁️</span>
+          </label>
+        </div>
+      </div>
+
+      <!-- Quality Dropdown -->
+      <div class="filter-popover" id="popover-quality">
+        <button type="button" class="filter-btn ${quality.length ? "active" : ""}" data-toggle="popover" aria-expanded="false" aria-haspopup="true">
+          <span>${esc(qualityLabel)}</span>
+          <span class="caret">▾</span>
         </button>
-      `);
+        <div class="popover-menu" role="menu">
+          <label class="popover-item is-all">
+            <input type="checkbox" data-facet="quality" data-val="" ${quality.length === 0 ? "checked" : ""}>
+            <span>All Qualities</span>
+          </label>
+          <label class="popover-item">
+            <input type="checkbox" data-facet="quality" data-val="4k" ${quality.includes("4k") ? "checked" : ""}>
+            <span>4K (4K UHD &amp; Digital 4K)</span>
+          </label>
+          <label class="popover-item">
+            <input type="checkbox" data-facet="quality" data-val="hd" ${quality.includes("hd") ? "checked" : ""}>
+            <span>HD (Blu-ray &amp; Digital HD)</span>
+          </label>
+          <label class="popover-item">
+            <input type="checkbox" data-facet="quality" data-val="sd" ${quality.includes("sd") ? "checked" : ""}>
+            <span>SD (DVD, VHS &amp; Digital SD)</span>
+          </label>
+        </div>
+      </div>
+
+      <!-- Genre Dropdown -->
+      <div class="filter-popover" id="popover-genre">
+        <button type="button" class="filter-btn ${genre.length ? "active" : ""}" data-toggle="popover" aria-expanded="false" aria-haspopup="true">
+          <span>${esc(genreLabel)}</span>
+          <span class="caret">▾</span>
+        </button>
+        <div class="popover-menu" role="menu">
+          <label class="popover-item is-all">
+            <input type="checkbox" data-facet="genre" data-val="" ${genre.length === 0 ? "checked" : ""}>
+            <span>All Genres</span>
+          </label>
+          ${genresList
+            .map(
+              (g) => `
+            <label class="popover-item">
+              <input type="checkbox" data-facet="genre" data-val="${esc(g)}" ${genre.includes(g) ? "checked" : ""}>
+              <span>${esc(g)}</span>
+            </label>
+          `
+            )
+            .join("")}
+        </div>
+      </div>
+
+      ${hasFilters ? `<button type="button" class="filter-reset-btn" id="filter-reset-btn">✕ Reset</button>` : ""}
+    `;
+
+    // Restore open popover if active
+    if (state.openPopoverId) {
+      const p = bar.querySelector(`#${state.openPopoverId}`);
+      if (p) {
+        p.classList.add("open");
+        p.querySelector(".filter-btn")?.setAttribute("aria-expanded", "true");
+      }
     }
-    if (f.has_both) {
-      items.push(`
-        <button class="filter-pill ${state.grid.both === "1" ? "active" : ""}" data-facet="both" data-val="1">
-          💿+☁️ Disc + Digital
-        </button>
-      `);
-    }
 
-    // Top genres
-    (f.genres || []).forEach((g) => {
-      items.push(`
-        <button class="filter-pill ${state.grid.genre === g ? "active" : ""}" data-facet="genre" data-val="${esc(g)}">
-          ${esc(g)}
-        </button>
-      `);
-    });
-
-    // Formats
-    (f.formats || []).forEach((fmt) => {
-      items.push(`
-        <button class="filter-pill ${state.grid.format === fmt ? "active" : ""}" data-facet="format" data-val="${esc(fmt)}">
-          ${esc(fmt)}
-        </button>
-      `);
-    });
-
-    // Services
-    (f.services || []).forEach((srv) => {
-      items.push(`
-        <button class="filter-pill ${state.grid.service === srv ? "active" : ""}" data-facet="service" data-val="${esc(srv)}">
-          ${esc(srv)}
-        </button>
-      `);
-    });
-
-    bar.innerHTML = items.join("");
-
-    bar.querySelectorAll(".filter-pill").forEach((pill) => {
-      pill.addEventListener("click", () => {
-        if (pill.dataset.action === "clear-filters") {
-          const q = new URLSearchParams(state.route.query);
-          q.delete("kind");
-          q.delete("both");
-          q.delete("format");
-          q.delete("service");
-          q.delete("genre");
-          const qStr = q.toString();
-          location.hash = qStr ? `#/?${qStr}` : "#/";
-          return;
-        }
-
-        const facet = pill.dataset.facet;
-        const val = pill.dataset.val;
-        if (state.grid[facet] === val) {
-          applyGridParam(facet, "");
+    // Dropdown toggle buttons
+    bar.querySelectorAll('[data-toggle="popover"]').forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const popover = btn.closest(".filter-popover");
+        const isOpen = popover.classList.contains("open");
+        document.querySelectorAll(".filter-popover.open").forEach((p) => {
+          p.classList.remove("open");
+          p.querySelector(".filter-btn")?.setAttribute("aria-expanded", "false");
+        });
+        if (!isOpen) {
+          popover.classList.add("open");
+          btn.setAttribute("aria-expanded", "true");
+          state.openPopoverId = popover.id;
         } else {
-          if (facet === "both") {
-            const q = new URLSearchParams(state.route.query);
-            q.delete("kind");
-            q.set("both", val);
-            const qStr = q.toString();
-            location.hash = qStr ? `#/?${qStr}` : "#/";
-          } else if (facet === "kind") {
-            const q = new URLSearchParams(state.route.query);
-            q.delete("both");
-            q.set("kind", val);
-            const qStr = q.toString();
-            location.hash = qStr ? `#/?${qStr}` : "#/";
-          } else {
-            applyGridParam(facet, val);
-          }
+          state.openPopoverId = null;
         }
       });
+    });
+
+    // Checkbox changes
+    bar.querySelectorAll('.popover-item input[type="checkbox"]').forEach((input) => {
+      input.addEventListener("change", (e) => {
+        e.stopPropagation();
+        const popover = input.closest(".filter-popover");
+        state.openPopoverId = popover?.id || null;
+        const facet = input.dataset.facet;
+        const val = input.dataset.val;
+        const checked = input.checked;
+        const q = new URLSearchParams(state.route.query);
+
+        if (facet === "medium") {
+          let curr = [...(state.grid.medium || [])];
+          if (!val) {
+            curr = [];
+          } else if (val === "both") {
+            curr = checked ? ["both"] : [];
+          } else {
+            curr = curr.filter((x) => x !== "both");
+            if (checked) {
+              if (!curr.includes(val)) curr.push(val);
+            } else {
+              curr = curr.filter((x) => x !== val);
+            }
+          }
+          q.delete("kind");
+          q.delete("both");
+          if (curr.length) {
+            q.set("medium", curr.join(","));
+          } else {
+            q.delete("medium");
+          }
+        } else if (facet === "quality") {
+          let curr = [...(state.grid.quality || [])];
+          if (!val) {
+            curr = [];
+          } else {
+            if (checked) {
+              if (!curr.includes(val)) curr.push(val);
+            } else {
+              curr = curr.filter((x) => x !== val);
+            }
+          }
+          q.delete("format");
+          if (curr.length) {
+            q.set("quality", curr.join(","));
+          } else {
+            q.delete("quality");
+          }
+        } else if (facet === "genre") {
+          let curr = [...(state.grid.genre || [])];
+          if (!val) {
+            curr = [];
+          } else {
+            if (checked) {
+              if (!curr.includes(val)) curr.push(val);
+            } else {
+              curr = curr.filter((x) => x !== val);
+            }
+          }
+          if (curr.length) {
+            q.set("genre", curr.join(","));
+          } else {
+            q.delete("genre");
+          }
+        }
+
+        const qStr = q.toString();
+        location.hash = qStr ? `#/?${qStr}` : "#/";
+      });
+    });
+
+    // Reset button
+    const resetBtn = document.getElementById("filter-reset-btn");
+    resetBtn?.addEventListener("click", () => {
+      state.openPopoverId = null;
+      const q = new URLSearchParams(state.route.query);
+      q.delete("medium");
+      q.delete("quality");
+      q.delete("genre");
+      q.delete("kind");
+      q.delete("both");
+      q.delete("format");
+      q.delete("service");
+      const qStr = q.toString();
+      location.hash = qStr ? `#/?${qStr}` : "#/";
     });
   }
 
@@ -471,7 +663,14 @@
 
     if (titles.length === 0) {
       const q = state.grid.q;
-      const hasFilters = state.grid.kind || state.grid.format || state.grid.service || state.grid.genre;
+      const hasFilters =
+        (state.grid.medium && state.grid.medium.length > 0) ||
+        (state.grid.quality && state.grid.quality.length > 0) ||
+        (state.grid.genre && state.grid.genre.length > 0) ||
+        state.grid.kind ||
+        state.grid.both ||
+        state.grid.format ||
+        state.grid.service;
 
       if (q) {
         el.innerHTML = `
@@ -542,6 +741,7 @@
 
   // ================================================================= 7.3 Detail Page
   async function renderDetail(container, titleId) {
+    window.scrollTo({ top: 0, behavior: "instant" });
     container.innerHTML = `
       <div style="text-align:center;padding:48px 16px;color:var(--ink-2)">Loading movie details…</div>
     `;
@@ -594,13 +794,47 @@
 
     const copies = title.copies || [];
 
+    // Ensure we have active titles list for adjacent navigation
+    if (!state.grid.titles || !state.grid.titles.length) {
+      try {
+        const titlesData = await api(`${apiPrefix}/titles?sort=title`);
+        state.grid.titles = titlesData.titles || [];
+      } catch (e) {
+        state.grid.titles = [];
+      }
+    }
+
+    const titlesList = state.grid.titles || [];
+    const currentId = Number(titleId);
+    const currentIndex = titlesList.findIndex((t) => t.id === currentId);
+    const prevMovie = currentIndex > 0 ? titlesList[currentIndex - 1] : null;
+    const nextMovie = currentIndex >= 0 && currentIndex < titlesList.length - 1 ? titlesList[currentIndex + 1] : null;
+
     container.innerHTML = `
       <div class="detail-view">
-        <div>
-          <a href="#/" class="back-link" id="btn-back">
+        <div class="detail-nav-bar">
+          <a href="${state.grid.lastHash || "#/"}" class="back-link" id="btn-back">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg>
             Back to collection
           </a>
+          <div class="detail-adjacent-nav">
+            <a href="${prevMovie ? `#/t/${prevMovie.id}` : "#"}"
+               class="nav-arrow-btn ${!prevMovie ? "disabled" : ""}"
+               id="btn-prev-movie"
+               title="${prevMovie ? `Previous: ${esc(prevMovie.title)} (←)` : "No previous movie"}"
+               aria-label="Previous movie"
+               ${!prevMovie ? 'aria-disabled="true" tabindex="-1"' : ""}>
+              ‹ Prev
+            </a>
+            <a href="${nextMovie ? `#/t/${nextMovie.id}` : "#"}"
+               class="nav-arrow-btn ${!nextMovie ? "disabled" : ""}"
+               id="btn-next-movie"
+               title="${nextMovie ? `Next: ${esc(nextMovie.title)} (→)` : "No next movie"}"
+               aria-label="Next movie"
+               ${!nextMovie ? 'aria-disabled="true" tabindex="-1"' : ""}>
+              Next ›
+            </a>
+          </div>
         </div>
 
         <section class="hero">
@@ -707,10 +941,10 @@
       </div>
     `;
 
-    // Hook up Back button to maintain scroll
+    // Hook up Back button to maintain scroll and active filters
     document.getElementById("btn-back")?.addEventListener("click", (e) => {
       e.preventDefault();
-      history.back();
+      location.hash = state.grid.lastHash || "#/";
     });
 
     // Editor controls (7.4)
@@ -1829,12 +2063,236 @@
     resumeBarcodeScanner();
   }
 
-  // Close modal on Escape key
+  // Close modal or filter popovers on Escape key, or navigate adjacent movies on ArrowLeft/ArrowRight
   window.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
       closeModal();
+      state.openPopoverId = null;
+      document.querySelectorAll(".filter-popover.open").forEach((p) => {
+        p.classList.remove("open");
+        p.querySelector(".filter-btn")?.setAttribute("aria-expanded", "false");
+      });
+    } else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+      if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+      if (state.route.path === "/t/:id") {
+        const activeTag = document.activeElement ? document.activeElement.tagName.toLowerCase() : "";
+        if (activeTag === "input" || activeTag === "textarea" || activeTag === "select") return;
+        const modalRoot = document.getElementById("modal-root");
+        if (modalRoot && modalRoot.children.length > 0) return;
+
+        if (e.key === "ArrowLeft") {
+          const prevBtn = document.getElementById("btn-prev-movie");
+          if (prevBtn && !prevBtn.classList.contains("disabled") && prevBtn.getAttribute("href") && prevBtn.getAttribute("href") !== "#") {
+            e.preventDefault();
+            location.hash = prevBtn.getAttribute("href");
+          }
+        } else if (e.key === "ArrowRight") {
+          const nextBtn = document.getElementById("btn-next-movie");
+          if (nextBtn && !nextBtn.classList.contains("disabled") && nextBtn.getAttribute("href") && nextBtn.getAttribute("href") !== "#") {
+            e.preventDefault();
+            location.hash = nextBtn.getAttribute("href");
+          }
+        }
+      }
     }
   });
+
+  // Close filter popovers on outside click
+  document.addEventListener("click", (e) => {
+    if (!e.target.closest(".filter-popover")) {
+      state.openPopoverId = null;
+      document.querySelectorAll(".filter-popover.open").forEach((p) => {
+        p.classList.remove("open");
+        p.querySelector(".filter-btn")?.setAttribute("aria-expanded", "false");
+      });
+    }
+  });
+
+  // ================================================================= 8.1 Stats View
+  async function renderStats(container) {
+    container.innerHTML = `
+      <div class="stats-view">
+        <div style="text-align:center;padding:48px 16px;color:var(--ink-2)">Loading statistics…</div>
+      </div>
+    `;
+
+    const apiPrefix = isAdmin ? "/admin/api" : "/api";
+    let data;
+    try {
+      data = await api(`${apiPrefix}/stats`);
+    } catch (err) {
+      container.innerHTML = `
+        <div class="stats-view">
+          <div class="empty-state">
+            <h2>Unable to load stats</h2>
+            <p>${esc(err.message || "Failed to connect to Matinee server")}</p>
+            <button class="btn" onclick="location.reload()">Retry</button>
+          </div>
+        </div>
+      `;
+      return;
+    }
+
+    const ov = data.overview || {};
+    const qualities = data.qualities || [];
+    const formats = data.formats || [];
+    const genres = data.genres || [];
+    const services = data.services || [];
+
+    const maxGenreCount = Math.max(1, ...genres.map((g) => g.count));
+
+    container.innerHTML = `
+      <div class="stats-view">
+        <div class="stats-header">
+          <div>
+            <a href="#/" class="back-link">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg>
+              Back to collection
+            </a>
+          </div>
+          <h1 style="margin-top:var(--s2)">Collection Stats</h1>
+          <p>Breakdown of movies, formats, qualities, and services in your family library.</p>
+        </div>
+
+        <!-- Overview Cards -->
+        <section>
+          <div class="stats-grid-overview">
+            <div class="stat-card">
+              <div class="stat-icon">🎬</div>
+              <div class="stat-val">${ov.titles_count ?? 0}</div>
+              <div class="stat-lbl">Unique Movies</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-icon">💿</div>
+              <div class="stat-val">${ov.physical_count ?? 0}</div>
+              <div class="stat-lbl">Physical Discs</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-icon">☁️</div>
+              <div class="stat-val">${ov.digital_count ?? 0}</div>
+              <div class="stat-lbl">Digital Copies</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-icon">💿☁️</div>
+              <div class="stat-val">${ov.dual_count ?? 0}</div>
+              <div class="stat-lbl">Dual-Owned</div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Quality Breakdown -->
+        <section>
+          <h2 class="stats-section-title">Breakdown by Quality</h2>
+          <div class="quality-grid">
+            ${qualities
+              .map((q) => {
+                const fillClass = q.quality === "4K" ? "k4" : q.quality === "HD" ? "hd" : "sd";
+                return `
+                <div class="quality-card">
+                  <div class="quality-card-head">
+                    <span class="quality-card-title">${esc(q.quality)}</span>
+                    <span class="quality-card-count">${q.count} movies (${q.percent}%)</span>
+                  </div>
+                  <div class="stat-progress-bar">
+                    <div class="stat-progress-fill ${fillClass}" style="width: ${Math.min(100, q.percent)}%"></div>
+                  </div>
+                </div>
+              `;
+              })
+              .join("")}
+          </div>
+        </section>
+
+        <!-- Formats Breakdown -->
+        <section>
+          <h2 class="stats-section-title">Breakdown by Format</h2>
+          <div class="formats-grid">
+            ${formats
+              .map((f) => {
+                const chipClass = getChipClass(f.format);
+                const chipIcon = getChipIcon(f.format);
+                return `
+                <div class="format-stat-item">
+                  <span class="chip ${chipClass}">${chipIcon}${esc(f.format)}</span>
+                  <span class="format-count-badge">${f.count}</span>
+                </div>
+              `;
+              })
+              .join("")}
+          </div>
+        </section>
+
+        <!-- Genre Breakdown -->
+        <section>
+          <h2 class="stats-section-title">Breakdown by Genre</h2>
+          ${
+            genres.length === 0
+              ? `<div style="color:var(--ink-3);font-size:var(--fs-sm)">No genre data recorded.</div>`
+              : `
+            <div class="genres-list">
+              ${genres
+                .map((g) => {
+                  const pct = Math.round((g.count / maxGenreCount) * 100);
+                  return `
+                  <div class="genre-row">
+                    <div class="genre-row-meta">
+                      <span>${esc(g.genre)}</span>
+                      <span style="color:var(--ink-2)">${g.count}</span>
+                    </div>
+                    <div class="genre-bar-track">
+                      <div class="genre-bar-fill" style="width: ${pct}%"></div>
+                    </div>
+                  </div>
+                `;
+                })
+                .join("")}
+            </div>
+          `
+          }
+        </section>
+
+        <!-- Digital Services Breakdown -->
+        <section>
+          <h2 class="stats-section-title">Digital Services</h2>
+          ${
+            services.length === 0
+              ? `<div style="color:var(--ink-3);font-size:var(--fs-sm)">No digital service copies recorded.</div>`
+              : `
+            <div class="services-grid">
+              ${services
+                .map(
+                  (s) => `
+                <div class="service-card">
+                  <span class="service-card-name">${esc(s.service)}</span>
+                  <span class="format-count-badge">${s.count}</span>
+                </div>
+              `
+                )
+                .join("")}
+            </div>
+          `
+          }
+        </section>
+
+        <!-- Future Features / Placeholders -->
+        <section>
+          <h2 class="stats-section-title" style="color:var(--ink-2)">Upcoming Features</h2>
+          <div class="placeholders-grid">
+            <div class="placeholder-card">
+              <span class="placeholder-badge">Coming Soon</span>
+              <h3>Watched Status</h3>
+              <p>Track which movies you and family members have watched, seen-it counts, and movie-night history.</p>
+            </div>
+            <div class="placeholder-card">
+              <span class="placeholder-badge">Coming Soon</span>
+              <h3>Family Ratings</h3>
+              <p>Record star ratings, kid-friendly recommendations, and custom favorites across your household.</p>
+            </div>
+          </div>
+        </section>
+      </div>
+    `;
+  }
 
   // ================================================================= 9.1 About View
   function renderAbout(container) {

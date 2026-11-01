@@ -448,6 +448,8 @@ def test_grid_search_filters_and_sorts():
 def test_title_sort_and_date_added():
     for i in (9806, 150540, 9487):
         add(i)
+    # Default sort is Title (A-Z)
+    assert [x["title"] for x in grid()] == ["A Bug's Life", "The Incredibles", "Inside Out"]
     assert [x["title"] for x in grid(sort="title")] == ["A Bug's Life", "The Incredibles", "Inside Out"]
     assert [x["year"] for x in grid(sort="year")] == [2015, 2004, 1998]
     m = add(277834, "physical", "DVD")
@@ -459,9 +461,13 @@ def test_title_sort_and_date_added():
     con.execute("UPDATE copies SET created_at='2026-09-01 09:00:00' WHERE id NOT IN (?,?)", ids)
     con.commit()
     con.close()
-    g = grid()
-    assert g[0]["title"] == "Moana" and g[0]["added_on"] == "2026-10-01"
-    assert g[0]["formats"] == ["DVD", "Digital HD"]
+    # Explicit sort=added sorts by date added
+    g_added = grid(sort="added")
+    assert g_added[0]["title"] == "Moana" and g_added[0]["added_on"] == "2026-10-01"
+    assert g_added[0]["formats"] == ["DVD", "Digital HD"]
+    # Default sort remains Title (A-Z)
+    g_default = grid()
+    assert g_default[0]["title"] == "A Bug's Life"
     assert c.get(f"/api/titles/{m['id']}").get_json()["added_on"] == "2026-10-01"
     assert c.get("/admin/api/titles?sort=title").get_json()["count"] == 4
 
@@ -486,3 +492,153 @@ def test_detail_privacy_facets_and_public_writes():
     c.delete(f"/admin/api/copies/{cars['copies'][0]['id']}")
     assert c.get(f"/api/titles/{cars['id']}").status_code == 200
     assert "Comedy" not in c.get("/api/facets").get_json()["genres"]  # only from owned titles
+
+
+# ------------------------------------------------------------------- Task 1: multi-value and correlated filtering
+def test_filter_medium_disc_and_streaming():
+    add(194, "physical", "Blu-ray")  # Amélie
+    add(10681, "digital", "Digital HD", "Movies Anywhere")  # WALL·E
+    assert [x["title"] for x in grid(medium="disc")] == ["Amélie"]
+    assert [x["title"] for x in grid(medium="streaming")] == ["WALL·E"]
+    assert {x["title"] for x in grid(medium="disc,streaming")} == {"Amélie", "WALL·E"}
+
+
+def test_filter_medium_both():
+    add(194, "physical", "Blu-ray")
+    add(194, "digital", "Digital HD", "Apple TV")
+    add(10681, "digital", "Digital HD", "Movies Anywhere")
+    assert [x["title"] for x in grid(medium="both")] == ["Amélie"]
+
+
+def test_filter_quality_mapping():
+    add(194, "physical", "4K UHD")
+    add(10681, "digital", "Digital HD", "Movies Anywhere")
+    add(862, "physical", "DVD")
+    assert [x["title"] for x in grid(quality="4k")] == ["Amélie"]
+    assert [x["title"] for x in grid(quality="hd")] == ["WALL·E"]
+    assert [x["title"] for x in grid(quality="sd")] == ["Toy Story"]
+    assert {x["title"] for x in grid(quality="4k,hd")} == {"Amélie", "WALL·E"}
+
+
+def test_filter_correlated_medium_and_quality():
+    # Title with SD DVD and Digital 4K
+    add(194, "physical", "DVD")
+    add(194, "digital", "Digital 4K", "Apple TV")
+    # Title with physical 4K UHD
+    add(10681, "physical", "4K UHD")
+
+    # Disc + 4K should ONLY match WALL·E, NOT Amélie (Amélie's disc is DVD, not 4K)
+    assert [x["title"] for x in grid(medium="disc", quality="4k")] == ["WALL·E"]
+    # Streaming + 4K should match Amélie
+    assert [x["title"] for x in grid(medium="streaming", quality="4k")] == ["Amélie"]
+    # Disc + SD should match Amélie
+    assert [x["title"] for x in grid(medium="disc", quality="sd")] == ["Amélie"]
+
+
+def test_filter_multi_genre():
+    add(194)  # Amélie (Comedy, Romance)
+    add(155)  # The Dark Knight (Drama, Action, Crime, Thriller)
+    add(10681, "digital", "Digital HD", "Movies Anywhere")  # WALL·E (Animation, Family, Sci-Fi)
+    assert {x["title"] for x in grid(genre="Action,Animation")} == {"The Dark Knight", "WALL·E"}
+    assert [x["title"] for x in grid(genre="Romance")] == ["Amélie"]
+
+
+def test_filter_medium_both_with_quality():
+    # Amélie: physical Blu-ray + digital 4K (dual-owned, has 4K copy)
+    add(194, "physical", "Blu-ray")
+    add(194, "digital", "Digital 4K", "Apple TV")
+    # Toy Story: physical DVD + digital HD (dual-owned, NO 4K copy)
+    add(862, "physical", "DVD")
+    add(862, "digital", "Digital HD", "Movies Anywhere")
+    # WALL·E: physical 4K UHD only (has 4K, but NOT dual-owned)
+    add(10681, "physical", "4K UHD")
+
+    # medium=both returns only dual-owned titles (Amélie and Toy Story)
+    assert {x["title"] for x in grid(medium="both")} == {"Amélie", "Toy Story"}
+    # medium=both&quality=4k returns only dual-owned titles with a 4K copy (Amélie)
+    assert [x["title"] for x in grid(medium="both", quality="4k")] == ["Amélie"]
+    # medium=both&quality=hd returns dual-owned titles with an HD copy (both have HD copies)
+    assert {x["title"] for x in grid(medium="both", quality="hd")} == {"Amélie", "Toy Story"}
+    # medium=both&quality=sd returns dual-owned titles with an SD copy (Toy Story via DVD)
+    assert [x["title"] for x in grid(medium="both", quality="sd")] == ["Toy Story"]
+
+
+def test_filter_invalid_tokens_return_no_matches():
+    add(194, "physical", "Blu-ray")
+    assert [x["title"] for x in grid(quality="invalid_quality")] == []
+    assert [x["title"] for x in grid(medium="invalid_medium")] == []
+    assert [x["title"] for x in grid(genre="NonExistentGenre")] == []
+    assert [x["title"] for x in grid(kind="invalid_kind")] == []
+
+
+# ------------------------------------------------------------------- Task 2: stats endpoint
+def test_stats_endpoint_shape_and_counts():
+    # Amélie (Comedy, Romance) - Blu-ray + Digital HD (Apple TV) -> dual owned!
+    add(194, "physical", "Blu-ray")
+    add(194, "digital", "Digital HD", "Apple TV")
+    # WALL·E (Animation, Family, Sci-Fi) - Digital 4K (Movies Anywhere)
+    add(10681, "digital", "Digital 4K", "Movies Anywhere")
+    # Toy Story (Animation, Adventure, Family, Comedy) - DVD
+    add(862, "physical", "DVD")
+
+    res = c.get("/api/stats")
+    assert res.status_code == 200
+    data = res.get_json()
+
+    assert data["overview"] == {
+        "titles_count": 3,
+        "physical_count": 2,
+        "digital_count": 2,
+        "dual_count": 1,
+    }
+
+    # Qualities
+    q_map = {item["quality"]: item for item in data["qualities"]}
+    assert q_map["4K"]["count"] == 1  # WALL·E
+    assert q_map["HD"]["count"] == 1  # Amélie
+    assert q_map["SD"]["count"] == 1  # Toy Story
+
+    # Formats
+    f_map = {item["format"]: item for item in data["formats"]}
+    assert f_map["Blu-ray"]["count"] == 1
+    assert f_map["Blu-ray"]["kind"] == "physical"
+    assert f_map["Digital HD"]["count"] == 1
+    assert f_map["Digital HD"]["kind"] == "digital"
+    assert f_map["Digital 4K"]["count"] == 1
+    assert f_map["DVD"]["count"] == 1
+    assert f_map["VHS"]["count"] == 0
+
+    # Genres
+    genres = data["genres"]
+    assert any(g["genre"] == "Comedy" and g["count"] == 2 for g in genres)
+    assert any(g["genre"] == "Animation" and g["count"] == 2 for g in genres)
+
+    # Services
+    services = data["services"]
+    s_map = {item["service"]: item["count"] for item in services}
+    assert s_map["Apple TV"] == 1
+    assert s_map["Movies Anywhere"] == 1
+
+
+def test_stats_percentages():
+    add(194, "physical", "4K UHD")
+    add(194, "physical", "Blu-ray")
+    add(10681, "digital", "Digital HD", "Movies Anywhere")
+
+    data = c.get("/api/stats").get_json()
+    q_map = {item["quality"]: item for item in data["qualities"]}
+    assert q_map["4K"]["percent"] == 50.0
+    assert q_map["HD"]["percent"] == 100.0
+    assert q_map["SD"]["percent"] == 0.0
+
+
+def test_stats_privacy_behavior(monkeypatch):
+    add(194)
+    assert c.get("/api/stats").status_code == 200
+
+    monkeypatch.setattr(matinee, "PUBLIC_VIEW", False)
+    assert c.get("/api/stats").status_code == 403
+    assert c.get("/admin/api/stats", headers={"Cf-Ray": "ext"}).status_code == 401
+    assert c.get("/admin/api/stats").status_code == 200
+
+

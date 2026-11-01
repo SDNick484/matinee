@@ -560,30 +560,86 @@ def like_escape(s):
     return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
+QUALITY_MAP = {
+    "4k": ["4K UHD", "Digital 4K"],
+    "hd": ["Blu-ray", "3D Blu-ray", "Digital HD"],
+    "sd": ["DVD", "VHS", "Digital SD"],
+}
+
+
 def list_titles(private):
     a = request.args
     where, args = ["EXISTS (SELECT 1 FROM copies c WHERE c.title_id=t.id)"], []
     for w in words(a.get("q")):
         where.append("t.search_text LIKE ? ESCAPE '\\'")
         args.append(f"%{like_escape(w)}%")
-    sub, sub_args = [], []  # kind/format/service must all hold for the same copy
-    for col in ("kind", "format", "service"):
-        v = clean(a.get(col))
-        if v:
-            sub.append(f"c.{col} = ?")
-            sub_args.append(v)
-    if sub:
-        where.append(f"EXISTS (SELECT 1 FROM copies c WHERE c.title_id=t.id AND {' AND '.join(sub)})")
-        args += sub_args
-    genre = clean(a.get("genre"))
-    if genre:
-        where.append("EXISTS (SELECT 1 FROM title_genres tg JOIN genres gn ON gn.id=tg.genre_id "
-                     "WHERE tg.title_id=t.id AND gn.name = ? COLLATE NOCASE)")
-        args.append(genre)
-    if a.get("both") == "1" or a.get("kind") == "both":
+
+    medium_tokens = [m.strip().lower() for m in (a.get("medium") or "").split(",") if m.strip()]
+    quality_tokens = [q.strip().lower() for q in (a.get("quality") or "").split(",") if q.strip()]
+    genre_tokens = [g.strip() for g in (a.get("genre") or "").split(",") if g.strip()]
+
+    legacy_kind = clean(a.get("kind"))
+    legacy_format = clean(a.get("format"))
+    legacy_service = clean(a.get("service"))
+    legacy_both = a.get("both") == "1" or legacy_kind == "both"
+
+    target_formats = []
+    for q in quality_tokens:
+        target_formats.extend(QUALITY_MAP.get(q, []))
+    if legacy_format and legacy_format not in target_formats:
+        target_formats.append(legacy_format)
+
+    kinds = []
+    if "disc" in medium_tokens:
+        kinds.append("physical")
+    if "streaming" in medium_tokens:
+        kinds.append("digital")
+    if legacy_kind and legacy_kind in ("physical", "digital") and legacy_kind not in kinds:
+        kinds.append(legacy_kind)
+
+    is_both = "both" in medium_tokens or legacy_both
+
+    if quality_tokens and not target_formats:
+        where.append("0=1")
+    if medium_tokens and not is_both and not kinds:
+        where.append("0=1")
+    if legacy_kind and legacy_kind not in ("physical", "digital", "both") and not kinds and not is_both:
+        where.append("0=1")
+
+    if is_both:
         where.append("EXISTS (SELECT 1 FROM copies c WHERE c.title_id=t.id AND c.kind='physical')")
         where.append("EXISTS (SELECT 1 FROM copies c WHERE c.title_id=t.id AND c.kind='digital')")
-    sort = a.get("sort") if a.get("sort") in SORTS else "added"
+        if target_formats:
+            fmt_q = ",".join("?" * len(target_formats))
+            where.append(f"EXISTS (SELECT 1 FROM copies c WHERE c.title_id=t.id AND c.format IN ({fmt_q}))")
+            args += target_formats
+        if legacy_service:
+            where.append("EXISTS (SELECT 1 FROM copies c WHERE c.title_id=t.id AND c.service=?)")
+            args.append(legacy_service)
+    else:
+        copy_conds, copy_args = [], []
+        if kinds:
+            k_q = ",".join("?" * len(kinds))
+            copy_conds.append(f"c.kind IN ({k_q})")
+            copy_args += kinds
+        if target_formats:
+            fmt_q = ",".join("?" * len(target_formats))
+            copy_conds.append(f"c.format IN ({fmt_q})")
+            copy_args += target_formats
+        if legacy_service:
+            copy_conds.append("c.service = ?")
+            copy_args.append(legacy_service)
+        if copy_conds:
+            where.append(f"EXISTS (SELECT 1 FROM copies c WHERE c.title_id=t.id AND {' AND '.join(copy_conds)})")
+            args += copy_args
+
+    if genre_tokens:
+        g_q = ",".join("?" * len(genre_tokens))
+        where.append("EXISTS (SELECT 1 FROM title_genres tg JOIN genres gn ON gn.id=tg.genre_id "
+                     f"WHERE tg.title_id=t.id AND gn.name IN ({g_q}) COLLATE NOCASE)")
+        args += genre_tokens
+
+    sort = a.get("sort") if a.get("sort") in SORTS else "title"
     rows = db().execute(
         f"""SELECT t.id, t.title, t.year, t.poster_file, t.fetched_at,
               (SELECT MIN(c.created_at) FROM copies c WHERE c.title_id=t.id) AS added,
@@ -598,6 +654,7 @@ def list_titles(private):
                "has_both": bool(r["has_both"]),
                "added_on": (r["added"] or "")[:10] or None} for r in rows]
     return jsonify(titles=titles, count=len(titles), sort=sort)
+
 
 
 def get_title(title_id, private):
@@ -619,6 +676,69 @@ def facets(private):
     return jsonify(kinds=kinds, formats=formats, services=services, genres=genres, has_both=has_both)
 
 
+def collection_stats(private):
+    con = db()
+    titles_count = con.execute("SELECT count(DISTINCT title_id) FROM copies").fetchone()[0]
+    physical_count = con.execute("SELECT count(*) FROM copies WHERE kind='physical'").fetchone()[0]
+    digital_count = con.execute("SELECT count(*) FROM copies WHERE kind='digital'").fetchone()[0]
+    dual_count = con.execute(
+        """SELECT count(*) FROM titles t
+           WHERE EXISTS (SELECT 1 FROM copies c1 WHERE c1.title_id=t.id AND c1.kind='physical')
+             AND EXISTS (SELECT 1 FROM copies c2 WHERE c2.title_id=t.id AND c2.kind='digital')"""
+    ).fetchone()[0]
+
+    qualities = []
+    for q_name, fmts in [("4K", QUALITY_MAP["4k"]), ("HD", QUALITY_MAP["hd"]), ("SD", QUALITY_MAP["sd"])]:
+        q_placeholders = ",".join("?" * len(fmts))
+        cnt = con.execute(
+            f"SELECT count(DISTINCT title_id) FROM copies WHERE format IN ({q_placeholders})", fmts
+        ).fetchone()[0]
+        pct = round((cnt / titles_count * 100), 1) if titles_count else 0.0
+        qualities.append({"quality": q_name, "count": cnt, "percent": pct})
+
+    formats = []
+    for fmt in FORMAT_ORDER:
+        cnt = con.execute("SELECT count(*) FROM copies WHERE format=?", (fmt,)).fetchone()[0]
+        k = "physical" if fmt in FORMATS["physical"] else "digital"
+        formats.append({"format": fmt, "kind": k, "count": cnt})
+
+    genres = [
+        {"genre": r["genre"], "count": r["count"]}
+        for r in con.execute(
+            """SELECT gn.name AS genre, count(DISTINCT tg.title_id) AS count
+               FROM genres gn
+               JOIN title_genres tg ON tg.genre_id=gn.id
+               JOIN copies c ON c.title_id=tg.title_id
+               GROUP BY gn.id, gn.name
+               ORDER BY count DESC, gn.name ASC"""
+        ).fetchall()
+    ]
+
+    services = [
+        {"service": r["service"], "count": r["count"]}
+        for r in con.execute(
+            """SELECT service, count(*) AS count
+               FROM copies
+               WHERE kind='digital' AND service IS NOT NULL
+               GROUP BY service
+               ORDER BY count DESC, service ASC"""
+        ).fetchall()
+    ]
+
+    return jsonify(
+        overview={
+            "titles_count": titles_count,
+            "physical_count": physical_count,
+            "digital_count": digital_count,
+            "dual_count": dual_count,
+        },
+        qualities=qualities,
+        formats=formats,
+        genres=genres,
+        services=services,
+    )
+
+
 for prefix, private in (("/api", False), ("/admin/api", True)):
     def _wrap(fn, private=private):
         def f(*a, **kw):
@@ -629,6 +749,8 @@ for prefix, private in (("/api", False), ("/admin/api", True)):
     app.add_url_rule(f"{prefix}/titles", f"titles_{private}", _wrap(list_titles))
     app.add_url_rule(f"{prefix}/titles/<int:title_id>", f"title_{private}", _wrap(get_title))
     app.add_url_rule(f"{prefix}/facets", f"facets_{private}", _wrap(facets))
+    app.add_url_rule(f"{prefix}/stats", f"stats_{private}", _wrap(collection_stats))
+
 
 
 @app.get("/api/me")
