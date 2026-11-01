@@ -816,6 +816,49 @@ main#view {
   flex-direction: column;
   gap: var(--s5);
 }
+.detail-nav-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--s3);
+  margin-bottom: var(--s2);
+}
+.detail-nav-bar .back-link {
+  margin-bottom: 0;
+}
+.detail-adjacent-nav {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s2);
+}
+.nav-arrow-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 30px;
+  padding: 0 var(--s3);
+  border-radius: var(--r-chip);
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--ink-2);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  text-decoration: none;
+  transition: all 0.15s ease;
+  user-select: none;
+}
+.nav-arrow-btn:hover {
+  background: var(--raised);
+  color: var(--ink);
+  text-decoration: none;
+  border-color: var(--line);
+}
+.nav-arrow-btn.disabled,
+.nav-arrow-btn[aria-disabled="true"] {
+  opacity: 0.35;
+  pointer-events: none;
+  cursor: default;
+}
 .back-link {
   display: inline-flex;
   align-items: center;

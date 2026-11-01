@@ -38,8 +38,9 @@
       format: "",
       service: "",
       both: "",
-      sort: "added",
+      sort: "title",
       scrollY: 0,
+      lastHash: "#/",
       titles: null,
       facets: null,
       loaded: false,
@@ -249,9 +250,12 @@
     if (state.route.path === "/") {
       await renderGrid(view);
     } else if (state.route.path === "/t/:id") {
-      // Save scroll position before leaving grid
+      // Save scroll position and active grid hash before leaving grid
       if (prevRoute.path === "/") {
         state.grid.scrollY = window.scrollY;
+        const raw = (window.location.hash || "").replace(/^#/, "");
+        const queryPart = raw.includes("?") ? raw.substring(raw.indexOf("?")) : "";
+        state.grid.lastHash = `#/${queryPart}`;
       }
       await renderDetail(view, state.route.params.id);
     } else if (state.route.path === "/add") {
@@ -284,7 +288,7 @@
     const both = state.route.query.get("both") || "";
     const format = state.route.query.get("format") || "";
     const service = state.route.query.get("service") || "";
-    const sort = state.route.query.get("sort") || "added";
+    const sort = state.route.query.get("sort") || "title";
 
     const medium = mediumStr ? mediumStr.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean) : [];
     if (!medium.length) {
@@ -328,8 +332,8 @@
           </div>
           <div>
             <select id="grid-sort" class="sort-select" aria-label="Sort by">
-              <option value="added" ${sort === "added" ? "selected" : ""}>Recently Added</option>
               <option value="title" ${sort === "title" ? "selected" : ""}>Title (A–Z)</option>
+              <option value="added" ${sort === "added" ? "selected" : ""}>Recently Added</option>
               <option value="year" ${sort === "year" ? "selected" : ""}>Release Year</option>
             </select>
           </div>
@@ -789,13 +793,47 @@
 
     const copies = title.copies || [];
 
+    // Ensure we have active titles list for adjacent navigation
+    if (!state.grid.titles || !state.grid.titles.length) {
+      try {
+        const titlesData = await api(`${apiPrefix}/titles?sort=title`);
+        state.grid.titles = titlesData.titles || [];
+      } catch (e) {
+        state.grid.titles = [];
+      }
+    }
+
+    const titlesList = state.grid.titles || [];
+    const currentId = Number(titleId);
+    const currentIndex = titlesList.findIndex((t) => t.id === currentId);
+    const prevMovie = currentIndex > 0 ? titlesList[currentIndex - 1] : null;
+    const nextMovie = currentIndex >= 0 && currentIndex < titlesList.length - 1 ? titlesList[currentIndex + 1] : null;
+
     container.innerHTML = `
       <div class="detail-view">
-        <div>
-          <a href="#/" class="back-link" id="btn-back">
+        <div class="detail-nav-bar">
+          <a href="${state.grid.lastHash || "#/"}" class="back-link" id="btn-back">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg>
             Back to collection
           </a>
+          <div class="detail-adjacent-nav">
+            <a href="${prevMovie ? `#/t/${prevMovie.id}` : "#"}"
+               class="nav-arrow-btn ${!prevMovie ? "disabled" : ""}"
+               id="btn-prev-movie"
+               title="${prevMovie ? `Previous: ${esc(prevMovie.title)} (←)` : "No previous movie"}"
+               aria-label="Previous movie"
+               ${!prevMovie ? 'aria-disabled="true" tabindex="-1"' : ""}>
+              ‹ Prev
+            </a>
+            <a href="${nextMovie ? `#/t/${nextMovie.id}` : "#"}"
+               class="nav-arrow-btn ${!nextMovie ? "disabled" : ""}"
+               id="btn-next-movie"
+               title="${nextMovie ? `Next: ${esc(nextMovie.title)} (→)` : "No next movie"}"
+               aria-label="Next movie"
+               ${!nextMovie ? 'aria-disabled="true" tabindex="-1"' : ""}>
+              Next ›
+            </a>
+          </div>
         </div>
 
         <section class="hero">
@@ -902,10 +940,10 @@
       </div>
     `;
 
-    // Hook up Back button to maintain scroll
+    // Hook up Back button to maintain scroll and active filters
     document.getElementById("btn-back")?.addEventListener("click", (e) => {
       e.preventDefault();
-      history.back();
+      location.hash = state.grid.lastHash || "#/";
     });
 
     // Editor controls (7.4)
@@ -2024,7 +2062,7 @@
     resumeBarcodeScanner();
   }
 
-  // Close modal or filter popovers on Escape key
+  // Close modal or filter popovers on Escape key, or navigate adjacent movies on ArrowLeft/ArrowRight
   window.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
       closeModal();
@@ -2033,6 +2071,25 @@
         p.classList.remove("open");
         p.querySelector(".filter-btn")?.setAttribute("aria-expanded", "false");
       });
+    } else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+      if (state.route.path === "/t/:id") {
+        const activeTag = document.activeElement ? document.activeElement.tagName.toLowerCase() : "";
+        if (activeTag === "input" || activeTag === "textarea" || activeTag === "select") return;
+        const modalRoot = document.getElementById("modal-root");
+        if (modalRoot && modalRoot.children.length > 0) return;
+
+        if (e.key === "ArrowLeft") {
+          const prevBtn = document.getElementById("btn-prev-movie");
+          if (prevBtn && !prevBtn.classList.contains("disabled") && prevBtn.getAttribute("href") && prevBtn.getAttribute("href") !== "#") {
+            location.hash = prevBtn.getAttribute("href");
+          }
+        } else if (e.key === "ArrowRight") {
+          const nextBtn = document.getElementById("btn-next-movie");
+          if (nextBtn && !nextBtn.classList.contains("disabled") && nextBtn.getAttribute("href") && nextBtn.getAttribute("href") !== "#") {
+            location.hash = nextBtn.getAttribute("href");
+          }
+        }
+      }
     }
   });
 
