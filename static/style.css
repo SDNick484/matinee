@@ -364,6 +364,10 @@ main#view {
 .filter-popover.open .popover-menu {
   display: block;
 }
+#popover-genre .popover-menu {
+  left: auto;
+  right: 0;
+}
 .popover-item {
   display: flex;
   align-items: center;

@@ -599,6 +599,13 @@ def list_titles(private):
 
     is_both = "both" in medium_tokens or legacy_both
 
+    if quality_tokens and not target_formats:
+        where.append("0=1")
+    if medium_tokens and not is_both and not kinds:
+        where.append("0=1")
+    if legacy_kind and legacy_kind not in ("physical", "digital", "both") and not kinds and not is_both:
+        where.append("0=1")
+
     if is_both:
         where.append("EXISTS (SELECT 1 FROM copies c WHERE c.title_id=t.id AND c.kind='physical')")
         where.append("EXISTS (SELECT 1 FROM copies c WHERE c.title_id=t.id AND c.kind='digital')")

@@ -537,6 +537,34 @@ def test_filter_multi_genre():
     assert [x["title"] for x in grid(genre="Romance")] == ["Amélie"]
 
 
+def test_filter_medium_both_with_quality():
+    # Amélie: physical Blu-ray + digital 4K (dual-owned, has 4K copy)
+    add(194, "physical", "Blu-ray")
+    add(194, "digital", "Digital 4K", "Apple TV")
+    # Toy Story: physical DVD + digital HD (dual-owned, NO 4K copy)
+    add(862, "physical", "DVD")
+    add(862, "digital", "Digital HD", "Movies Anywhere")
+    # WALL·E: physical 4K UHD only (has 4K, but NOT dual-owned)
+    add(10681, "physical", "4K UHD")
+
+    # medium=both returns only dual-owned titles (Amélie and Toy Story)
+    assert {x["title"] for x in grid(medium="both")} == {"Amélie", "Toy Story"}
+    # medium=both&quality=4k returns only dual-owned titles with a 4K copy (Amélie)
+    assert [x["title"] for x in grid(medium="both", quality="4k")] == ["Amélie"]
+    # medium=both&quality=hd returns dual-owned titles with an HD copy (both have HD copies)
+    assert {x["title"] for x in grid(medium="both", quality="hd")} == {"Amélie", "Toy Story"}
+    # medium=both&quality=sd returns dual-owned titles with an SD copy (Toy Story via DVD)
+    assert [x["title"] for x in grid(medium="both", quality="sd")] == ["Toy Story"]
+
+
+def test_filter_invalid_tokens_return_no_matches():
+    add(194, "physical", "Blu-ray")
+    assert [x["title"] for x in grid(quality="invalid_quality")] == []
+    assert [x["title"] for x in grid(medium="invalid_medium")] == []
+    assert [x["title"] for x in grid(genre="NonExistentGenre")] == []
+    assert [x["title"] for x in grid(kind="invalid_kind")] == []
+
+
 # ------------------------------------------------------------------- Task 2: stats endpoint
 def test_stats_endpoint_shape_and_counts():
     # Amélie (Comedy, Romance) - Blu-ray + Digital HD (Apple TV) -> dual owned!

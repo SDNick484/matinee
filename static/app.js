@@ -530,6 +530,15 @@
       ${hasFilters ? `<button type="button" class="filter-reset-btn" id="filter-reset-btn">✕ Reset</button>` : ""}
     `;
 
+    // Restore open popover if active
+    if (state.openPopoverId) {
+      const p = bar.querySelector(`#${state.openPopoverId}`);
+      if (p) {
+        p.classList.add("open");
+        p.querySelector(".filter-btn")?.setAttribute("aria-expanded", "true");
+      }
+    }
+
     // Dropdown toggle buttons
     bar.querySelectorAll('[data-toggle="popover"]').forEach((btn) => {
       btn.addEventListener("click", (e) => {
@@ -543,6 +552,9 @@
         if (!isOpen) {
           popover.classList.add("open");
           btn.setAttribute("aria-expanded", "true");
+          state.openPopoverId = popover.id;
+        } else {
+          state.openPopoverId = null;
         }
       });
     });
@@ -551,6 +563,8 @@
     bar.querySelectorAll('.popover-item input[type="checkbox"]').forEach((input) => {
       input.addEventListener("change", (e) => {
         e.stopPropagation();
+        const popover = input.closest(".filter-popover");
+        state.openPopoverId = popover?.id || null;
         const facet = input.dataset.facet;
         const val = input.dataset.val;
         const checked = input.checked;
@@ -620,6 +634,7 @@
     // Reset button
     const resetBtn = document.getElementById("filter-reset-btn");
     resetBtn?.addEventListener("click", () => {
+      state.openPopoverId = null;
       const q = new URLSearchParams(state.route.query);
       q.delete("medium");
       q.delete("quality");
@@ -2010,6 +2025,7 @@
   window.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
       closeModal();
+      state.openPopoverId = null;
       document.querySelectorAll(".filter-popover.open").forEach((p) => {
         p.classList.remove("open");
         p.querySelector(".filter-btn")?.setAttribute("aria-expanded", "false");
@@ -2020,6 +2036,7 @@
   // Close filter popovers on outside click
   document.addEventListener("click", (e) => {
     if (!e.target.closest(".filter-popover")) {
+      state.openPopoverId = null;
       document.querySelectorAll(".filter-popover.open").forEach((p) => {
         p.classList.remove("open");
         p.querySelector(".filter-btn")?.setAttribute("aria-expanded", "false");
@@ -2058,7 +2075,7 @@
     const genres = data.genres || [];
     const services = data.services || [];
 
-    const maxGenreCount = genres.length > 0 ? Math.max(...genres.map((g) => g.count)) : 1;
+    const maxGenreCount = Math.max(1, ...genres.map((g) => g.count));
 
     container.innerHTML = `
       <div class="stats-view">
