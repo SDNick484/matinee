@@ -21,7 +21,7 @@ import urllib.error, urllib.parse, urllib.request
 from functools import wraps
 from pathlib import Path
 
-from flask import Flask, abort, g, jsonify, redirect, request, send_from_directory
+from flask import Flask, abort, g, jsonify, redirect, request, send_from_directory, has_app_context
 
 APP_NAME = "Matinee"
 APP_DIR = Path(__file__).resolve().parent
@@ -119,10 +119,18 @@ def connect():
     return con
 
 
+_standalone_db = None
+
+
 def db():
-    if "db" not in g:
-        g.db = connect()
-    return g.db
+    if has_app_context():
+        if "db" not in g:
+            g.db = connect()
+        return g.db
+    global _standalone_db
+    if _standalone_db is None:
+        _standalone_db = connect()
+    return _standalone_db
 
 
 @app.teardown_appcontext

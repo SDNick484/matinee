@@ -103,6 +103,22 @@ def import_titles(file_path, kind="digital", default_format="Digital HD",
                   default_service="Movies Anywhere", unresolved_path="unresolved.txt",
                   dry_run=False, delay=0.15, tmdb_token=None):
     """Import movies from file into Matinee catalog."""
+    with matinee.app.app_context():
+        return _import_titles_impl(
+            file_path,
+            kind=kind,
+            default_format=default_format,
+            default_service=default_service,
+            unresolved_path=unresolved_path,
+            dry_run=dry_run,
+            delay=delay,
+            tmdb_token=tmdb_token,
+        )
+
+
+def _import_titles_impl(file_path, kind="digital", default_format="Digital HD",
+                        default_service="Movies Anywhere", unresolved_path="unresolved.txt",
+                        dry_run=False, delay=0.15, tmdb_token=None):
     if tmdb_token:
         matinee.TMDB_READ_TOKEN = tmdb_token.strip()
 
