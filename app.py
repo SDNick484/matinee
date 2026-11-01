@@ -101,6 +101,14 @@ CREATE TABLE IF NOT EXISTS copies (
   created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS copies_title ON copies(title_id);
+CREATE TABLE IF NOT EXISTS upc_cache (
+  upc TEXT PRIMARY KEY,
+  raw_title TEXT,
+  brand TEXT,
+  data TEXT,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS upc_cache_created ON upc_cache(created_at);
 """
 SCHEMA_VERSION = "1"
 
@@ -195,6 +203,38 @@ def search_fold(*names):
 
 def sort_key(title):
     return re.sub(r"^(the|a|an)\s+", "", fold(title))
+
+
+def clean_upc_title(raw_title: str) -> tuple[str, str]:
+    """Clean a product title from UPCitemdb and extract a format hint."""
+    if not raw_title:
+        return "", "4K UHD"
+    raw = raw_title.strip()
+    low = raw.lower()
+
+    if any(k in low for k in ("4k", "ultra hd", "uhd")):
+        fmt = "4K UHD"
+    elif any(k in low for k in ("blu-ray", "bluray", "bd")):
+        fmt = "Blu-ray"
+    elif "dvd" in low:
+        fmt = "DVD"
+    elif "vhs" in low:
+        fmt = "VHS"
+    else:
+        fmt = "4K UHD"
+
+    cleaned = re.sub(r"\[.*?\]", " ", raw)
+    cleaned = re.sub(r"\(.*?\)", " ", cleaned)
+    noise = (
+        r"\b(4k|ultra hd|uhd|blu-ray|bluray|dvd|vhs|digital|steelbook|combo pack|widescreen|"
+        r"special edition|collector's edition|anniversary edition|limited edition|2-disc|3-disc|multi-feature|"
+        r"copy|hd|sd)\b"
+    )
+    cleaned = re.sub(noise, " ", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s+[\-\–\—\:]\s*$", "", cleaned)
+    cleaned = re.sub(r"\s+-\s+", " ", cleaned)
+    cleaned = " ".join(cleaned.split()).strip(" -:+/")
+    return cleaned or raw, fmt
 
 
 def make_err(code, msg, **extra):
