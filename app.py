@@ -16,12 +16,12 @@ Health:  /healthz          {ok, titles, copies}
 Environment (see /etc/conf.d/matinee and .env.example):
   PORT, DATA_DIR, CF_TEAM_DOMAIN, CF_AUD, ADMIN_EMAILS, LAN_EDIT, PUBLIC_VIEW, TMDB_READ_TOKEN
 """
-import datetime as dt, json, os, re, sqlite3, unicodedata
+import datetime as dt, hashlib, json, os, re, sqlite3, unicodedata
 import urllib.error, urllib.parse, urllib.request
 from functools import wraps
 from pathlib import Path
 
-from flask import Flask, abort, g, jsonify, redirect, request, send_from_directory, has_app_context
+from flask import Flask, abort, g, jsonify, make_response, redirect, request, send_from_directory, has_app_context
 
 APP_NAME = "Matinee"
 APP_DIR = Path(__file__).resolve().parent
@@ -308,22 +308,63 @@ def who():
 
 
 # ============================================================================= pages
+_asset_version_cache = {"mtime": 0.0, "version": ""}
+
+
+def get_asset_version():
+    try:
+        mtimes = []
+        for name in ("style.css", "app.js"):
+            f = APP_DIR / "static" / name
+            if f.is_file():
+                mtimes.append(f.stat().st_mtime)
+        curr_mtime = max(mtimes) if mtimes else 0.0
+        if curr_mtime != _asset_version_cache["mtime"]:
+            h = hashlib.sha256()
+            for name in ("style.css", "app.js"):
+                f = APP_DIR / "static" / name
+                if f.is_file():
+                    h.update(f.read_bytes())
+            _asset_version_cache["mtime"] = curr_mtime
+            _asset_version_cache["version"] = h.hexdigest()[:10]
+        return _asset_version_cache["version"]
+    except Exception:
+        return "1"
+
+
+def render_index():
+    v = get_asset_version()
+    try:
+        html = (APP_DIR / "static" / "index.html").read_text(encoding="utf-8")
+        html = re.sub(r'href="/static/style\.css(?:\?v=[^"]*)?"', f'href="/static/style.css?v={v}"', html)
+        html = re.sub(r'src="/static/app\.js(?:\?v=[^"]*)?"', f'src="/static/app.js?v={v}"', html)
+        resp = make_response(html)
+        resp.headers["Content-Type"] = "text/html; charset=utf-8"
+        resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        resp.headers["Pragma"] = "no-cache"
+        resp.headers["Expires"] = "0"
+        return resp
+    except Exception:
+        return send_from_directory(APP_DIR / "static", "index.html", max_age=0)
+
+
 @app.get("/")
 def index():
     if not PUBLIC_VIEW:
         return redirect("/admin")
-    return send_from_directory(APP_DIR / "static", "index.html", max_age=0)
+    return render_index()
 
 
 @app.get("/admin")
 @app.get("/admin/")
 def admin_index():
-    return send_from_directory(APP_DIR / "static", "index.html", max_age=0)
+    return render_index()
 
 
 @app.get("/static/<path:p>")
 def static_files(p):
-    return send_from_directory(APP_DIR / "static", p, max_age=300)
+    max_age = 31536000 if request.args.get("v") else 60
+    return send_from_directory(APP_DIR / "static", p, max_age=max_age)
 
 
 @app.get("/images/<path:p>")
