@@ -186,7 +186,29 @@
         </a>
       `;
     } else {
-      nav.innerHTML = ``;
+      nav.innerHTML = `
+        <a href="/admin${location.hash || ""}" class="btn btn-sm btn-ghost" id="btn-header-signin">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>
+          Sign In
+        </a>
+      `;
+    }
+
+    const footerLinks = document.getElementById("footer-links");
+    if (footerLinks) {
+      if (isAdmin) {
+        footerLinks.innerHTML = `
+          <a href="#/">Collection</a> &nbsp;·&nbsp;
+          <a href="#/about">About &amp; TMDB Attribution</a> &nbsp;·&nbsp;
+          <a href="/${location.hash || ""}">Public View</a>
+        `;
+      } else {
+        footerLinks.innerHTML = `
+          <a href="#/">Collection</a> &nbsp;·&nbsp;
+          <a href="#/about">About &amp; TMDB Attribution</a> &nbsp;·&nbsp;
+          <a href="/admin${location.hash || ""}">Admin Sign In</a>
+        `;
+      }
     }
   }
 
@@ -850,7 +872,10 @@
         <div class="empty-state">
           <h2>Editor Sign-in Required</h2>
           <p>Adding movies requires signing in with an editor account.</p>
-          <a href="#/" class="btn">Back to collection</a>
+          <div style="display:flex;gap:var(--s2);justify-content:center;margin-top:var(--s3)">
+            <a href="#/" class="btn btn-ghost">Back to collection</a>
+            <a href="/admin#/add" class="btn">Sign In as Editor</a>
+          </div>
         </div>
       `;
       return;

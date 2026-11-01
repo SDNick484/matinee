@@ -169,10 +169,12 @@ def test_pages_public_and_private(monkeypatch):
     assert c.get("/").status_code == 200 and c.get("/admin").status_code == 200
     r_index = c.get("/")
     assert b"/static/style.css" in r_index.data and b"/static/app.js" in r_index.data
+    assert b"footer-links" in r_index.data
     r_css = c.get("/static/style.css")
     assert r_css.status_code == 200 and b"--chip-4k" in r_css.data and b"Figtree" in r_css.data
     r_js = c.get("/static/app.js")
     assert r_js.status_code == 200 and b"parseHash" in r_js.data and b"renderDetail" in r_js.data
+    assert b"btn-header-signin" in r_js.data
     r_svg = c.get("/static/tmdb.svg")
     assert r_svg.status_code == 200 and b"<svg" in r_svg.data
     monkeypatch.setattr(matinee, "PUBLIC_VIEW", False)
