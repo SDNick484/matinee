@@ -168,10 +168,22 @@ def test_access_jwt_audience_and_allow_list(monkeypatch):
 def test_pages_public_and_private(monkeypatch):
     assert c.get("/").status_code == 200 and c.get("/admin").status_code == 200
     r_index = c.get("/")
-    assert b"/static/style.css" in r_index.data and b"/static/app.js" in r_index.data
+    assert b"/static/style.css?v=" in r_index.data and b"/static/app.js?v=" in r_index.data
+    assert "no-cache" in r_index.headers.get("Cache-Control", "")
     assert b"footer-links" in r_index.data
+
+    r_admin = c.get("/admin")
+    assert b"/static/style.css?v=" in r_admin.data and b"/static/app.js?v=" in r_admin.data
+    assert "no-cache" in r_admin.headers.get("Cache-Control", "")
+
+    r_css_v = c.get("/static/style.css?v=test12345")
+    assert r_css_v.status_code == 200 and b"--chip-4k" in r_css_v.data and b"Figtree" in r_css_v.data
+    assert "max-age=31536000" in r_css_v.headers.get("Cache-Control", "")
+
     r_css = c.get("/static/style.css")
     assert r_css.status_code == 200 and b"--chip-4k" in r_css.data and b"Figtree" in r_css.data
+    assert "max-age=60" in r_css.headers.get("Cache-Control", "")
+
     r_js = c.get("/static/app.js")
     assert r_js.status_code == 200 and b"parseHash" in r_js.data and b"renderDetail" in r_js.data
     assert b"btn-header-signin" in r_js.data
