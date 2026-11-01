@@ -455,8 +455,9 @@
       <div class="grid">
         ${titles
           .map((t) => {
-            const posterHtml = t.poster_file
-              ? `<img class="poster-img" src="/images/${esc(t.poster_file)}" loading="lazy" alt="${esc(t.title)}" onerror="this.onerror=null;this.parentElement.innerHTML='<div class=\\'poster-ph\\'>${esc(t.title)}<br>${t.year || ''}</div>';">`
+            const posterSrc = t.poster_url || (t.poster_file ? `/images/${esc(t.poster_file)}` : null);
+            const posterHtml = posterSrc
+              ? `<img class="poster-img" src="${posterSrc}" loading="lazy" alt="${esc(t.title)}" onerror="this.onerror=null;this.parentElement.innerHTML='<div class=\\'poster-ph\\'>${esc(t.title)}<br>${t.year || ''}</div>';">`
               : `<div class="poster-ph"><span>${esc(t.title)}<br><small style="font-weight:400;color:var(--ink-3)">${t.year || ""}</small></span></div>`;
 
             const chipsHtml = (t.formats || [])
@@ -521,12 +522,14 @@
       metaParts.push(`<span class="score">★ ${title.tmdb_vote.toFixed(1)}</span>`);
     }
 
-    const heroBgStyle = title.backdrop_file
-      ? `style="background-image: url('/images/${esc(title.backdrop_file)}');"`
+    const heroBgSrc = title.backdrop_url || (title.backdrop_file ? `/images/${esc(title.backdrop_file)}` : null);
+    const heroBgStyle = heroBgSrc
+      ? `style="background-image: url('${heroBgSrc}');"`
       : "";
 
-    const posterHtml = title.poster_file
-      ? `<img src="/images/${esc(title.poster_file)}" alt="${esc(title.title)}" onerror="this.onerror=null;this.parentElement.innerHTML='<div class=\\'poster-ph\\'>${esc(title.title)}</div>';">`
+    const posterDetailSrc = title.poster_large_url || title.poster_url || (title.poster_file ? `/images/${esc(title.poster_file)}` : null);
+    const posterHtml = posterDetailSrc
+      ? `<img src="${posterDetailSrc}" alt="${esc(title.title)}" onerror="this.onerror=null;this.parentElement.innerHTML='<div class=\\'poster-ph\\'>${esc(title.title)}</div>';">`
       : `<div class="poster-ph" style="height:100%">${esc(title.title)}</div>`;
 
     const copies = title.copies || [];

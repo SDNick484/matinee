@@ -539,6 +539,7 @@ def list_titles(private):
             FROM titles t WHERE {' AND '.join(where)} ORDER BY {SORTS[sort]}""", args).fetchall()
     titles = [{"id": r["id"], "title": r["title"], "year": r["year"],
                "poster_url": image_url(r["poster_file"], r["fetched_at"]),
+               "poster_file": r["poster_file"],
                "formats": sorted_formats((r["formats"] or "").split(",")) if r["formats"] else [],
                "added_on": (r["added"] or "")[:10] or None} for r in rows]
     return jsonify(titles=titles, count=len(titles), sort=sort)
