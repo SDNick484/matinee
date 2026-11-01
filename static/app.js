@@ -153,6 +153,40 @@
     return copy.format;
   }
 
+  function formatRelativeDate(isoDateStr) {
+    if (!isoDateStr) return "Never";
+    const parts = isoDateStr.split("-").map(Number);
+    const target = new Date(parts[0], parts[1] - 1, parts[2]);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const diffMs = today - target;
+    const diffDays = Math.round(diffMs / (1000 * 60 * 60 * 24));
+
+    if (diffDays <= 0) return "today";
+    if (diffDays === 1) return "yesterday";
+    if (diffDays < 7) return `${diffDays} days ago`;
+    const diffWeeks = Math.floor(diffDays / 7);
+    if (diffWeeks < 5) return diffWeeks === 1 ? "1 week ago" : `${diffWeeks} weeks ago`;
+    const diffMonths = Math.floor(diffDays / 30.4375);
+    if (diffMonths < 12) return diffMonths === 1 ? "1 month ago" : `${diffMonths} months ago`;
+    const diffYears = Math.floor(diffDays / 365.25);
+    return diffYears === 1 ? "1 year ago" : `${diffYears} years ago`;
+  }
+
+  function formatReadableDate(isoDateStr) {
+    if (!isoDateStr) return "";
+    const parts = isoDateStr.split("-").map(Number);
+    const date = new Date(parts[0], parts[1] - 1, parts[2]);
+    return date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+  }
+
+  function formatLastWatched(lastWatchedDate) {
+    if (!lastWatchedDate) return "Never watched";
+    const relative = formatRelativeDate(lastWatchedDate);
+    const readable = formatReadableDate(lastWatchedDate);
+    return `Watched ${relative} (${readable})`;
+  }
+
   // ================================================================= Router
   function parseHash(hashStr) {
     const raw = (hashStr || "").replace(/^#/, "").trim();
@@ -954,6 +988,33 @@
                     </div>`
                   : ""
               }
+              ${
+                isAdmin
+                  ? `
+                <div class="rating-widget" id="rating-widget">
+                  <div class="rating-header">
+                    <span class="rating-label">Personal Rating</span>
+                    <span class="rating-score-display" id="rating-display">
+                      ${title.user_rating !== null && title.user_rating !== undefined ? `★ ${Number(title.user_rating).toFixed(1)} <small style="font-size:var(--fs-xs);font-weight:400;color:var(--ink-2)">/ 10</small>` : "Unrated"}
+                    </span>
+                  </div>
+                  <div class="rating-controls">
+                    <button type="button" class="btn btn-sm btn-ghost rating-step-btn" id="btn-rating-minus" aria-label="Decrease rating by 0.5">−</button>
+                    <input type="range" class="rating-slider" id="rating-slider" min="0" max="10" step="0.5" value="${title.user_rating !== null && title.user_rating !== undefined ? title.user_rating : 7.0}">
+                    <button type="button" class="btn btn-sm btn-ghost rating-step-btn" id="btn-rating-plus" aria-label="Increase rating by 0.5">+</button>
+                    <button type="button" class="btn btn-sm btn-ghost" id="btn-rating-clear" ${title.user_rating === null || title.user_rating === undefined ? "disabled" : ""}>Clear</button>
+                  </div>
+                </div>
+              `
+                  : title.user_rating !== null && title.user_rating !== undefined
+                  ? `
+                <div class="rating-widget-public">
+                  <span class="rating-label">Personal Rating:</span>
+                  <span class="badge-rating-detail">★ ${Number(title.user_rating).toFixed(1)} / 10</span>
+                </div>
+              `
+                  : ""
+              }
             </div>
           </div>
         </section>
@@ -968,6 +1029,66 @@
         `
             : ""
         }
+
+        <section class="detail-section watch-section">
+          <div class="watch-section-header">
+            <div>
+              <h3 style="margin-bottom:2px">Watch History</h3>
+              <div class="last-watched-tag" id="last-watched-tag">
+                ${formatLastWatched(title.last_watched)}
+              </div>
+            </div>
+            ${
+              isAdmin
+                ? `
+              <div class="watch-header-actions">
+                <button type="button" class="btn btn-sm" id="btn-watched-today">+ Watched Today</button>
+              </div>
+            `
+                : ""
+            }
+          </div>
+
+          ${
+            isAdmin
+              ? `
+            <div class="watch-log-form">
+              <input type="date" id="input-watch-date" class="watch-date-input" max="${new Date().toISOString().slice(0, 10)}">
+              <button type="button" class="btn btn-sm btn-ghost" id="btn-log-watch">Log Past Date</button>
+            </div>
+          `
+              : ""
+          }
+
+          ${
+            !title.watches || title.watches.length === 0
+              ? `<div style="color:var(--ink-2);padding:var(--s2) 0">No recorded watches yet.</div>`
+              : `
+            <div class="watch-log-list" id="watch-log-list">
+              ${title.watches
+                .map(
+                  (w, idx) => `
+                <div class="watch-row ${idx >= 3 ? "watch-row-extra hidden" : ""}" data-watch-id="${w.id}">
+                  <span class="watch-row-date">📅 ${formatReadableDate(w.watched_date)}</span>
+                  <span class="watch-row-rel">(${formatRelativeDate(w.watched_date)})</span>
+                  ${
+                    isAdmin
+                      ? `<button type="button" class="btn btn-sm btn-danger btn-delete-watch" data-id="${w.id}" title="Delete watch entry" style="margin-left:auto;padding:2px 8px;font-size:var(--fs-xs)">✕</button>`
+                      : ""
+                  }
+                </div>
+              `
+                )
+                .join("")}
+              ${
+                title.watches.length > 3
+                  ? `<button type="button" class="btn btn-sm btn-ghost watch-toggle-btn" id="btn-toggle-watches">Show all ${title.watches.length} watches</button>`
+                  : ""
+              }
+            </div>
+          `
+          }
+        </section>
 
         <section class="detail-section">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--s3)">
@@ -1092,7 +1213,123 @@
           toast(err.message || "Failed to delete title");
         }
       });
+
+      // Rating control listeners
+      const slider = document.getElementById("rating-slider");
+      const display = document.getElementById("rating-display");
+      const clearBtn = document.getElementById("btn-rating-clear");
+      const minusBtn = document.getElementById("btn-rating-minus");
+      const plusBtn = document.getElementById("btn-rating-plus");
+
+      let currentRating = title.user_rating;
+      let saveTimer = null;
+
+      const triggerSave = (val) => {
+        currentRating = val;
+        if (display) {
+          display.innerHTML =
+            val !== null && val !== undefined
+              ? `★ ${Number(val).toFixed(1)} <small style="font-size:var(--fs-xs);font-weight:400;color:var(--ink-2)">/ 10</small>`
+              : "Unrated";
+        }
+        if (clearBtn) clearBtn.disabled = val === null || val === undefined;
+        if (slider && val !== null && val !== undefined) slider.value = val;
+
+        clearTimeout(saveTimer);
+        saveTimer = setTimeout(async () => {
+          try {
+            await api(`${apiPrefix}/titles/${titleId}/rating`, {
+              method: "PUT",
+              body: { rating: val },
+            });
+            title.user_rating = val;
+            if (state.grid.titles) {
+              const gt = state.grid.titles.find((t) => t.id === Number(titleId));
+              if (gt) gt.user_rating = val;
+            }
+            toast(val !== null && val !== undefined ? `Rating saved (★ ${Number(val).toFixed(1)})` : "Rating cleared");
+          } catch (e) {
+            toast(e.message || "Failed to save rating");
+          }
+        }, 300);
+      };
+
+      slider?.addEventListener("input", (e) => {
+        triggerSave(Number(e.target.value));
+      });
+
+      minusBtn?.addEventListener("click", () => {
+        const base = currentRating !== null && currentRating !== undefined ? currentRating : 7.0;
+        const val = Math.max(0.0, Math.round((base - 0.5) * 2) / 2);
+        triggerSave(val);
+      });
+
+      plusBtn?.addEventListener("click", () => {
+        const base = currentRating !== null && currentRating !== undefined ? currentRating : 7.0;
+        const val = Math.min(10.0, Math.round((base + 0.5) * 2) / 2);
+        triggerSave(val);
+      });
+
+      clearBtn?.addEventListener("click", () => {
+        triggerSave(null);
+      });
+
+      // Watch history listeners
+      document.getElementById("btn-watched-today")?.addEventListener("click", async () => {
+        try {
+          await api(`${apiPrefix}/titles/${titleId}/watches`, {
+            method: "POST",
+            body: {},
+          });
+          toast("Marked as watched today!");
+          await renderDetail(container, titleId);
+        } catch (e) {
+          toast(e.message || "Failed to mark as watched");
+        }
+      });
+
+      document.getElementById("btn-log-watch")?.addEventListener("click", async () => {
+        const input = document.getElementById("input-watch-date");
+        const val = input?.value?.trim();
+        if (!val) {
+          toast("Please choose a date to log");
+          return;
+        }
+        try {
+          await api(`${apiPrefix}/titles/${titleId}/watches`, {
+            method: "POST",
+            body: { watched_date: val },
+          });
+          toast(`Logged watch date: ${val}`);
+          await renderDetail(container, titleId);
+        } catch (e) {
+          toast(e.message || "Failed to log watch date");
+        }
+      });
+
+      container.querySelectorAll(".btn-delete-watch").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const watchId = btn.dataset.id;
+          if (!confirm("Remove this watch date?")) return;
+          try {
+            await api(`${apiPrefix}/titles/${titleId}/watches/${watchId}`, { method: "DELETE" });
+            toast("Watch entry removed");
+            await renderDetail(container, titleId);
+          } catch (e) {
+            toast(e.message || "Failed to delete watch entry");
+          }
+        });
+      });
     }
+
+    // Toggle extra watches
+    const toggleWatchesBtn = document.getElementById("btn-toggle-watches");
+    toggleWatchesBtn?.addEventListener("click", () => {
+      const extras = container.querySelectorAll(".watch-row-extra");
+      const isHidden = extras[0]?.classList.contains("hidden");
+      extras.forEach((el) => el.classList.toggle("hidden", !isHidden));
+      toggleWatchesBtn.textContent = isHidden ? "Show fewer" : `Show all ${title.watches.length} watches`;
+    });
   }
 
   // ================================================================= 8.1 / 8.2 Add Flow & Barcode Scanner
