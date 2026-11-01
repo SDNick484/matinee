@@ -22,6 +22,7 @@ from functools import wraps
 from pathlib import Path
 
 from flask import Flask, abort, g, jsonify, make_response, redirect, request, send_from_directory, has_app_context
+from werkzeug.wrappers import Response as WerkzeugResponse
 
 APP_NAME = "Matinee"
 APP_DIR = Path(__file__).resolve().parent
@@ -109,8 +110,27 @@ CREATE TABLE IF NOT EXISTS upc_cache (
   created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS upc_cache_created ON upc_cache(created_at);
+
+CREATE TABLE IF NOT EXISTS user_ratings (
+  id INTEGER PRIMARY KEY,
+  title_id INTEGER NOT NULL UNIQUE REFERENCES titles(id) ON DELETE CASCADE,
+  rating REAL NOT NULL CHECK (rating >= 0.0 AND rating <= 10.0),
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS user_ratings_title ON user_ratings(title_id);
+CREATE INDEX IF NOT EXISTS user_ratings_score ON user_ratings(rating);
+
+CREATE TABLE IF NOT EXISTS watches (
+  id INTEGER PRIMARY KEY,
+  title_id INTEGER NOT NULL REFERENCES titles(id) ON DELETE CASCADE,
+  watched_date TEXT NOT NULL,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS watches_title_date ON watches(title_id, watched_date DESC);
+CREATE INDEX IF NOT EXISTS watches_date ON watches(watched_date DESC);
 """
-SCHEMA_VERSION = "1"
+SCHEMA_VERSION = "2"
 
 # Checked in the app (not the schema) so a new format or service needs no table rebuild.
 FORMATS = {"physical": ["4K UHD", "Blu-ray", "3D Blu-ray", "DVD", "VHS"],
@@ -156,7 +176,27 @@ def _close(_exc):
 
 
 def migrate(con):
-    """Add columns that newer versions expect to an older database (none yet: schema 1 is the first)."""
+    """Add tables and columns that newer versions expect to an older database."""
+    con.executescript("""
+    CREATE TABLE IF NOT EXISTS user_ratings (
+      id INTEGER PRIMARY KEY,
+      title_id INTEGER NOT NULL UNIQUE REFERENCES titles(id) ON DELETE CASCADE,
+      rating REAL NOT NULL CHECK (rating >= 0.0 AND rating <= 10.0),
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS user_ratings_title ON user_ratings(title_id);
+    CREATE INDEX IF NOT EXISTS user_ratings_score ON user_ratings(rating);
+
+    CREATE TABLE IF NOT EXISTS watches (
+      id INTEGER PRIMARY KEY,
+      title_id INTEGER NOT NULL REFERENCES titles(id) ON DELETE CASCADE,
+      watched_date TEXT NOT NULL,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS watches_title_date ON watches(title_id, watched_date DESC);
+    CREATE INDEX IF NOT EXISTS watches_date ON watches(watched_date DESC);
+    """)
 
 
 def init_db():
@@ -240,9 +280,23 @@ def clean_upc_title(raw_title: str) -> tuple[str, str]:
 
 
 def make_err(code, msg, **extra):
-    r = jsonify(error=msg, **extra)
-    r.status_code = code
-    return r
+    if has_app_context():
+        r = jsonify(error=msg, **extra)
+        r.status_code = code
+        return r
+    return WerkzeugResponse(json.dumps({"error": msg, **extra}), status=code, mimetype="application/json")
+
+
+def validate_rating(val):
+    if val is None or val == "":
+        return None
+    try:
+        r = float(val)
+    except (ValueError, TypeError):
+        abort(make_err(400, "Rating must be a number between 0.0 and 10.0 in 0.5 increments."))
+    if not (0.0 <= r <= 10.0) or ((r * 2) % 1 != 0):
+        abort(make_err(400, "Rating must be between 0.0 and 10.0 in 0.5 increments."))
+    return round(r, 1)
 
 
 def now_iso():

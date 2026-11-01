@@ -92,8 +92,9 @@ def test_env_example_lists_every_documented_variable():
 def test_schema_tables_indexes_and_cascade():
     con = matinee.connect()
     names = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type IN ('table','index')")}
-    assert {"meta", "titles", "genres", "title_genres", "copies", "titles_collection", "copies_title"} <= names
-    assert con.execute("SELECT v FROM meta WHERE k='schema'").fetchone()[0] == "1"
+    assert {"meta", "titles", "genres", "title_genres", "copies", "titles_collection", "copies_title",
+            "user_ratings", "watches", "user_ratings_title", "watches_title_date"} <= names
+    assert con.execute("SELECT v FROM meta WHERE k='schema'").fetchone()[0] == matinee.SCHEMA_VERSION
     assert con.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
     con.close()
     t = add(129)
@@ -652,5 +653,32 @@ def test_stats_privacy_behavior(monkeypatch):
     assert c.get("/api/stats").status_code == 403
     assert c.get("/admin/api/stats", headers={"Cf-Ray": "ext"}).status_code == 401
     assert c.get("/admin/api/stats").status_code == 200
+
+
+def test_validate_rating():
+    from app import validate_rating
+    import pytest
+    assert validate_rating(8.5) == 8.5
+    assert validate_rating("8.5") == 8.5
+    assert validate_rating(0) == 0.0
+    assert validate_rating(10) == 10.0
+    assert validate_rating(None) is None
+    assert validate_rating("") is None
+
+    with matinee.app.test_request_context():
+        for bad in (7.3, "7.3", -0.5, 10.5, "abc"):
+            with pytest.raises(Exception) as exc:
+                validate_rating(bad)
+            assert exc.value.response.status_code == 400
+
+
+def test_migration_creates_tables():
+    con = matinee.connect()
+    # Verify tables exist
+    tables = [r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
+    con.close()
+    assert "user_ratings" in tables
+    assert "watches" in tables
+
 
 
