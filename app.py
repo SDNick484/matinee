@@ -849,6 +849,33 @@ def collection_stats(private):
         ).fetchall()
     ]
 
+    now = dt.date.today()
+    year_start = f"{now.year:04d}-01-01"
+    month_start = f"{now.year:04d}-{now.month:02d}-01"
+    total_watched_titles = con.execute("SELECT count(DISTINCT title_id) FROM watches").fetchone()[0]
+    watched_pct = round((total_watched_titles / titles_count * 100), 1) if titles_count else 0.0
+    watched_year = con.execute("SELECT count(*) FROM watches WHERE watched_date >= ?", (year_start,)).fetchone()[0]
+    watched_month = con.execute("SELECT count(*) FROM watches WHERE watched_date >= ?", (month_start,)).fetchone()[0]
+    total_watches = con.execute("SELECT count(*) FROM watches").fetchone()[0]
+    watched_stats = {
+        "total_watched_titles": total_watched_titles,
+        "watched_percent": watched_pct,
+        "watched_this_year": watched_year,
+        "watched_this_month": watched_month,
+        "total_watch_events": total_watches,
+    }
+
+    rated_titles = con.execute("SELECT count(*) FROM user_ratings").fetchone()[0]
+    rated_pct = round((rated_titles / titles_count * 100), 1) if titles_count else 0.0
+    avg_rating = con.execute("SELECT avg(rating) FROM user_ratings").fetchone()[0]
+    high_rated = con.execute("SELECT count(*) FROM user_ratings WHERE rating >= 8.0").fetchone()[0]
+    rating_stats = {
+        "rated_titles_count": rated_titles,
+        "rated_percent": rated_pct,
+        "average_rating": round(avg_rating, 1) if avg_rating is not None else 0.0,
+        "high_rated_count": high_rated,
+    }
+
     return jsonify(
         overview={
             "titles_count": titles_count,
@@ -860,6 +887,8 @@ def collection_stats(private):
         formats=formats,
         genres=genres,
         services=services,
+        watched_stats=watched_stats,
+        rating_stats=rating_stats,
     )
 
 
@@ -1125,6 +1154,39 @@ def set_title_rating(title_id):
         )
     con.commit()
     return jsonify(ok=True, title_id=title_id, user_rating=rating)
+
+
+@app.post("/admin/api/titles/<int:title_id>/watches")
+@editor_required
+def add_watch(title_id):
+    con = db()
+    row = con.execute("SELECT id FROM titles WHERE id=?", (title_id,)).fetchone()
+    if not row:
+        abort(make_err(404, "No such title"))
+    data = request.get_json(silent=True) or {}
+    raw_date = data.get("watched_date")
+    if not raw_date:
+        watched_date = dt.date.today().isoformat()
+    else:
+        try:
+            parsed = dt.date.fromisoformat(str(raw_date).strip())
+            watched_date = parsed.isoformat()
+        except (ValueError, TypeError):
+            abort(make_err(400, "Invalid watched_date: format must be YYYY-MM-DD"))
+    cur = con.execute("INSERT INTO watches(title_id, watched_date) VALUES (?, ?)", (title_id, watched_date))
+    con.commit()
+    return jsonify(ok=True, watch={"id": cur.lastrowid, "title_id": title_id, "watched_date": watched_date})
+
+
+@app.delete("/admin/api/titles/<int:title_id>/watches/<int:watch_id>")
+@editor_required
+def delete_watch(title_id, watch_id):
+    con = db()
+    cur = con.execute("DELETE FROM watches WHERE id=? AND title_id=?", (watch_id, title_id))
+    con.commit()
+    if cur.rowcount == 0:
+        abort(make_err(404, "No such watch entry"))
+    return jsonify(ok=True, deleted_id=watch_id)
 
 
 @app.post("/admin/api/titles/<int:title_id>/refresh")
