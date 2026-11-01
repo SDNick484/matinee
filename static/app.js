@@ -248,14 +248,14 @@
     if (!view) return;
 
     if (state.route.path === "/") {
+      state.grid.lastHash = location.hash || "#/";
       await renderGrid(view);
     } else if (state.route.path === "/t/:id") {
       // Save scroll position and active grid hash before leaving grid
       if (prevRoute.path === "/") {
         state.grid.scrollY = window.scrollY;
-        const raw = (window.location.hash || "").replace(/^#/, "");
-        const queryPart = raw.includes("?") ? raw.substring(raw.indexOf("?")) : "";
-        state.grid.lastHash = `#/${queryPart}`;
+        const qStr = prevRoute.query.toString();
+        state.grid.lastHash = qStr ? `#/?${qStr}` : "#/";
       }
       await renderDetail(view, state.route.params.id);
     } else if (state.route.path === "/add") {
@@ -741,6 +741,7 @@
 
   // ================================================================= 7.3 Detail Page
   async function renderDetail(container, titleId) {
+    window.scrollTo({ top: 0, behavior: "instant" });
     container.innerHTML = `
       <div style="text-align:center;padding:48px 16px;color:var(--ink-2)">Loading movie details…</div>
     `;
@@ -2072,6 +2073,7 @@
         p.querySelector(".filter-btn")?.setAttribute("aria-expanded", "false");
       });
     } else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+      if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
       if (state.route.path === "/t/:id") {
         const activeTag = document.activeElement ? document.activeElement.tagName.toLowerCase() : "";
         if (activeTag === "input" || activeTag === "textarea" || activeTag === "select") return;
@@ -2081,11 +2083,13 @@
         if (e.key === "ArrowLeft") {
           const prevBtn = document.getElementById("btn-prev-movie");
           if (prevBtn && !prevBtn.classList.contains("disabled") && prevBtn.getAttribute("href") && prevBtn.getAttribute("href") !== "#") {
+            e.preventDefault();
             location.hash = prevBtn.getAttribute("href");
           }
         } else if (e.key === "ArrowRight") {
           const nextBtn = document.getElementById("btn-next-movie");
           if (nextBtn && !nextBtn.classList.contains("disabled") && nextBtn.getAttribute("href") && nextBtn.getAttribute("href") !== "#") {
+            e.preventDefault();
             location.hash = nextBtn.getAttribute("href");
           }
         }
