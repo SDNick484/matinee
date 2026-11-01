@@ -170,6 +170,9 @@
     if (segments[0] === "about") {
       return { path: "/about", params: {}, query };
     }
+    if (segments[0] === "stats") {
+      return { path: "/stats", params: {}, query };
+    }
 
     return { path: "/404", params: {}, query };
   }
@@ -184,6 +187,10 @@
 
     if (isAdmin) {
       nav.innerHTML = `
+        <a href="#/stats" class="btn btn-sm btn-ghost" id="btn-header-stats">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
+          Stats
+        </a>
         <a href="#/add" class="btn btn-sm" id="btn-header-add">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
           Add Movie
@@ -191,6 +198,10 @@
       `;
     } else {
       nav.innerHTML = `
+        <a href="#/stats" class="btn btn-sm btn-ghost" id="btn-header-stats">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
+          Stats
+        </a>
         <a href="/admin${location.hash || ""}" class="btn btn-sm btn-ghost" id="btn-header-signin">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>
           Sign In
@@ -203,12 +214,14 @@
       if (isAdmin) {
         footerLinks.innerHTML = `
           <a href="#/">Collection</a> &nbsp;·&nbsp;
+          <a href="#/stats">Stats</a> &nbsp;·&nbsp;
           <a href="#/about">About &amp; TMDB Attribution</a> &nbsp;·&nbsp;
           <a href="/${location.hash || ""}">Public View</a>
         `;
       } else {
         footerLinks.innerHTML = `
           <a href="#/">Collection</a> &nbsp;·&nbsp;
+          <a href="#/stats">Stats</a> &nbsp;·&nbsp;
           <a href="#/about">About &amp; TMDB Attribution</a> &nbsp;·&nbsp;
           <a href="/admin${location.hash || ""}">Admin Sign In</a>
         `;
@@ -243,6 +256,11 @@
         state.grid.scrollY = window.scrollY;
       }
       await renderAdd(view);
+    } else if (state.route.path === "/stats") {
+      if (prevRoute.path === "/") {
+        state.grid.scrollY = window.scrollY;
+      }
+      await renderStats(view);
     } else if (state.route.path === "/about") {
       if (prevRoute.path === "/") {
         state.grid.scrollY = window.scrollY;
@@ -2008,6 +2026,192 @@
       });
     }
   });
+
+  // ================================================================= 8.1 Stats View
+  async function renderStats(container) {
+    container.innerHTML = `
+      <div class="stats-view">
+        <div style="text-align:center;padding:48px 16px;color:var(--ink-2)">Loading statistics…</div>
+      </div>
+    `;
+
+    const apiPrefix = isAdmin ? "/admin/api" : "/api";
+    let data;
+    try {
+      data = await api(`${apiPrefix}/stats`);
+    } catch (err) {
+      container.innerHTML = `
+        <div class="stats-view">
+          <div class="empty-state">
+            <h2>Unable to load stats</h2>
+            <p>${esc(err.message || "Failed to connect to Matinee server")}</p>
+            <button class="btn" onclick="location.reload()">Retry</button>
+          </div>
+        </div>
+      `;
+      return;
+    }
+
+    const ov = data.overview || {};
+    const qualities = data.qualities || [];
+    const formats = data.formats || [];
+    const genres = data.genres || [];
+    const services = data.services || [];
+
+    const maxGenreCount = genres.length > 0 ? Math.max(...genres.map((g) => g.count)) : 1;
+
+    container.innerHTML = `
+      <div class="stats-view">
+        <div class="stats-header">
+          <div>
+            <a href="#/" class="back-link">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg>
+              Back to collection
+            </a>
+          </div>
+          <h1 style="margin-top:var(--s2)">Collection Stats</h1>
+          <p>Breakdown of movies, formats, qualities, and services in your family library.</p>
+        </div>
+
+        <!-- Overview Cards -->
+        <section>
+          <div class="stats-grid-overview">
+            <div class="stat-card">
+              <div class="stat-icon">🎬</div>
+              <div class="stat-val">${ov.titles_count ?? 0}</div>
+              <div class="stat-lbl">Unique Movies</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-icon">💿</div>
+              <div class="stat-val">${ov.physical_count ?? 0}</div>
+              <div class="stat-lbl">Physical Discs</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-icon">☁️</div>
+              <div class="stat-val">${ov.digital_count ?? 0}</div>
+              <div class="stat-lbl">Digital Copies</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-icon">💿☁️</div>
+              <div class="stat-val">${ov.dual_count ?? 0}</div>
+              <div class="stat-lbl">Dual-Owned</div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Quality Breakdown -->
+        <section>
+          <h2 class="stats-section-title">Breakdown by Quality</h2>
+          <div class="quality-grid">
+            ${qualities
+              .map((q) => {
+                const fillClass = q.quality === "4K" ? "k4" : q.quality === "HD" ? "hd" : "sd";
+                return `
+                <div class="quality-card">
+                  <div class="quality-card-head">
+                    <span class="quality-card-title">${esc(q.quality)}</span>
+                    <span class="quality-card-count">${q.count} movies (${q.percent}%)</span>
+                  </div>
+                  <div class="stat-progress-bar">
+                    <div class="stat-progress-fill ${fillClass}" style="width: ${Math.min(100, q.percent)}%"></div>
+                  </div>
+                </div>
+              `;
+              })
+              .join("")}
+          </div>
+        </section>
+
+        <!-- Formats Breakdown -->
+        <section>
+          <h2 class="stats-section-title">Breakdown by Format</h2>
+          <div class="formats-grid">
+            ${formats
+              .map((f) => {
+                const chipClass = getChipClass(f.format);
+                const chipIcon = getChipIcon(f.format);
+                return `
+                <div class="format-stat-item">
+                  <span class="chip ${chipClass}">${chipIcon}${esc(f.format)}</span>
+                  <span class="format-count-badge">${f.count}</span>
+                </div>
+              `;
+              })
+              .join("")}
+          </div>
+        </section>
+
+        <!-- Genre Breakdown -->
+        <section>
+          <h2 class="stats-section-title">Breakdown by Genre</h2>
+          ${
+            genres.length === 0
+              ? `<div style="color:var(--ink-3);font-size:var(--fs-sm)">No genre data recorded.</div>`
+              : `
+            <div class="genres-list">
+              ${genres
+                .map((g) => {
+                  const pct = Math.round((g.count / maxGenreCount) * 100);
+                  return `
+                  <div class="genre-row">
+                    <div class="genre-row-meta">
+                      <span>${esc(g.genre)}</span>
+                      <span style="color:var(--ink-2)">${g.count}</span>
+                    </div>
+                    <div class="genre-bar-track">
+                      <div class="genre-bar-fill" style="width: ${pct}%"></div>
+                    </div>
+                  </div>
+                `;
+                })
+                .join("")}
+            </div>
+          `
+          }
+        </section>
+
+        <!-- Digital Services Breakdown -->
+        <section>
+          <h2 class="stats-section-title">Digital Services</h2>
+          ${
+            services.length === 0
+              ? `<div style="color:var(--ink-3);font-size:var(--fs-sm)">No digital service copies recorded.</div>`
+              : `
+            <div class="services-grid">
+              ${services
+                .map(
+                  (s) => `
+                <div class="service-card">
+                  <span class="service-card-name">${esc(s.service)}</span>
+                  <span class="format-count-badge">${s.count}</span>
+                </div>
+              `
+                )
+                .join("")}
+            </div>
+          `
+          }
+        </section>
+
+        <!-- Future Features / Placeholders -->
+        <section>
+          <h2 class="stats-section-title" style="color:var(--ink-2)">Upcoming Features</h2>
+          <div class="placeholders-grid">
+            <div class="placeholder-card">
+              <span class="placeholder-badge">Coming Soon</span>
+              <h3>Watched Status</h3>
+              <p>Track which movies you and family members have watched, seen-it counts, and movie-night history.</p>
+            </div>
+            <div class="placeholder-card">
+              <span class="placeholder-badge">Coming Soon</span>
+              <h3>Family Ratings</h3>
+              <p>Record star ratings, kid-friendly recommendations, and custom favorites across your household.</p>
+            </div>
+          </div>
+        </section>
+      </div>
+    `;
+  }
 
   // ================================================================= 9.1 About View
   function renderAbout(container) {
