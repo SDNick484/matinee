@@ -420,7 +420,21 @@
         if (state.grid[facet] === val) {
           applyGridParam(facet, "");
         } else {
-          applyGridParam(facet, val);
+          if (facet === "both") {
+            const q = new URLSearchParams(state.route.query);
+            q.delete("kind");
+            q.set("both", val);
+            const qStr = q.toString();
+            location.hash = qStr ? `#/?${qStr}` : "#/";
+          } else if (facet === "kind") {
+            const q = new URLSearchParams(state.route.query);
+            q.delete("both");
+            q.set("kind", val);
+            const qStr = q.toString();
+            location.hash = qStr ? `#/?${qStr}` : "#/";
+          } else {
+            applyGridParam(facet, val);
+          }
         }
       });
     });
@@ -630,7 +644,7 @@
                   return `
                     <div class="copy-row" data-copy-id="${cp.id}">
                       <div class="copy-info">
-                        <span class="chip ${chipCls}">${esc(label)}</span>
+                        <span class="chip ${chipCls}">${getChipIcon(cp.format)} ${esc(label)}</span>
                         ${addedInfo}
                       </div>
                       ${
@@ -733,6 +747,15 @@
   // ================================================================= 8.1 / 8.2 Add Flow & Barcode Scanner
   let scannerStream = null;
   let scannerAnimId = null;
+  let isScannerPaused = false;
+
+  function pauseBarcodeScanner() {
+    isScannerPaused = true;
+  }
+
+  function resumeBarcodeScanner() {
+    isScannerPaused = false;
+  }
 
   function playBeep() {
     try {
@@ -772,6 +795,7 @@
       scannerStream.getTracks().forEach((track) => track.stop());
       scannerStream = null;
     }
+    isScannerPaused = false;
   }
 
   async function startBarcodeScanner(videoEl, reticleEl, onBarcodeDetected) {
@@ -791,10 +815,10 @@
       let lastTime = 0;
 
       async function scanLoop() {
-        if (videoEl.readyState >= 2) {
+        if (!isScannerPaused && videoEl.readyState >= 2) {
           try {
             const barcodes = await detector.detect(videoEl);
-            if (barcodes.length > 0) {
+            if (!isScannerPaused && barcodes.length > 0) {
               const raw = barcodes[0].rawValue;
               const now = Date.now();
               if (raw !== lastDetected || now - lastTime > 2500) {
@@ -942,6 +966,7 @@
         modeBtns.forEach((b) => b.classList.remove("active"));
         btn.classList.add("active");
         currentMode = btn.dataset.mode;
+        resumeBarcodeScanner();
         updateBatchUI();
       });
     });
@@ -1006,7 +1031,8 @@
         updateBatchUI();
         if (manualInput) manualInput.value = "";
       } else {
-        // Single Scan Mode
+        // Single Scan Mode: pause camera scanner so loop doesn't continuously trigger
+        pauseBarcodeScanner();
         await lookupSingleUpc(code);
       }
     }
@@ -1025,53 +1051,88 @@
               <h2>Product Found, but no TMDB match</h2>
               <p>Product: <strong>${esc(data.raw_title)}</strong></p>
               <p>Try searching TMDB directly by title.</p>
+              <button type="button" class="btn btn-ghost" id="btn-cancel-upc" style="margin-top:var(--s2)">Dismiss & Scan Again</button>
             </div>
           `;
+          document.getElementById("btn-cancel-upc")?.addEventListener("click", () => {
+            resultContainer.innerHTML = "";
+            resumeBarcodeScanner();
+          });
           return;
         }
 
-        const topMovie = results[0];
+        const isMulti = results.length > 1;
         resultContainer.innerHTML = `
-          <div style="background:var(--card);border:1px solid var(--line);border-radius:var(--r-card);padding:var(--s4);max-width:500px;margin:0 auto">
-            <div style="font-size:var(--fs-xs);color:var(--ink-3);margin-bottom:var(--s1)">BARCODE: ${esc(data.upc)}</div>
+          <div style="background:var(--card);border:1px solid var(--line);border-radius:var(--r-card);padding:var(--s4);max-width:540px;margin:0 auto">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--s1)">
+              <span style="font-size:var(--fs-xs);color:var(--ink-3)">BARCODE: ${esc(data.upc)}</span>
+              <span class="chip k4">${esc(data.format_hint)}</span>
+            </div>
             <div style="font-size:var(--fs-sm);color:var(--ink-2);margin-bottom:var(--s2)">Found: <strong>${esc(data.raw_title)}</strong></div>
 
             ${
               data.already_owned
-                ? `<div class="duplicate-banner">⚠️ In collection: ${esc(data.owned_summary)}. Adding this will attach your physical disc.</div>`
+                ? `<div class="duplicate-banner" style="margin-bottom:var(--s3)">⚠️ In collection: ${esc(data.owned_summary)}. Adding this will attach your physical disc.</div>`
                 : ""
             }
 
-            <div style="display:flex;gap:var(--s3);align-items:center;margin:var(--s3) 0">
-              ${topMovie.thumb ? `<img src="${esc(topMovie.thumb)}" style="width:48px;height:72px;border-radius:4px;object-fit:cover" alt="">` : ""}
-              <div>
-                <div style="font-weight:700;font-size:var(--fs-md)">${esc(topMovie.title)}</div>
-                <div style="font-size:var(--fs-xs);color:var(--ink-2)">${topMovie.year || ""}</div>
-                <div style="margin-top:4px"><span class="chip k4">${esc(data.format_hint)}</span></div>
-              </div>
+            ${
+              isMulti
+                ? `<div style="font-size:var(--fs-xs);color:var(--ink-3);margin-bottom:var(--s2);text-transform:uppercase;letter-spacing:0.5px">Select matching title (${results.length} found):</div>`
+                : ""
+            }
+
+            <div style="display:flex;flex-direction:column;gap:var(--s2);margin-bottom:var(--s3)">
+              ${results.slice(0, 5).map((m, idx) => `
+                <div style="display:flex;gap:var(--s3);align-items:center;padding:var(--s2);border:1px solid var(--line);border-radius:var(--r-card);background:var(--bg)">
+                  ${m.thumb ? `<img src="${esc(m.thumb)}" style="width:40px;height:60px;border-radius:4px;object-fit:cover;flex-shrink:0" alt="">` : '<div style="width:40px;height:60px;background:var(--card);border-radius:4px;flex-shrink:0"></div>'}
+                  <div style="flex:1;min-width:0">
+                    <div style="font-weight:700;font-size:var(--fs-sm);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(m.title)}</div>
+                    <div style="font-size:var(--fs-xs);color:var(--ink-2)">${m.year || ""} ${m.already_owned ? `<span style="color:var(--amber);margin-left:4px">⚠️ Owned: ${esc(m.owned_summary || "")}</span>` : ""}</div>
+                  </div>
+                  <button type="button" class="btn btn-sm btn-select-candidate" data-idx="${idx}">
+                    Add Disc
+                  </button>
+                </div>
+              `).join("")}
             </div>
 
-            <div style="display:flex;justify-content:flex-end;gap:var(--s2);margin-top:var(--s3)">
-              <button type="button" class="btn btn-ghost" onclick="document.getElementById('upc-result-container').innerHTML=''">Cancel</button>
-              <button type="button" class="btn" id="btn-confirm-upc">Add ${esc(data.format_hint)} Disc</button>
+            <div style="display:flex;justify-content:flex-end">
+              <button type="button" class="btn btn-ghost" id="btn-cancel-upc">Cancel / Scan Again</button>
             </div>
           </div>
         `;
 
-        document.getElementById("btn-confirm-upc")?.addEventListener("click", () => {
-          openCopyModal(topMovie, {
-            kind: "physical",
-            format: data.format_hint,
-            duplicateNotice: data.already_owned ? data.owned_summary : null,
+        resultContainer.querySelectorAll(".btn-select-candidate").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            const idx = parseInt(btn.dataset.idx, 10);
+            const selectedMovie = results[idx];
+            if (selectedMovie) {
+              openCopyModal(selectedMovie, {
+                kind: "physical",
+                format: data.format_hint,
+                duplicateNotice: selectedMovie.already_owned ? (selectedMovie.owned_summary || data.owned_summary) : (data.already_owned ? data.owned_summary : null),
+              });
+            }
           });
+        });
+
+        document.getElementById("btn-cancel-upc")?.addEventListener("click", () => {
+          resultContainer.innerHTML = "";
+          resumeBarcodeScanner();
         });
       } catch (err) {
         resultContainer.innerHTML = `
           <div class="empty-state">
             <h2>Lookup Failed</h2>
             <p>${esc(err.message || "Product not found for this barcode.")}</p>
+            <button type="button" class="btn btn-ghost" id="btn-cancel-upc" style="margin-top:var(--s2)">Dismiss & Scan Again</button>
           </div>
         `;
+        document.getElementById("btn-cancel-upc")?.addEventListener("click", () => {
+          resultContainer.innerHTML = "";
+          resumeBarcodeScanner();
+        });
       }
     }
 
@@ -1115,7 +1176,11 @@
       const itemsContainer = document.getElementById("batch-items-container");
       const resolved = [];
 
-      for (const upc of queue) {
+      for (let i = 0; i < queue.length; i++) {
+        const upc = queue[i];
+        if (itemsContainer) {
+          itemsContainer.innerHTML = `<div style="text-align:center;padding:24px;color:var(--ink-2)">Resolving barcode ${i + 1} of ${queue.length}…</div>`;
+        }
         try {
           const res = await api(`/admin/api/upc/${encodeURIComponent(upc)}`);
           if (res.results && res.results.length > 0) {
@@ -1158,13 +1223,14 @@
       document.getElementById("btn-batch-import-all")?.addEventListener("click", async () => {
         const chks = itemsContainer.querySelectorAll(".batch-chk:checked");
         let addedCount = 0;
+        const importedUpcs = new Set();
         const btn = document.getElementById("btn-batch-import-all");
         if (btn) btn.disabled = true;
 
         for (const chk of chks) {
           const idx = parseInt(chk.dataset.idx, 10);
           const item = resolved[idx];
-          if (item?.ok) {
+          if (item?.ok && item.data.results?.[0]) {
             try {
               await api("/admin/api/copies", {
                 method: "POST",
@@ -1176,13 +1242,21 @@
                 }),
               });
               addedCount++;
+              importedUpcs.add(item.upc);
             } catch (err) {}
           }
         }
 
-        setBatchQueue([]);
+        const remaining = queue.filter((code) => !importedUpcs.has(code));
+        setBatchQueue(remaining);
+        updateBatchUI();
         modalRoot.innerHTML = "";
-        toast(`Successfully added ${addedCount} physical disc copies!`);
+        if (addedCount > 0) {
+          toast(`Successfully added ${addedCount} physical disc copies!`);
+        }
+        if (remaining.length > 0) {
+          toast(`${remaining.length} barcode(s) remaining in queue`);
+        }
         navigate("#/");
       });
     }
@@ -1481,7 +1555,11 @@
       formState.ownedCopies = owned.copies || [];
       const statusBox = document.getElementById("modal-owned-status");
       if (statusBox) {
-        if (owned.owned && owned.summary) {
+        if (prefill.duplicateNotice) {
+          statusBox.innerHTML = `
+            <div class="duplicate-banner">⚠️ In collection: ${esc(prefill.duplicateNotice)}. Adding this will attach your physical disc.</div>
+          `;
+        } else if (owned.owned && owned.summary) {
           statusBox.innerHTML = `
             <div class="notice-banner notice-info">
               <strong>Already in the collection:</strong> ${esc(owned.summary)}
@@ -1494,7 +1572,7 @@
       checkDuplicateWarning();
     } catch {
       const statusBox = document.getElementById("modal-owned-status");
-      if (statusBox) statusBox.innerHTML = ``;
+      if (statusBox && !prefill.duplicateNotice) statusBox.innerHTML = ``;
     }
 
     // Modal close & click outside
@@ -1548,8 +1626,9 @@
         } else {
           closeModal();
           // Navigate to title detail page
-          if (res.title_id) {
-            navigate(`#/t/${res.title_id}`);
+          const targetId = res.id || res.title_id;
+          if (targetId) {
+            navigate(`#/t/${targetId}`);
           } else {
             navigate("#/");
           }
@@ -1721,6 +1800,7 @@
   function closeModal() {
     const modalRoot = document.getElementById("modal-root");
     if (modalRoot) modalRoot.innerHTML = "";
+    resumeBarcodeScanner();
   }
 
   // Close modal on Escape key

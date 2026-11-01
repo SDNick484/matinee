@@ -212,13 +212,13 @@ def clean_upc_title(raw_title: str) -> tuple[str, str]:
     raw = raw_title.strip()
     low = raw.lower()
 
-    if any(k in low for k in ("4k", "ultra hd", "uhd")):
+    if re.search(r"\b(4k|ultra hd|uhd)\b", low):
         fmt = "4K UHD"
-    elif any(k in low for k in ("blu-ray", "bluray", "bd")):
+    elif re.search(r"\b(blu-ray|bluray|bd)\b", low):
         fmt = "Blu-ray"
-    elif "dvd" in low:
+    elif re.search(r"\b(dvd)\b", low):
         fmt = "DVD"
-    elif "vhs" in low:
+    elif re.search(r"\b(vhs)\b", low):
         fmt = "VHS"
     else:
         fmt = "4K UHD"

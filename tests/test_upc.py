@@ -21,9 +21,17 @@ def test_clean_upc_title_patterns():
     assert title == "Inception"
     assert fmt == "Blu-ray"
 
-    # DVD
+    title, fmt = clean_upc_title("Dune [BD]")
+    assert title == "Dune"
+    assert fmt == "Blu-ray"
+
+    # DVD (verify "bd" inside a word like "Abduction" does not falsely match Blu-ray)
     title, fmt = clean_upc_title("Gladiator [Widescreen DVD]")
     assert title == "Gladiator"
+    assert fmt == "DVD"
+
+    title, fmt = clean_upc_title("Abduction [DVD]")
+    assert title == "Abduction"
     assert fmt == "DVD"
 
 
@@ -160,6 +168,125 @@ def test_api_upc_rate_limit_not_cached(tmp_path, monkeypatch):
     row = con.execute("SELECT 1 FROM upc_cache WHERE upc='012345678901'").fetchone()
     con.close()
     assert row is None
+
+
+def test_api_upc_lookup_uncached_success(tmp_path, monkeypatch):
+    import app
+    db_file = tmp_path / "test.db"
+    monkeypatch.setattr(app, "DB_PATH", db_file)
+    monkeypatch.setattr(app, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(app, "LAN_EDIT", True)
+    monkeypatch.setattr(app, "TMDB_READ_TOKEN", "fake_token")
+    init_db()
+
+    def fake_http_json(url, **kw):
+        return {
+            "total": 1,
+            "items": [{"title": "Alien [4K UHD]", "brand": "20th Century Fox"}]
+        }
+
+    monkeypatch.setattr(app, "http_json", fake_http_json)
+    monkeypatch.setattr(app, "tmdb_search", lambda q: [{"tmdb_id": 348, "title": "Alien", "year": 1979, "owned": False}])
+
+    client = app.app.test_client()
+    resp = client.get("/admin/api/upc/024543594833")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["upc"] == "024543594833"
+    assert data["raw_title"] == "Alien [4K UHD]"
+    assert data["cleaned_title"] == "Alien"
+    assert data["format_hint"] == "4K UHD"
+    assert len(data["results"]) == 1
+    assert data["results"][0]["tmdb_id"] == 348
+
+    # Verify cached in database
+    con = connect()
+    row = con.execute("SELECT raw_title, brand FROM upc_cache WHERE upc='024543594833'").fetchone()
+    con.close()
+    assert row is not None
+    assert row["raw_title"] == "Alien [4K UHD]"
+
+
+def test_api_upc_lookup_not_found_cached_as_miss(tmp_path, monkeypatch):
+    import app
+    db_file = tmp_path / "test.db"
+    monkeypatch.setattr(app, "DB_PATH", db_file)
+    monkeypatch.setattr(app, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(app, "LAN_EDIT", True)
+    init_db()
+
+    calls = []
+    def fake_http_json(url, **kw):
+        calls.append(url)
+        return {"total": 0, "items": []}
+
+    monkeypatch.setattr(app, "http_json", fake_http_json)
+
+    client = app.app.test_client()
+    resp = client.get("/admin/api/upc/000000000000")
+    assert resp.status_code == 404
+    assert len(calls) == 1
+
+    # Verify cached as miss in DB
+    con = connect()
+    row = con.execute("SELECT raw_title, data FROM upc_cache WHERE upc='000000000000'").fetchone()
+    con.close()
+    assert row is not None
+    assert row["raw_title"] == ""
+
+    # Second lookup should hit cache and NOT call http_json
+    resp2 = client.get("/admin/api/upc/000000000000")
+    assert resp2.status_code == 404
+    assert len(calls) == 1
+
+
+def test_api_upc_lookup_validation(tmp_path, monkeypatch):
+    import app
+    db_file = tmp_path / "test.db"
+    monkeypatch.setattr(app, "DB_PATH", db_file)
+    monkeypatch.setattr(app, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(app, "LAN_EDIT", True)
+    init_db()
+
+    client = app.app.test_client()
+    # Too short
+    resp = client.get("/admin/api/upc/12345")
+    assert resp.status_code == 400
+    assert "Invalid barcode" in resp.get_json()["error"]
+
+    # Non-digits only
+    resp = client.get("/admin/api/upc/abcdefghij")
+    assert resp.status_code == 400
+
+
+def test_api_facets_has_both_flag(tmp_path, monkeypatch):
+    import app
+    db_file = tmp_path / "test.db"
+    monkeypatch.setattr(app, "DB_PATH", db_file)
+    monkeypatch.setattr(app, "DATA_DIR", tmp_path)
+    init_db()
+
+    client = app.app.test_client()
+    # Empty DB
+    facets = client.get("/api/facets").get_json()
+    assert facets["has_both"] is False
+
+    # Add only digital
+    con = connect()
+    con.execute("INSERT INTO titles (tmdb_id, title, sort_title, search_text, year, fetched_at) VALUES (10, 'Test', 'test', 'test', 2020, '2026-10-01')")
+    t_id = con.execute("SELECT id FROM titles WHERE tmdb_id=10").fetchone()[0]
+    con.execute("INSERT INTO copies (title_id, kind, format, service) VALUES (?, 'digital', 'Digital HD', 'Movies Anywhere')", (t_id,))
+    con.commit()
+    con.close()
+    assert client.get("/api/facets").get_json()["has_both"] is False
+
+    # Add physical to the same title
+    con = connect()
+    con.execute("INSERT INTO copies (title_id, kind, format, service) VALUES (?, 'physical', '4K UHD', NULL)", (t_id,))
+    con.commit()
+    con.close()
+    assert client.get("/api/facets").get_json()["has_both"] is True
+
 
 
 
