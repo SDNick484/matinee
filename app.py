@@ -669,6 +669,69 @@ def facets(private):
     return jsonify(kinds=kinds, formats=formats, services=services, genres=genres, has_both=has_both)
 
 
+def collection_stats(private):
+    con = db()
+    titles_count = con.execute("SELECT count(DISTINCT title_id) FROM copies").fetchone()[0]
+    physical_count = con.execute("SELECT count(*) FROM copies WHERE kind='physical'").fetchone()[0]
+    digital_count = con.execute("SELECT count(*) FROM copies WHERE kind='digital'").fetchone()[0]
+    dual_count = con.execute(
+        """SELECT count(*) FROM titles t
+           WHERE EXISTS (SELECT 1 FROM copies c1 WHERE c1.title_id=t.id AND c1.kind='physical')
+             AND EXISTS (SELECT 1 FROM copies c2 WHERE c2.title_id=t.id AND c2.kind='digital')"""
+    ).fetchone()[0]
+
+    qualities = []
+    for q_name, fmts in [("4K", QUALITY_MAP["4k"]), ("HD", QUALITY_MAP["hd"]), ("SD", QUALITY_MAP["sd"])]:
+        q_placeholders = ",".join("?" * len(fmts))
+        cnt = con.execute(
+            f"SELECT count(DISTINCT title_id) FROM copies WHERE format IN ({q_placeholders})", fmts
+        ).fetchone()[0]
+        pct = round((cnt / titles_count * 100), 1) if titles_count else 0.0
+        qualities.append({"quality": q_name, "count": cnt, "percent": pct})
+
+    formats = []
+    for fmt in FORMAT_ORDER:
+        cnt = con.execute("SELECT count(*) FROM copies WHERE format=?", (fmt,)).fetchone()[0]
+        k = "physical" if fmt in FORMATS["physical"] else "digital"
+        formats.append({"format": fmt, "kind": k, "count": cnt})
+
+    genres = [
+        {"genre": r["genre"], "count": r["count"]}
+        for r in con.execute(
+            """SELECT gn.name AS genre, count(DISTINCT tg.title_id) AS count
+               FROM genres gn
+               JOIN title_genres tg ON tg.genre_id=gn.id
+               JOIN copies c ON c.title_id=tg.title_id
+               GROUP BY gn.id, gn.name
+               ORDER BY count DESC, gn.name ASC"""
+        ).fetchall()
+    ]
+
+    services = [
+        {"service": r["service"], "count": r["count"]}
+        for r in con.execute(
+            """SELECT service, count(*) AS count
+               FROM copies
+               WHERE kind='digital' AND service IS NOT NULL
+               GROUP BY service
+               ORDER BY count DESC, service ASC"""
+        ).fetchall()
+    ]
+
+    return jsonify(
+        overview={
+            "titles_count": titles_count,
+            "physical_count": physical_count,
+            "digital_count": digital_count,
+            "dual_count": dual_count,
+        },
+        qualities=qualities,
+        formats=formats,
+        genres=genres,
+        services=services,
+    )
+
+
 for prefix, private in (("/api", False), ("/admin/api", True)):
     def _wrap(fn, private=private):
         def f(*a, **kw):
@@ -679,6 +742,8 @@ for prefix, private in (("/api", False), ("/admin/api", True)):
     app.add_url_rule(f"{prefix}/titles", f"titles_{private}", _wrap(list_titles))
     app.add_url_rule(f"{prefix}/titles/<int:title_id>", f"title_{private}", _wrap(get_title))
     app.add_url_rule(f"{prefix}/facets", f"facets_{private}", _wrap(facets))
+    app.add_url_rule(f"{prefix}/stats", f"stats_{private}", _wrap(collection_stats))
+
 
 
 @app.get("/api/me")

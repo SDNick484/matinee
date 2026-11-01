@@ -536,3 +536,75 @@ def test_filter_multi_genre():
     assert {x["title"] for x in grid(genre="Action,Animation")} == {"The Dark Knight", "WALL·E"}
     assert [x["title"] for x in grid(genre="Romance")] == ["Amélie"]
 
+
+# ------------------------------------------------------------------- Task 2: stats endpoint
+def test_stats_endpoint_shape_and_counts():
+    # Amélie (Comedy, Romance) - Blu-ray + Digital HD (Apple TV) -> dual owned!
+    add(194, "physical", "Blu-ray")
+    add(194, "digital", "Digital HD", "Apple TV")
+    # WALL·E (Animation, Family, Sci-Fi) - Digital 4K (Movies Anywhere)
+    add(10681, "digital", "Digital 4K", "Movies Anywhere")
+    # Toy Story (Animation, Adventure, Family, Comedy) - DVD
+    add(862, "physical", "DVD")
+
+    res = c.get("/api/stats")
+    assert res.status_code == 200
+    data = res.get_json()
+
+    assert data["overview"] == {
+        "titles_count": 3,
+        "physical_count": 2,
+        "digital_count": 2,
+        "dual_count": 1,
+    }
+
+    # Qualities
+    q_map = {item["quality"]: item for item in data["qualities"]}
+    assert q_map["4K"]["count"] == 1  # WALL·E
+    assert q_map["HD"]["count"] == 1  # Amélie
+    assert q_map["SD"]["count"] == 1  # Toy Story
+
+    # Formats
+    f_map = {item["format"]: item for item in data["formats"]}
+    assert f_map["Blu-ray"]["count"] == 1
+    assert f_map["Blu-ray"]["kind"] == "physical"
+    assert f_map["Digital HD"]["count"] == 1
+    assert f_map["Digital HD"]["kind"] == "digital"
+    assert f_map["Digital 4K"]["count"] == 1
+    assert f_map["DVD"]["count"] == 1
+    assert f_map["VHS"]["count"] == 0
+
+    # Genres
+    genres = data["genres"]
+    assert any(g["genre"] == "Comedy" and g["count"] == 2 for g in genres)
+    assert any(g["genre"] == "Animation" and g["count"] == 2 for g in genres)
+
+    # Services
+    services = data["services"]
+    s_map = {item["service"]: item["count"] for item in services}
+    assert s_map["Apple TV"] == 1
+    assert s_map["Movies Anywhere"] == 1
+
+
+def test_stats_percentages():
+    add(194, "physical", "4K UHD")
+    add(194, "physical", "Blu-ray")
+    add(10681, "digital", "Digital HD", "Movies Anywhere")
+
+    data = c.get("/api/stats").get_json()
+    q_map = {item["quality"]: item for item in data["qualities"]}
+    assert q_map["4K"]["percent"] == 50.0
+    assert q_map["HD"]["percent"] == 100.0
+    assert q_map["SD"]["percent"] == 0.0
+
+
+def test_stats_privacy_behavior(monkeypatch):
+    add(194)
+    assert c.get("/api/stats").status_code == 200
+
+    monkeypatch.setattr(matinee, "PUBLIC_VIEW", False)
+    assert c.get("/api/stats").status_code == 403
+    assert c.get("/admin/api/stats", headers={"Cf-Ray": "ext"}).status_code == 401
+    assert c.get("/admin/api/stats").status_code == 200
+
+
