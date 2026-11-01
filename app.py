@@ -639,7 +639,7 @@ def list_titles(private):
                      f"WHERE tg.title_id=t.id AND gn.name IN ({g_q}) COLLATE NOCASE)")
         args += genre_tokens
 
-    sort = a.get("sort") if a.get("sort") in SORTS else "added"
+    sort = a.get("sort") if a.get("sort") in SORTS else "title"
     rows = db().execute(
         f"""SELECT t.id, t.title, t.year, t.poster_file, t.fetched_at,
               (SELECT MIN(c.created_at) FROM copies c WHERE c.title_id=t.id) AS added,

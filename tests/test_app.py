@@ -448,6 +448,8 @@ def test_grid_search_filters_and_sorts():
 def test_title_sort_and_date_added():
     for i in (9806, 150540, 9487):
         add(i)
+    # Default sort is Title (A-Z)
+    assert [x["title"] for x in grid()] == ["A Bug's Life", "The Incredibles", "Inside Out"]
     assert [x["title"] for x in grid(sort="title")] == ["A Bug's Life", "The Incredibles", "Inside Out"]
     assert [x["year"] for x in grid(sort="year")] == [2015, 2004, 1998]
     m = add(277834, "physical", "DVD")
@@ -459,9 +461,13 @@ def test_title_sort_and_date_added():
     con.execute("UPDATE copies SET created_at='2026-09-01 09:00:00' WHERE id NOT IN (?,?)", ids)
     con.commit()
     con.close()
-    g = grid()
-    assert g[0]["title"] == "Moana" and g[0]["added_on"] == "2026-10-01"
-    assert g[0]["formats"] == ["DVD", "Digital HD"]
+    # Explicit sort=added sorts by date added
+    g_added = grid(sort="added")
+    assert g_added[0]["title"] == "Moana" and g_added[0]["added_on"] == "2026-10-01"
+    assert g_added[0]["formats"] == ["DVD", "Digital HD"]
+    # Default sort remains Title (A-Z)
+    g_default = grid()
+    assert g_default[0]["title"] == "A Bug's Life"
     assert c.get(f"/api/titles/{m['id']}").get_json()["added_on"] == "2026-10-01"
     assert c.get("/admin/api/titles?sort=title").get_json()["count"] == 4
 
