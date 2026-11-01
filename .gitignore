@@ -6,3 +6,5 @@ __pycache__/
 .env
 .venv/
 docs/movie-app-prompt.md
+unresolved*.txt
+

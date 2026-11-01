@@ -101,8 +101,11 @@ def parse_input_file(path):
 
 def import_titles(file_path, kind="digital", default_format="Digital HD",
                   default_service="Movies Anywhere", unresolved_path="unresolved.txt",
-                  dry_run=False, delay=0.15):
+                  dry_run=False, delay=0.15, tmdb_token=None):
     """Import movies from file into Matinee catalog."""
+    if tmdb_token:
+        matinee.TMDB_READ_TOKEN = tmdb_token.strip()
+
     entries = parse_input_file(file_path)
     total = len(entries)
     print(f"Loaded {total} movies from {file_path}")
@@ -230,8 +233,21 @@ def main():
                         help="Delay in seconds between TMDB requests (default: 0.15)")
     parser.add_argument("--dry-run", action="store_true",
                         help="Perform search and show what would be added without writing to database")
+    parser.add_argument("--tmdb-token", default=None,
+                        help="TMDB API Read Access Token (overrides TMDB_READ_TOKEN env/conf)")
 
     args = parser.parse_args()
+
+    if args.tmdb_token:
+        matinee.TMDB_READ_TOKEN = args.tmdb_token.strip()
+
+    if not matinee.TMDB_READ_TOKEN:
+        print("\nERROR: TMDB_READ_TOKEN is not set in the environment or in /etc/conf.d/matinee.")
+        print("To load it from /etc/conf.d/matinee, run:")
+        print("  set -a; . /etc/conf.d/matinee; set +a")
+        print("Or pass it directly:")
+        print("  python3 ops/import_titles.py <file> --tmdb-token \"<token>\"\n")
+        sys.exit(1)
 
     if not Path(args.file).exists():
         print(f"Error: File not found: {args.file}")

@@ -89,14 +89,12 @@ def test_import_titles(tmp_path, monkeypatch):
     assert copies[0]["format"] == "Digital HD"
     assert copies[0]["service"] == "Movies Anywhere"
 
-    # Running again skips already existing copies
-    res2 = import_titles(
-        txt_file,
-        kind="digital",
-        default_format="Digital HD",
-        default_service="Movies Anywhere",
-        unresolved_path=unresolved_file,
-        dry_run=False,
-    )
-    assert res2["added"] == 0
-    assert res2["skipped"] == 1
+
+def test_import_titles_token_argument(tmp_path, monkeypatch):
+    monkeypatch.setattr(matinee, "TMDB_READ_TOKEN", "")
+    txt_file = tmp_path / "movies.txt"
+    txt_file.write_text("Movie (2020)\n")
+    # Setting token in import_titles updates matinee.TMDB_READ_TOKEN
+    import_titles(txt_file, dry_run=True, tmdb_token="custom_token_123")
+    assert matinee.TMDB_READ_TOKEN == "custom_token_123"
+

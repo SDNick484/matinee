@@ -25,6 +25,31 @@ from flask import Flask, abort, g, jsonify, redirect, request, send_from_directo
 
 APP_NAME = "Matinee"
 APP_DIR = Path(__file__).resolve().parent
+
+# Auto-load config from /etc/conf.d/matinee or local .env if not already set in environment
+def _load_env():
+    for conf_file in [Path("/etc/conf.d/matinee"), APP_DIR / ".env"]:
+        if conf_file.is_file():
+            try:
+                with open(conf_file, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line or line.startswith("#") or "=" not in line:
+                            continue
+                        if line.startswith("export "):
+                            line = line[7:].strip()
+                        k, v = line.split("=", 1)
+                        k = k.strip()
+                        v = v.strip()
+                        if len(v) >= 2 and ((v.startswith('"') and v.endswith('"')) or (v.startswith("'") and v.endswith("'"))):
+                            v = v[1:-1]
+                        if k and k not in os.environ:
+                            os.environ[k] = v
+            except Exception:
+                pass
+
+_load_env()
+
 DATA_DIR = Path(os.environ.get("DATA_DIR", APP_DIR / "data"))
 IMAGE_DIR = DATA_DIR / "images"
 DB_PATH = DATA_DIR / "matinee.db"
