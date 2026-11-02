@@ -986,6 +986,40 @@
       metaParts.push(`<span class="score">★ ${title.tmdb_vote.toFixed(1)}</span>`);
     }
 
+    const ratingsHtml = [];
+    if (title.omdb) {
+      if (title.omdb.imdb_rating !== null && title.omdb.imdb_rating !== undefined) {
+        const votesStr = title.omdb.imdb_votes ? ` (${Number(title.omdb.imdb_votes).toLocaleString()} votes)` : "";
+        const imdbId = title.omdb.imdb_id || title.imdb_id;
+        const imdbUrl = imdbId ? `https://www.imdb.com/title/${encodeURIComponent(imdbId)}/` : null;
+        const tag = imdbUrl ? "a" : "span";
+        const href = imdbUrl ? `href="${imdbUrl}" target="_blank" rel="noopener noreferrer"` : "";
+        ratingsHtml.push(
+          `<${tag} ${href} class="rating-badge rating-imdb" title="IMDb Rating${votesStr}">` +
+          `<span class="rating-logo">IMDb</span> ★ ${Number(title.omdb.imdb_rating).toFixed(1)}` +
+          `</${tag}>`
+        );
+      }
+      if (title.omdb.rotten_tomatoes_score !== null && title.omdb.rotten_tomatoes_score !== undefined) {
+        const rtScore = title.omdb.rotten_tomatoes_score;
+        const rtIcon = rtScore >= 60 ? "🍅" : "🟢";
+        ratingsHtml.push(
+          `<span class="rating-badge rating-rt" title="Rotten Tomatoes Tomatometer">` +
+          `<span>${rtIcon}</span> ${rtScore}%` +
+          `</span>`
+        );
+      }
+      if (title.omdb.metacritic_score !== null && title.omdb.metacritic_score !== undefined) {
+        const metaScore = title.omdb.metacritic_score;
+        const tierClass = metaScore >= 61 ? "rating-meta-good" : (metaScore >= 40 ? "rating-meta-mixed" : "rating-meta-bad");
+        ratingsHtml.push(
+          `<span class="rating-badge ${tierClass}" title="Metacritic Metascore">` +
+          `<span class="rating-logo">METASCORE</span> ${metaScore}` +
+          `</span>`
+        );
+      }
+    }
+
     const heroBgSrc = title.backdrop_url || (title.backdrop_file ? `/images/${esc(title.backdrop_file)}` : null);
     const heroBgStyle = heroBgSrc
       ? `style="background-image: url('${heroBgSrc}');"`
@@ -1052,6 +1086,11 @@
               <div class="meta-line">
                 ${metaParts.join(' <span style="opacity:0.4">·</span> ')}
               </div>
+              ${
+                ratingsHtml.length > 0
+                  ? `<div class="ratings-row">${ratingsHtml.join("")}</div>`
+                  : ""
+              }
               ${
                 title.collection_name
                   ? `<div style="font-size:var(--fs-sm);color:var(--amber);font-weight:600">${esc(title.collection_name)}</div>`
