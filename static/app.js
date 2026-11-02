@@ -155,11 +155,11 @@
   }
 
   const BUCKET_LABELS = {
-    past_year: "Within the Past Year",
-    "1_2_years": "1–2 Years Ago",
-    "2_5_years": "2–5 Years Ago",
-    "5_10_years": "5–10 Years Ago",
-    over_10_years: "Over 10 Years Ago",
+    past_year: "Past Year",
+    "1_2_years": "1–2 Years",
+    "2_5_years": "2–5 Years",
+    "5_10_years": "5–10 Years",
+    over_10_years: "10+ Years",
     unknown: "Date Unknown",
   };
 
@@ -529,6 +529,7 @@
     const genre = state.grid.genre || [];
     const rating = state.grid.rating || "";
     const watched = state.grid.watched || "";
+    const locationId = state.grid.location_id || "";
 
     const hasFilters =
       medium.length > 0 ||
@@ -548,7 +549,6 @@
     const watchedLabel = getWatchedLabel(watched);
     const ratingLabel = getRatingLabel(rating);
 
-    const locationId = state.grid.location_id || "";
     let locationLabel = "All Locations";
     if (locationId && f.locations) {
       const matchLoc = f.locations.find((l) => String(l.id) === String(locationId));
@@ -986,6 +986,40 @@
       metaParts.push(`<span class="score">★ ${title.tmdb_vote.toFixed(1)}</span>`);
     }
 
+    const ratingsHtml = [];
+    if (title.omdb) {
+      if (title.omdb.imdb_rating !== null && title.omdb.imdb_rating !== undefined) {
+        const votesStr = title.omdb.imdb_votes ? ` (${Number(title.omdb.imdb_votes).toLocaleString()} votes)` : "";
+        const imdbId = title.omdb.imdb_id || title.imdb_id;
+        const imdbUrl = imdbId ? `https://www.imdb.com/title/${encodeURIComponent(imdbId)}/` : null;
+        const tag = imdbUrl ? "a" : "span";
+        const href = imdbUrl ? `href="${imdbUrl}" target="_blank" rel="noopener noreferrer"` : "";
+        ratingsHtml.push(
+          `<${tag} ${href} class="rating-badge rating-imdb" title="IMDb Rating${votesStr}">` +
+          `<span class="rating-logo">IMDb</span> ★ ${Number(title.omdb.imdb_rating).toFixed(1)}` +
+          `</${tag}>`
+        );
+      }
+      if (title.omdb.rotten_tomatoes_score !== null && title.omdb.rotten_tomatoes_score !== undefined) {
+        const rtScore = title.omdb.rotten_tomatoes_score;
+        const rtIcon = rtScore >= 60 ? "🍅" : "🟢";
+        ratingsHtml.push(
+          `<span class="rating-badge rating-rt" title="Rotten Tomatoes Tomatometer">` +
+          `<span>${rtIcon}</span> ${rtScore}%` +
+          `</span>`
+        );
+      }
+      if (title.omdb.metacritic_score !== null && title.omdb.metacritic_score !== undefined) {
+        const metaScore = title.omdb.metacritic_score;
+        const tierClass = metaScore >= 61 ? "rating-meta-good" : (metaScore >= 40 ? "rating-meta-mixed" : "rating-meta-bad");
+        ratingsHtml.push(
+          `<span class="rating-badge ${tierClass}" title="Metacritic Metascore">` +
+          `<span class="rating-logo">METASCORE</span> ${metaScore}` +
+          `</span>`
+        );
+      }
+    }
+
     const heroBgSrc = title.backdrop_url || (title.backdrop_file ? `/images/${esc(title.backdrop_file)}` : null);
     const heroBgStyle = heroBgSrc
       ? `style="background-image: url('${heroBgSrc}');"`
@@ -1052,6 +1086,11 @@
               <div class="meta-line">
                 ${metaParts.join(' <span style="opacity:0.4">·</span> ')}
               </div>
+              ${
+                ratingsHtml.length > 0
+                  ? `<div class="ratings-row">${ratingsHtml.join("")}</div>`
+                  : ""
+              }
               ${
                 title.collection_name
                   ? `<div style="font-size:var(--fs-sm);color:var(--amber);font-weight:600">${esc(title.collection_name)}</div>`
@@ -1129,19 +1168,18 @@
             isAdmin
               ? `
             <div class="watch-log-form">
-              <select id="select-watch-timing" class="watch-timing-select" aria-label="Select watch timing">
-                <option value="exact">Exact Date</option>
-                <option value="past_year">Watched Within the Past Year</option>
-                <option value="1_2_years">Watched 1–2 Years Ago</option>
-                <option value="2_5_years">Watched 2–5 Years Ago</option>
-                <option value="5_10_years">Watched 5–10 Years Ago</option>
-                <option value="over_10_years">Watched Over 10 Years Ago</option>
-                <option value="unknown">Date Unknown (Historical)</option>
-              </select>
-              <div class="watch-log-inputs" id="wrap-watch-date">
+              <div class="watch-log-inputs">
                 <input type="date" id="input-watch-date" class="watch-date-input" max="${new Date().toISOString().slice(0, 10)}">
+                <button type="button" class="btn btn-sm btn-ghost" id="btn-log-watch">Log Date</button>
               </div>
-              <button type="button" class="btn btn-sm btn-ghost" id="btn-log-watch" style="width:100%;margin-top:var(--s1)">Log Past Watch</button>
+              <div class="watch-bucket-buttons">
+                <button type="button" class="btn btn-watch-bucket" data-bucket="past_year">Past Year</button>
+                <button type="button" class="btn btn-watch-bucket" data-bucket="1_2_years">1–2 Years</button>
+                <button type="button" class="btn btn-watch-bucket" data-bucket="2_5_years">2–5 Years</button>
+                <button type="button" class="btn btn-watch-bucket" data-bucket="5_10_years">5–10 Years</button>
+                <button type="button" class="btn btn-watch-bucket" data-bucket="over_10_years">10+ Years</button>
+                <button type="button" class="btn btn-watch-bucket" data-bucket="unknown">Date Unknown</button>
+              </div>
             </div>
           `
               : ""
@@ -1379,21 +1417,8 @@
       });
 
       // Watch history listeners
-      const selectTiming = document.getElementById("select-watch-timing");
-      const wrapDate = document.getElementById("wrap-watch-date");
       const inputWatchDate = document.getElementById("input-watch-date");
       const btnLogWatch = document.getElementById("btn-log-watch");
-
-      selectTiming?.addEventListener("change", () => {
-        const mode = selectTiming.value;
-        if (mode === "exact") {
-          if (wrapDate) wrapDate.style.display = "flex";
-          if (btnLogWatch) btnLogWatch.textContent = "Log Past Date";
-        } else {
-          if (wrapDate) wrapDate.style.display = "none";
-          if (btnLogWatch) btnLogWatch.textContent = "Log Approximate Watch";
-        }
-      });
 
       document.getElementById("btn-watched-today")?.addEventListener("click", async () => {
         try {
@@ -1410,28 +1435,38 @@
       });
 
       btnLogWatch?.addEventListener("click", async () => {
-        const mode = selectTiming ? selectTiming.value : "exact";
-        let payload = {};
-        if (mode === "exact") {
-          const val = inputWatchDate?.value?.trim();
-          if (!val) {
-            toast("Please choose a date");
-            return;
-          }
-          payload = { watched_date: val };
-        } else {
-          payload = { date_bucket: mode };
+        const val = inputWatchDate?.value?.trim();
+        if (!val) {
+          toast("Please choose a date");
+          return;
         }
         try {
           await api(`${apiPrefix}/titles/${titleId}/watches`, {
             method: "POST",
-            body: payload,
+            body: { watched_date: val },
           });
-          toast("Watch logged!");
+          toast(`Logged watch date: ${val}`);
           await renderDetail(container, titleId);
         } catch (e) {
-          toast(e.message || "Failed to log watch");
+          toast(e.message || "Failed to log watch date");
         }
+      });
+
+      container.querySelectorAll(".btn-watch-bucket").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const bucket = btn.dataset.bucket;
+          const label = BUCKET_LABELS[bucket] || bucket;
+          try {
+            await api(`${apiPrefix}/titles/${titleId}/watches`, {
+              method: "POST",
+              body: { date_bucket: bucket },
+            });
+            toast(`Logged watch: ${label}`);
+            await renderDetail(container, titleId);
+          } catch (e) {
+            toast(e.message || "Failed to log watch");
+          }
+        });
       });
 
       container.querySelectorAll(".btn-delete-watch").forEach((btn) => {

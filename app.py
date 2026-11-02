@@ -16,7 +16,7 @@ Health:  /healthz          {ok, titles, copies}
 Environment (see /etc/conf.d/matinee and .env.example):
   PORT, DATA_DIR, CF_TEAM_DOMAIN, CF_AUD, ADMIN_EMAILS, LAN_EDIT, PUBLIC_VIEW, TMDB_READ_TOKEN, MATINEE_API_KEY
 """
-import datetime as dt, hashlib, hmac, json, os, re, sqlite3, unicodedata
+import datetime as dt, hashlib, hmac, json, os, re, sqlite3, sys, time, unicodedata
 import urllib.error, urllib.parse, urllib.request
 from functools import wraps
 from pathlib import Path
@@ -60,6 +60,7 @@ ADMIN_EMAILS = {e.strip().lower() for e in os.environ.get("ADMIN_EMAILS", "").sp
 LAN_EDIT = os.environ.get("LAN_EDIT", "1") == "1"
 PUBLIC_VIEW = os.environ.get("PUBLIC_VIEW", "1") == "1"
 MATINEE_API_KEY = os.environ.get("MATINEE_API_KEY", "").strip()
+OMDB_API_KEY = os.environ.get("OMDB_API_KEY", "").strip()
 TMDB_READ_TOKEN = os.environ.get("TMDB_READ_TOKEN", "").strip()
 TMDB_API = "https://api.themoviedb.org/3"
 TMDB_IMG = "https://image.tmdb.org/t/p"
@@ -112,7 +113,6 @@ CREATE TABLE IF NOT EXISTS copies (
   created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS copies_title ON copies(title_id);
-CREATE INDEX IF NOT EXISTS copies_location ON copies(location_id);
 CREATE TABLE IF NOT EXISTS upc_cache (
   upc TEXT PRIMARY KEY,
   raw_title TEXT,
@@ -142,8 +142,19 @@ CREATE TABLE IF NOT EXISTS watches (
 );
 CREATE INDEX IF NOT EXISTS watches_title_date ON watches(title_id, watched_date DESC);
 CREATE INDEX IF NOT EXISTS watches_date ON watches(watched_date DESC);
+
+CREATE TABLE IF NOT EXISTS omdb_ratings (
+  title_id INTEGER PRIMARY KEY REFERENCES titles(id) ON DELETE CASCADE,
+  imdb_id TEXT NOT NULL,
+  imdb_rating REAL,
+  imdb_votes INTEGER,
+  rotten_tomatoes_score INTEGER,
+  metacritic_score INTEGER,
+  fetched_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS omdb_ratings_fetched ON omdb_ratings(fetched_at);
 """
-SCHEMA_VERSION = "4"
+SCHEMA_VERSION = "5"
 
 # Checked in the app (not the schema) so a new format or service needs no table rebuild.
 FORMATS = {"physical": ["4K UHD", "Blu-ray", "3D Blu-ray", "DVD", "VHS"],
@@ -219,6 +230,17 @@ def migrate(con):
     );
     CREATE INDEX IF NOT EXISTS watches_title_date ON watches(title_id, watched_date DESC);
     CREATE INDEX IF NOT EXISTS watches_date ON watches(watched_date DESC);
+
+    CREATE TABLE IF NOT EXISTS omdb_ratings (
+      title_id INTEGER PRIMARY KEY REFERENCES titles(id) ON DELETE CASCADE,
+      imdb_id TEXT NOT NULL,
+      imdb_rating REAL,
+      imdb_votes INTEGER,
+      rotten_tomatoes_score INTEGER,
+      metacritic_score INTEGER,
+      fetched_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS omdb_ratings_fetched ON omdb_ratings(fetched_at);
     """)
 
     # Check copies table for location_id
@@ -246,6 +268,8 @@ def migrate(con):
             CREATE INDEX IF NOT EXISTS copies_location ON copies(location_id);
             """)
             con.execute("PRAGMA foreign_keys=ON")
+        else:
+            con.execute("CREATE INDEX IF NOT EXISTS copies_location ON copies(location_id)")
 
     has_watches = con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='watches'").fetchone()
     if has_watches:
@@ -695,6 +719,99 @@ def image_url(name, fetched_at):
     return f"/images/{name}?v={urllib.parse.quote(fetched_at or '')}" if name else None
 
 
+# ============================================================================== omdb
+def omdb_get(imdb_id):
+    """Fetch ratings from OMDb API for a given IMDb ID (e.g. 'tt0137523').
+    Returns None if unconfigured, missing, or on error.
+    Scores that are missing or 'N/A' on OMDb are returned as None.
+    """
+    if not OMDB_API_KEY or not imdb_id or not str(imdb_id).startswith("tt"):
+        return None
+    url = f"https://www.omdbapi.com/?apikey={urllib.parse.quote(OMDB_API_KEY)}&i={urllib.parse.quote(str(imdb_id))}"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=8) as r:
+            raw = r.read()
+            data = json.loads(raw.decode("utf-8") if isinstance(raw, bytes) else raw)
+    except Exception as e:
+        sys.stderr.write(f"OMDb error for {imdb_id}: {e}\n")
+        return None
+
+    if not isinstance(data, dict) or data.get("Response") == "False":
+        return None
+
+    imdb_rating = None
+    r_val = data.get("imdbRating")
+    if r_val and r_val != "N/A":
+        try:
+            imdb_rating = float(r_val)
+        except (ValueError, TypeError):
+            pass
+
+    imdb_votes = None
+    v_val = data.get("imdbVotes")
+    if v_val and v_val != "N/A":
+        try:
+            imdb_votes = int(str(v_val).replace(",", ""))
+        except (ValueError, TypeError):
+            pass
+
+    rotten_tomatoes = None
+    metacritic = None
+
+    ratings = data.get("Ratings") or []
+    if isinstance(ratings, list):
+        for item in ratings:
+            if not isinstance(item, dict):
+                continue
+            source = item.get("Source")
+            val = item.get("Value", "")
+            if source == "Rotten Tomatoes":
+                try:
+                    rotten_tomatoes = int(str(val).rstrip("%").strip())
+                except (ValueError, TypeError):
+                    pass
+            elif source == "Metacritic" and metacritic is None:
+                try:
+                    metacritic = int(str(val).split("/")[0].strip())
+                except (ValueError, TypeError):
+                    pass
+
+    if metacritic is None:
+        m_val = data.get("Metascore")
+        if m_val and m_val != "N/A":
+            try:
+                metacritic = int(str(m_val).strip())
+            except (ValueError, TypeError):
+                pass
+
+    return {
+        "imdb_rating": imdb_rating,
+        "imdb_votes": imdb_votes,
+        "rotten_tomatoes_score": rotten_tomatoes,
+        "metacritic_score": metacritic,
+    }
+
+
+def write_omdb_ratings(con, title_id, imdb_id, ratings):
+    """Write or update OMDb ratings for a title."""
+    if not ratings or not imdb_id:
+        return
+    now = dt.datetime.now(dt.timezone.utc).isoformat()
+    con.execute("""
+        INSERT INTO omdb_ratings (title_id, imdb_id, imdb_rating, imdb_votes, rotten_tomatoes_score, metacritic_score, fetched_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(title_id) DO UPDATE SET
+          imdb_id=excluded.imdb_id,
+          imdb_rating=excluded.imdb_rating,
+          imdb_votes=excluded.imdb_votes,
+          rotten_tomatoes_score=excluded.rotten_tomatoes_score,
+          metacritic_score=excluded.metacritic_score,
+          fetched_at=excluded.fetched_at
+    """, (title_id, imdb_id, ratings.get("imdb_rating"), ratings.get("imdb_votes"),
+          ratings.get("rotten_tomatoes_score"), ratings.get("metacritic_score"), now))
+
+
 # ======================================================================= serializers
 PRIVATE_COPY = ("added_by",)
 TITLE_COLS = ("tmdb_id", "imdb_id", "title", "sort_title", "search_text", "year", "release_date", "runtime",
@@ -841,6 +958,18 @@ def title_detail(title_id, private):
     d["watches"] = [dict(w) for w in watches]
     d["last_watched"] = watches[0]["watched_date"] if watches else None
     d["watch_count"] = len(watches)
+    omdb_row = con.execute("SELECT imdb_id, imdb_rating, imdb_votes, rotten_tomatoes_score, metacritic_score, fetched_at FROM omdb_ratings WHERE title_id=?", (title_id,)).fetchone()
+    if omdb_row:
+        d["omdb"] = {
+            "imdb_id": omdb_row["imdb_id"],
+            "imdb_rating": omdb_row["imdb_rating"],
+            "imdb_votes": omdb_row["imdb_votes"],
+            "rotten_tomatoes_score": omdb_row["rotten_tomatoes_score"],
+            "metacritic_score": omdb_row["metacritic_score"],
+            "fetched_at": omdb_row["fetched_at"],
+        }
+    else:
+        d["omdb"] = None
     return d
 
 
@@ -1286,11 +1415,11 @@ WATCH_BUCKET_OFFSETS = {
 }
 
 WATCH_BUCKET_LABELS = {
-    "past_year": "Within the Past Year",
-    "1_2_years": "1–2 Years Ago",
-    "2_5_years": "2–5 Years Ago",
-    "5_10_years": "5–10 Years Ago",
-    "over_10_years": "Over 10 Years Ago",
+    "past_year": "Past Year",
+    "1_2_years": "1–2 Years",
+    "2_5_years": "2–5 Years",
+    "5_10_years": "5–10 Years",
+    "over_10_years": "10+ Years",
     "unknown": "Date Unknown",
 }
 
@@ -1569,6 +1698,10 @@ def add_copy():
             files = fetch_images(t)
             row = con.execute("SELECT id FROM titles WHERE tmdb_id=?", (tmdb_id,)).fetchone()  # added meanwhile?
             title_id = row["id"] if row else write_title(con, t, files)
+            if t.get("imdb_id") and OMDB_API_KEY:
+                ratings = omdb_get(t["imdb_id"])
+                if ratings:
+                    write_omdb_ratings(con, title_id, t["imdb_id"], ratings)
     cid = con.execute("INSERT INTO copies(title_id, kind, format, service, location_id, added_by) VALUES (?,?,?,?,?,?)",
                       (title_id, vals["kind"], vals["format"], vals["service"], vals["location_id"], who())).lastrowid
     con.commit()
@@ -1641,13 +1774,20 @@ def add_watch(title_id):
     raw_bucket = clean(data.get("date_bucket"))
     date_bucket = None
     if raw_bucket:
-        normalized = raw_bucket.lower().replace("-", "_").replace(" ", "_").replace("–", "_")
+        normalized = raw_bucket.lower().replace("-", "_").replace(" ", "_").replace("–", "_").replace("+", "")
         for k in WATCH_BUCKET_LABELS:
-            if normalized in (k, WATCH_BUCKET_LABELS[k].lower().replace("-", "_").replace(" ", "_").replace("–", "_")):
+            clean_k = k.lower().replace("-", "_").replace(" ", "_").replace("–", "_").replace("+", "")
+            clean_lbl = WATCH_BUCKET_LABELS[k].lower().replace("-", "_").replace(" ", "_").replace("–", "_").replace("+", "")
+            if normalized in (clean_k, clean_lbl):
                 date_bucket = k
                 break
         if not date_bucket:
-            date_bucket = raw_bucket
+            if "10" in normalized:
+                date_bucket = "over_10_years"
+            elif "unknown" in normalized:
+                date_bucket = "unknown"
+            else:
+                date_bucket = raw_bucket
 
     watched_date = None
     if raw_date is not None and str(raw_date).strip():
@@ -1703,8 +1843,61 @@ def refresh_title(title_id):
         raise
     files = fetch_images(t)
     write_title(con, t, files, title_id)
+    if t.get("imdb_id") and OMDB_API_KEY:
+        ratings = omdb_get(t["imdb_id"])
+        if ratings:
+            write_omdb_ratings(con, title_id, t["imdb_id"], ratings)
     con.commit()
     return jsonify(title_detail(title_id, True))
+
+
+@app.post("/admin/api/refresh-ratings")
+@editor_required
+def batch_refresh_ratings():
+    if not OMDB_API_KEY:
+        abort(make_err(503, "OMDb is not configured yet: add OMDB_API_KEY to /etc/conf.d/matinee."))
+    data = request.get_json(silent=True) or {}
+    try:
+        limit = min(max(int(data.get("limit", 50)), 1), 200)
+    except (ValueError, TypeError):
+        limit = 50
+    try:
+        stale_days = max(int(data.get("stale_days", 180)), 1)
+    except (ValueError, TypeError):
+        stale_days = 180
+
+    stale_threshold = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=stale_days)).isoformat()
+    con = db()
+    rows = con.execute("""
+        SELECT t.id, t.imdb_id, t.title
+        FROM titles t
+        LEFT JOIN omdb_ratings r ON r.title_id = t.id
+        WHERE t.imdb_id IS NOT NULL AND t.imdb_id != ''
+          AND (r.fetched_at IS NULL OR r.fetched_at < ?)
+        ORDER BY COALESCE(r.fetched_at, '1970-01-01') ASC
+        LIMIT ?
+    """, (stale_threshold, limit)).fetchall()
+
+    refreshed = 0
+    errors = 0
+    skipped = 0
+
+    for r in rows:
+        title_id = r["id"]
+        imdb_id = r["imdb_id"]
+        try:
+            ratings = omdb_get(imdb_id)
+            if ratings:
+                write_omdb_ratings(con, title_id, imdb_id, ratings)
+                con.commit()
+                refreshed += 1
+            else:
+                skipped += 1
+        except Exception:
+            errors += 1
+        time.sleep(0.1)
+
+    return jsonify(ok=True, refreshed=refreshed, errors=errors, skipped=skipped)
 
 
 @app.delete("/admin/api/titles/<int:title_id>")

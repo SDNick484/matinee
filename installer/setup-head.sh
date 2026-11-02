@@ -20,7 +20,7 @@ command -v apk >/dev/null || { echo "This installer is for Alpine (apk)."; exit 
 if [ "${1:-}" = "--uninstall" ]; then
   rc-service matinee stop 2>/dev/null || true
   rc-update del matinee default 2>/dev/null || true
-  rm -f /etc/init.d/matinee /etc/periodic/daily/matinee-backup
+  rm -f /etc/init.d/matinee /etc/periodic/daily/matinee-backup /etc/periodic/daily/matinee-refresh
   rm -rf "$APP_DIR"
   echo "Removed app, service and backup job. Data kept in $DATA_DIR, config in $CONF, backups in /var/backups/matinee."
   exit 0
@@ -78,6 +78,7 @@ add_setting "$CONF" ADMIN_EMAILS "" "Only these emails may edit (comma separated
 add_setting "$CONF" LAN_EDIT 1 "1 = direct LAN requests (not through Cloudflare) may edit"
 add_setting "$CONF" PUBLIC_VIEW 1 "1 = anyone can browse the collection at /; 0 = everything behind /admin"
 add_setting "$CONF" TMDB_READ_TOKEN "" "TMDB API Read Access Token (themoviedb.org -> Settings -> API); adding movies needs it"
+add_setting "$CONF" OMDB_API_KEY "" "Optional OMDb API key (omdbapi.com/apikey.aspx) for IMDb, Rotten Tomatoes & Metacritic scores"
 add_setting "$CONF" MATINEE_API_KEY "" "Optional API key for headless automation and MCP server (Authorization: Bearer <key>)"
 chmod 640 "$CONF"; chown root:"$SVC_USER" "$CONF"
 
@@ -112,7 +113,7 @@ description="Matinee movie collection"
 : ${PORT:=8769}
 : ${DATA_DIR:=/var/lib/matinee}
 export HOME=/var/lib/matinee  # newer gunicorn keeps a small control socket under $HOME
-export PORT DATA_DIR CF_TEAM_DOMAIN CF_AUD ADMIN_EMAILS LAN_EDIT PUBLIC_VIEW TMDB_READ_TOKEN MATINEE_API_KEY
+export PORT DATA_DIR CF_TEAM_DOMAIN CF_AUD ADMIN_EMAILS LAN_EDIT PUBLIC_VIEW TMDB_READ_TOKEN MATINEE_API_KEY OMDB_API_KEY
 supervisor="supervise-daemon"
 respawn_delay=5
 respawn_max=10
@@ -125,10 +126,11 @@ start_pre() { checkpath -f -o matinee /var/log/matinee.log; }
 EOF
 chmod +x /etc/init.d/matinee
 
-# ---------------------------------------------------------------- backups
-echo "==> Installing nightly backup"
+# ---------------------------------------------------------------- backups & maintenance
+echo "==> Installing nightly backup and maintenance jobs"
 mkdir -p /etc/periodic/daily
 install -m 755 "$APP_DIR/ops/matinee-backup" /etc/periodic/daily/matinee-backup
+install -m 755 "$APP_DIR/ops/matinee-refresh" /etc/periodic/daily/matinee-refresh
 rc-update add crond default >/dev/null 2>&1 || true
 rc-service crond start >/dev/null 2>&1 || true
 
