@@ -1851,6 +1851,54 @@ def refresh_title(title_id):
     return jsonify(title_detail(title_id, True))
 
 
+@app.post("/admin/api/refresh-ratings")
+@editor_required
+def batch_refresh_ratings():
+    if not OMDB_API_KEY:
+        abort(make_err(503, "OMDb is not configured yet: add OMDB_API_KEY to /etc/conf.d/matinee."))
+    data = request.get_json(silent=True) or {}
+    try:
+        limit = min(max(int(data.get("limit", 50)), 1), 200)
+    except (ValueError, TypeError):
+        limit = 50
+    try:
+        stale_days = max(int(data.get("stale_days", 180)), 1)
+    except (ValueError, TypeError):
+        stale_days = 180
+
+    stale_threshold = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=stale_days)).isoformat()
+    con = db()
+    rows = con.execute("""
+        SELECT t.id, t.imdb_id, t.title
+        FROM titles t
+        LEFT JOIN omdb_ratings r ON r.title_id = t.id
+        WHERE t.imdb_id IS NOT NULL AND t.imdb_id != ''
+          AND (r.fetched_at IS NULL OR r.fetched_at < ?)
+        ORDER BY COALESCE(r.fetched_at, '1970-01-01') ASC
+        LIMIT ?
+    """, (stale_threshold, limit)).fetchall()
+
+    refreshed = 0
+    errors = 0
+    skipped = 0
+
+    for r in rows:
+        title_id = r["id"]
+        imdb_id = r["imdb_id"]
+        try:
+            ratings = omdb_get(imdb_id)
+            if ratings:
+                write_omdb_ratings(con, title_id, imdb_id, ratings)
+                refreshed += 1
+            else:
+                skipped += 1
+        except Exception:
+            errors += 1
+
+    con.commit()
+    return jsonify(ok=True, refreshed=refreshed, errors=errors, skipped=skipped)
+
+
 @app.delete("/admin/api/titles/<int:title_id>")
 @editor_required
 def delete_title(title_id):

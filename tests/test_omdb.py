@@ -178,3 +178,72 @@ def test_refresh_title_updates_omdb(client, monkeypatch):
     assert t["omdb"] is not None
     assert t["omdb"]["imdb_rating"] == 8.8
     assert t["omdb"]["rotten_tomatoes_score"] == 87
+
+def test_batch_refresh_ratings_api(client, monkeypatch):
+    monkeypatch.setattr(matinee_app, "OMDB_API_KEY", "test_key")
+    con = matinee_app.connect()
+    con.execute("INSERT INTO titles (id, tmdb_id, imdb_id, title, sort_title, search_text, fetched_at) VALUES (1, 101, 'tt001', 'Movie 1', 'movie 1', 'movie 1', '2026-01-01')")
+    con.execute("INSERT INTO titles (id, tmdb_id, imdb_id, title, sort_title, search_text, fetched_at) VALUES (2, 102, 'tt002', 'Movie 2', 'movie 2', 'movie 2', '2026-01-01')")
+    con.commit()
+    con.close()
+
+    monkeypatch.setattr(matinee_app, "omdb_get", lambda imdb_id: {
+        "imdb_rating": 8.0, "imdb_votes": 1000, "rotten_tomatoes_score": 80, "metacritic_score": 70
+    })
+
+    res = client.post("/admin/api/refresh-ratings", json={"limit": 5})
+    assert res.status_code == 200
+    data = res.get_json()
+    assert data["ok"] is True
+    assert data["refreshed"] == 2
+
+    # Verify rows written to DB
+    con = matinee_app.connect()
+    rows = con.execute("SELECT * FROM omdb_ratings").fetchall()
+    assert len(rows) == 2
+    con.close()
+
+def test_refresh_ratings_cli(tmp_path, monkeypatch):
+    import ops.refresh_ratings as refresh_cli
+    db_file = tmp_path / "test.db"
+    con = sqlite3.connect(db_file)
+    con.executescript("""
+    CREATE TABLE meta (k TEXT PRIMARY KEY, v TEXT);
+    INSERT INTO meta VALUES ('schema', '5');
+    CREATE TABLE titles (
+      id INTEGER PRIMARY KEY,
+      tmdb_id INTEGER NOT NULL UNIQUE,
+      imdb_id TEXT,
+      title TEXT NOT NULL,
+      sort_title TEXT NOT NULL,
+      search_text TEXT NOT NULL,
+      fetched_at TEXT NOT NULL
+    );
+    INSERT INTO titles (id, tmdb_id, imdb_id, title, sort_title, search_text, fetched_at)
+      VALUES (1, 550, 'tt0137523', 'Fight Club', 'fight club', 'fight club', '2026-01-01');
+    CREATE TABLE omdb_ratings (
+      title_id INTEGER PRIMARY KEY,
+      imdb_id TEXT NOT NULL,
+      imdb_rating REAL,
+      imdb_votes INTEGER,
+      rotten_tomatoes_score INTEGER,
+      metacritic_score INTEGER,
+      fetched_at TEXT NOT NULL
+    );
+    """)
+    con.commit()
+    con.close()
+
+    monkeypatch.setattr(matinee_app, "OMDB_API_KEY", "test_key")
+    monkeypatch.setattr(matinee_app, "omdb_get", lambda imdb_id: {
+        "imdb_rating": 8.8, "imdb_votes": 2000000, "rotten_tomatoes_score": 80, "metacritic_score": 66
+    })
+
+    monkeypatch.setattr("sys.argv", ["refresh_ratings.py", "--db-path", str(db_file), "--delay", "0"])
+    ret = refresh_cli.main()
+    assert ret == 0
+
+    con = sqlite3.connect(db_file)
+    row = con.execute("SELECT imdb_rating, rotten_tomatoes_score FROM omdb_ratings WHERE title_id=1").fetchone()
+    assert row == (8.8, 80)
+    con.close()

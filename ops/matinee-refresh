@@ -1,0 +1,13 @@
+#!/bin/sh
+# Daily refresh of external movie ratings (OMDb / IMDb, Rotten Tomatoes, Metacritic).
+# Runs from /etc/periodic/daily.
+# Config: /etc/conf.d/matinee
+# Log: /var/log/ops.log
+
+set -u
+CONF=/etc/conf.d/matinee
+[ -f "$CONF" ] && . "$CONF"
+
+if [ -n "${OMDB_API_KEY:-}" ]; then
+  python3 /opt/matinee/ops/refresh_ratings.py --limit 50 >> /var/log/ops.log 2>&1 || true
+fi
