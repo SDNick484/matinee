@@ -1620,3 +1620,121 @@ main#view {
   transform: translateX(-50%) translateY(0);
   opacity: 1;
 }
+
+/* Movie Night Picker */
+.movie-night-dialog {
+  max-width: 520px;
+}
+.movie-night-tabs {
+  display: flex;
+  gap: var(--s2);
+  flex-wrap: wrap;
+  margin-bottom: var(--s2);
+}
+.movie-night-tab {
+  padding: 6px 12px;
+  border-radius: 9999px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  color: var(--ink-2);
+  cursor: pointer;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  transition: all 0.15s ease;
+}
+.movie-night-tab:hover {
+  color: var(--ink);
+  border-color: var(--ink-3);
+}
+.movie-night-tab.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+.movie-night-content {
+  min-height: 180px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.movie-night-card {
+  display: flex;
+  gap: var(--s4);
+  width: 100%;
+  align-items: flex-start;
+}
+.movie-night-poster {
+  width: 100px;
+  height: 150px;
+  border-radius: var(--r-card);
+  object-fit: cover;
+  flex-shrink: 0;
+  box-shadow: var(--shadow);
+}
+.movie-night-poster.placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--line);
+  color: var(--ink-2);
+  font-size: var(--fs-xs);
+  text-align: center;
+}
+.movie-night-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.movie-night-title-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: var(--s2);
+}
+.movie-night-title {
+  margin: 0;
+  font-size: var(--fs-md);
+  font-weight: 700;
+  line-height: 1.3;
+}
+.movie-night-score {
+  font-weight: 700;
+  color: #f59e0b;
+  background: rgba(245, 158, 11, 0.15);
+  padding: 2px 8px;
+  border-radius: 9999px;
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+.movie-night-meta {
+  font-size: var(--fs-xs);
+  color: var(--ink-2);
+}
+.movie-night-reason {
+  margin-top: 6px;
+  padding: 8px 12px;
+  background: rgba(56, 189, 248, 0.1);
+  border-left: 3px solid var(--accent);
+  border-radius: 4px;
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  color: var(--ink);
+}
+.movie-night-genres {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.movie-night-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--s2);
+  margin-top: var(--s3);
+}
+.movie-night-loading, .movie-night-empty {
+  text-align: center;
+  color: var(--ink-2);
+  padding: var(--s4) 0;
+  font-size: var(--fs-sm);
+}

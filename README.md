@@ -116,6 +116,18 @@ rc-service matinee restart
 
 ---
 
+## Model Context Protocol (MCP) & Headless API
+
+Matinee includes an official Python **Model Context Protocol (MCP)** server (`mcp_server.py`) and headless API token authentication for AI assistants like Claude Desktop and Antigravity:
+
+- **Headless Auth**: Configure `MATINEE_API_KEY` to grant write permissions to external scripts, assistants, and automations.
+- **Recommendation Engine**: Discovers "Forgotten Gems" ($\ge 8.0$ rating, unviewed in $> 12$ months), unwatched backlog titles, and quick weeknight picks.
+- **Read & Write MCP Tools**: Search collection, fetch full title details, query recommendations, log watches with notes, set personal 0.0–10.0 ratings, and import movies from TMDB.
+
+See [docs/mcp-setup.md](docs/mcp-setup.md) for full configuration blocks and prompt workflows.
+
+---
+
 ## Development
 
 Run locally:
