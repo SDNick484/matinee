@@ -793,6 +793,25 @@ def omdb_get(imdb_id):
     }
 
 
+def write_omdb_ratings(con, title_id, imdb_id, ratings):
+    """Write or update OMDb ratings for a title."""
+    if not ratings or not imdb_id:
+        return
+    now = dt.datetime.now(dt.timezone.utc).isoformat()
+    con.execute("""
+        INSERT INTO omdb_ratings (title_id, imdb_id, imdb_rating, imdb_votes, rotten_tomatoes_score, metacritic_score, fetched_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(title_id) DO UPDATE SET
+          imdb_id=excluded.imdb_id,
+          imdb_rating=excluded.imdb_rating,
+          imdb_votes=excluded.imdb_votes,
+          rotten_tomatoes_score=excluded.rotten_tomatoes_score,
+          metacritic_score=excluded.metacritic_score,
+          fetched_at=excluded.fetched_at
+    """, (title_id, imdb_id, ratings.get("imdb_rating"), ratings.get("imdb_votes"),
+          ratings.get("rotten_tomatoes_score"), ratings.get("metacritic_score"), now))
+
+
 # ======================================================================= serializers
 PRIVATE_COPY = ("added_by",)
 TITLE_COLS = ("tmdb_id", "imdb_id", "title", "sort_title", "search_text", "year", "release_date", "runtime",
@@ -939,6 +958,18 @@ def title_detail(title_id, private):
     d["watches"] = [dict(w) for w in watches]
     d["last_watched"] = watches[0]["watched_date"] if watches else None
     d["watch_count"] = len(watches)
+    omdb_row = con.execute("SELECT imdb_id, imdb_rating, imdb_votes, rotten_tomatoes_score, metacritic_score, fetched_at FROM omdb_ratings WHERE title_id=?", (title_id,)).fetchone()
+    if omdb_row:
+        d["omdb"] = {
+            "imdb_id": omdb_row["imdb_id"],
+            "imdb_rating": omdb_row["imdb_rating"],
+            "imdb_votes": omdb_row["imdb_votes"],
+            "rotten_tomatoes_score": omdb_row["rotten_tomatoes_score"],
+            "metacritic_score": omdb_row["metacritic_score"],
+            "fetched_at": omdb_row["fetched_at"],
+        }
+    else:
+        d["omdb"] = None
     return d
 
 
@@ -1667,6 +1698,10 @@ def add_copy():
             files = fetch_images(t)
             row = con.execute("SELECT id FROM titles WHERE tmdb_id=?", (tmdb_id,)).fetchone()  # added meanwhile?
             title_id = row["id"] if row else write_title(con, t, files)
+            if t.get("imdb_id") and OMDB_API_KEY:
+                ratings = omdb_get(t["imdb_id"])
+                if ratings:
+                    write_omdb_ratings(con, title_id, t["imdb_id"], ratings)
     cid = con.execute("INSERT INTO copies(title_id, kind, format, service, location_id, added_by) VALUES (?,?,?,?,?,?)",
                       (title_id, vals["kind"], vals["format"], vals["service"], vals["location_id"], who())).lastrowid
     con.commit()
@@ -1808,6 +1843,10 @@ def refresh_title(title_id):
         raise
     files = fetch_images(t)
     write_title(con, t, files, title_id)
+    if t.get("imdb_id") and OMDB_API_KEY:
+        ratings = omdb_get(t["imdb_id"])
+        if ratings:
+            write_omdb_ratings(con, title_id, t["imdb_id"], ratings)
     con.commit()
     return jsonify(title_detail(title_id, True))
 

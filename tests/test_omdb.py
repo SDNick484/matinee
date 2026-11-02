@@ -123,3 +123,58 @@ def test_omdb_get_na_and_missing(monkeypatch):
 def test_omdb_get_no_key_returns_none(monkeypatch):
     monkeypatch.setattr(matinee_app, "OMDB_API_KEY", "")
     assert matinee_app.omdb_get("tt1375666") is None
+
+@pytest.fixture
+def client(tmp_path, monkeypatch):
+    db_file = tmp_path / "test.db"
+    monkeypatch.setattr("app.DB_PATH", db_file)
+    monkeypatch.setattr("app.DATA_DIR", tmp_path)
+    monkeypatch.setattr("app.IMAGE_DIR", tmp_path / "images")
+    monkeypatch.setattr("app.LAN_EDIT", True)
+    monkeypatch.setattr("app.PUBLIC_VIEW", True)
+    monkeypatch.setattr("app._standalone_db", None)
+    matinee_app.init_db()
+    with matinee_app.app.test_client() as c:
+        yield c
+
+def test_title_detail_includes_omdb(client):
+    con = matinee_app.connect()
+    con.execute("INSERT INTO titles (id, tmdb_id, imdb_id, title, sort_title, search_text, fetched_at) VALUES (1, 100, 'tt1375666', 'Inception', 'inception', 'inception', '2026-01-01')")
+    con.execute("INSERT INTO copies (id, title_id, kind, format) VALUES (1, 1, 'physical', '4K UHD')")
+    con.execute("INSERT INTO omdb_ratings (title_id, imdb_id, imdb_rating, imdb_votes, rotten_tomatoes_score, metacritic_score, fetched_at) VALUES (1, 'tt1375666', 8.8, 2500000, 87, 74, '2026-01-01T00:00:00')")
+    con.commit()
+    con.close()
+
+    res = client.get("/api/titles/1")
+    assert res.status_code == 200
+    t = res.get_json()
+    assert "omdb" in t
+    assert t["omdb"]["imdb_rating"] == 8.8
+    assert t["omdb"]["rotten_tomatoes_score"] == 87
+    assert t["omdb"]["metacritic_score"] == 74
+
+def test_refresh_title_updates_omdb(client, monkeypatch):
+    monkeypatch.setattr(matinee_app, "OMDB_API_KEY", "test_key")
+    con = matinee_app.connect()
+    con.execute("INSERT INTO titles (id, tmdb_id, imdb_id, title, sort_title, search_text, fetched_at) VALUES (1, 100, 'tt1375666', 'Inception', 'inception', 'inception', '2026-01-01')")
+    con.execute("INSERT INTO copies (id, title_id, kind, format) VALUES (1, 1, 'physical', '4K UHD')")
+    con.commit()
+    con.close()
+
+    monkeypatch.setattr(matinee_app, "tmdb_details", lambda tmdb_id: {
+        "id": 100, "imdb_id": "tt1375666", "title": "Inception", "year": 2010,
+        "release_date": "2010-07-16", "runtime": 148, "overview": "Dreams",
+        "genres": [], "certification": "PG-13", "tmdb_vote": 8.4, "tmdb_votes": 35000,
+        "collection": None, "poster_path": None, "backdrop_path": None
+    })
+    monkeypatch.setattr(matinee_app, "fetch_images", lambda t: {"poster_file": None, "backdrop_file": None})
+    monkeypatch.setattr(matinee_app, "omdb_get", lambda imdb_id: {
+        "imdb_rating": 8.8, "imdb_votes": 2560000, "rotten_tomatoes_score": 87, "metacritic_score": 74
+    })
+
+    res = client.post("/admin/api/titles/1/refresh")
+    assert res.status_code == 200
+    t = res.get_json()
+    assert t["omdb"] is not None
+    assert t["omdb"]["imdb_rating"] == 8.8
+    assert t["omdb"]["rotten_tomatoes_score"] == 87
