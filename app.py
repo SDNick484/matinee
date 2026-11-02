@@ -16,7 +16,7 @@ Health:  /healthz          {ok, titles, copies}
 Environment (see /etc/conf.d/matinee and .env.example):
   PORT, DATA_DIR, CF_TEAM_DOMAIN, CF_AUD, ADMIN_EMAILS, LAN_EDIT, PUBLIC_VIEW, TMDB_READ_TOKEN, MATINEE_API_KEY
 """
-import datetime as dt, hashlib, hmac, json, os, re, sqlite3, unicodedata
+import datetime as dt, hashlib, hmac, json, os, re, sqlite3, sys, unicodedata
 import urllib.error, urllib.parse, urllib.request
 from functools import wraps
 from pathlib import Path
@@ -60,6 +60,7 @@ ADMIN_EMAILS = {e.strip().lower() for e in os.environ.get("ADMIN_EMAILS", "").sp
 LAN_EDIT = os.environ.get("LAN_EDIT", "1") == "1"
 PUBLIC_VIEW = os.environ.get("PUBLIC_VIEW", "1") == "1"
 MATINEE_API_KEY = os.environ.get("MATINEE_API_KEY", "").strip()
+OMDB_API_KEY = os.environ.get("OMDB_API_KEY", "").strip()
 TMDB_READ_TOKEN = os.environ.get("TMDB_READ_TOKEN", "").strip()
 TMDB_API = "https://api.themoviedb.org/3"
 TMDB_IMG = "https://image.tmdb.org/t/p"
@@ -141,8 +142,19 @@ CREATE TABLE IF NOT EXISTS watches (
 );
 CREATE INDEX IF NOT EXISTS watches_title_date ON watches(title_id, watched_date DESC);
 CREATE INDEX IF NOT EXISTS watches_date ON watches(watched_date DESC);
+
+CREATE TABLE IF NOT EXISTS omdb_ratings (
+  title_id INTEGER PRIMARY KEY REFERENCES titles(id) ON DELETE CASCADE,
+  imdb_id TEXT NOT NULL,
+  imdb_rating REAL,
+  imdb_votes INTEGER,
+  rotten_tomatoes_score INTEGER,
+  metacritic_score INTEGER,
+  fetched_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS omdb_ratings_fetched ON omdb_ratings(fetched_at);
 """
-SCHEMA_VERSION = "4"
+SCHEMA_VERSION = "5"
 
 # Checked in the app (not the schema) so a new format or service needs no table rebuild.
 FORMATS = {"physical": ["4K UHD", "Blu-ray", "3D Blu-ray", "DVD", "VHS"],
@@ -218,6 +230,17 @@ def migrate(con):
     );
     CREATE INDEX IF NOT EXISTS watches_title_date ON watches(title_id, watched_date DESC);
     CREATE INDEX IF NOT EXISTS watches_date ON watches(watched_date DESC);
+
+    CREATE TABLE IF NOT EXISTS omdb_ratings (
+      title_id INTEGER PRIMARY KEY REFERENCES titles(id) ON DELETE CASCADE,
+      imdb_id TEXT NOT NULL,
+      imdb_rating REAL,
+      imdb_votes INTEGER,
+      rotten_tomatoes_score INTEGER,
+      metacritic_score INTEGER,
+      fetched_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS omdb_ratings_fetched ON omdb_ratings(fetched_at);
     """)
 
     # Check copies table for location_id
@@ -694,6 +717,80 @@ def delete_images(tmdb_id):
 
 def image_url(name, fetched_at):
     return f"/images/{name}?v={urllib.parse.quote(fetched_at or '')}" if name else None
+
+
+# ============================================================================== omdb
+def omdb_get(imdb_id):
+    """Fetch ratings from OMDb API for a given IMDb ID (e.g. 'tt0137523').
+    Returns None if unconfigured, missing, or on error.
+    Scores that are missing or 'N/A' on OMDb are returned as None.
+    """
+    if not OMDB_API_KEY or not imdb_id or not str(imdb_id).startswith("tt"):
+        return None
+    url = f"https://www.omdbapi.com/?apikey={urllib.parse.quote(OMDB_API_KEY)}&i={urllib.parse.quote(str(imdb_id))}"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=8) as r:
+            raw = r.read()
+            data = json.loads(raw.decode("utf-8") if isinstance(raw, bytes) else raw)
+    except Exception as e:
+        sys.stderr.write(f"OMDb error for {imdb_id}: {e}\n")
+        return None
+
+    if not isinstance(data, dict) or data.get("Response") == "False":
+        return None
+
+    imdb_rating = None
+    r_val = data.get("imdbRating")
+    if r_val and r_val != "N/A":
+        try:
+            imdb_rating = float(r_val)
+        except (ValueError, TypeError):
+            pass
+
+    imdb_votes = None
+    v_val = data.get("imdbVotes")
+    if v_val and v_val != "N/A":
+        try:
+            imdb_votes = int(str(v_val).replace(",", ""))
+        except (ValueError, TypeError):
+            pass
+
+    rotten_tomatoes = None
+    metacritic = None
+
+    ratings = data.get("Ratings") or []
+    if isinstance(ratings, list):
+        for item in ratings:
+            if not isinstance(item, dict):
+                continue
+            source = item.get("Source")
+            val = item.get("Value", "")
+            if source == "Rotten Tomatoes":
+                try:
+                    rotten_tomatoes = int(str(val).rstrip("%").strip())
+                except (ValueError, TypeError):
+                    pass
+            elif source == "Metacritic" and metacritic is None:
+                try:
+                    metacritic = int(str(val).split("/")[0].strip())
+                except (ValueError, TypeError):
+                    pass
+
+    if metacritic is None:
+        m_val = data.get("Metascore")
+        if m_val and m_val != "N/A":
+            try:
+                metacritic = int(str(m_val).strip())
+            except (ValueError, TypeError):
+                pass
+
+    return {
+        "imdb_rating": imdb_rating,
+        "imdb_votes": imdb_votes,
+        "rotten_tomatoes_score": rotten_tomatoes,
+        "metacritic_score": metacritic,
+    }
 
 
 # ======================================================================= serializers
