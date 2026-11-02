@@ -71,3 +71,99 @@ def test_location_tree_and_breadcrumbs(client):
     descendants_cab = get_descendant_location_ids(con, 2)
     assert descendants_cab == {2, 3, 4}
     con.close()
+
+def test_location_crud_api(client):
+    # Create root location
+    res = client.post("/admin/api/locations", json={"name": "Family Room", "sort_order": 1})
+    assert res.status_code == 201
+    loc1 = res.get_json()["location"]
+    assert loc1["name"] == "Family Room"
+    assert loc1["path"] == "Family Room"
+
+    # Create child location
+    res = client.post("/admin/api/locations", json={"name": "Shelf A", "parent_id": loc1["id"]})
+    assert res.status_code == 201
+    loc2 = res.get_json()["location"]
+    assert loc2["path"] == "Family Room › Shelf A"
+
+    # Read locations
+    res = client.get("/api/locations")
+    assert res.status_code == 200
+    data = res.get_json()
+    assert len(data["locations"]) == 2
+
+    # Update location
+    res = client.put(f"/admin/api/locations/{loc2['id']}", json={"name": "Shelf 1"})
+    assert res.status_code == 200
+    assert res.get_json()["location"]["path"] == "Family Room › Shelf 1"
+
+    # Cycle prevention: cannot set loc1 parent to loc2
+    res = client.put(f"/admin/api/locations/{loc1['id']}", json={"parent_id": loc2["id"]})
+    assert res.status_code == 400
+
+    # Delete location
+    res = client.delete(f"/admin/api/locations/{loc2['id']}")
+    assert res.status_code == 200
+    assert res.get_json()["deleted_id"] == loc2["id"]
+
+def test_copy_location_assignment(client):
+    # Setup title
+    con = connect()
+    con.execute("INSERT INTO titles (id, tmdb_id, title, sort_title, search_text, fetched_at) VALUES (1, 550, 'Fight Club', 'fight club', 'fight club', '2026-01-01')")
+    con.execute("INSERT INTO locations (id, name) VALUES (10, 'Living Room')")
+    con.commit()
+    con.close()
+
+    # Add physical copy with location
+    res = client.post("/admin/api/copies", json={
+        "title_id": 1,
+        "kind": "physical",
+        "format": "Blu-ray",
+        "location_id": 10
+    })
+    assert res.status_code == 201
+    copy = res.get_json()["copies"][0]
+    assert copy["location_id"] == 10
+    assert copy["location_path"] == "Living Room"
+
+    # Reject digital copy with location
+    res = client.post("/admin/api/copies", json={
+        "title_id": 1,
+        "kind": "digital",
+        "format": "Digital HD",
+        "service": "Apple TV",
+        "location_id": 10
+    })
+    assert res.status_code == 400
+
+def test_hierarchical_titles_filter(client):
+    con = connect()
+    con.execute("INSERT INTO titles (id, tmdb_id, title, sort_title, search_text, fetched_at) VALUES (1, 101, 'Alien', 'alien', 'alien', '2026-01-01')")
+    con.execute("INSERT INTO titles (id, tmdb_id, title, sort_title, search_text, fetched_at) VALUES (2, 102, 'Aliens', 'aliens', 'aliens', '2026-01-01')")
+    con.execute("INSERT INTO locations (id, parent_id, name) VALUES (1, NULL, 'Basement')")
+    con.execute("INSERT INTO locations (id, parent_id, name) VALUES (2, 1, 'Bin 3')")
+    con.execute("INSERT INTO copies (id, title_id, kind, format, location_id) VALUES (1, 1, 'physical', '4K UHD', 2)")
+    con.commit()
+    con.close()
+
+    # Query parent location: should find Alien because Bin 3 is a child of Basement
+    res = client.get("/api/titles?location_id=1")
+    assert res.status_code == 200
+    titles = res.get_json()["titles"]
+    assert len(titles) == 1
+    assert titles[0]["title"] == "Alien"
+
+def test_watch_date_buckets_estimation(client):
+    con = connect()
+    con.execute("INSERT INTO titles (id, tmdb_id, title, sort_title, search_text, fetched_at) VALUES (1, 101, 'Alien', 'alien', 'alien', '2026-01-01')")
+    con.commit()
+    con.close()
+
+    # Log watch with bucket
+    res = client.post("/admin/api/titles/1/watches", json={"date_bucket": "5_10_years"})
+    assert res.status_code == 200
+    w = res.get_json()["watch"]
+    assert w["date_bucket"] == "5_10_years"
+    assert w["watched_date"] is not None  # Estimated date set
+    # Should be roughly 7.5 years ago (around 2018-2019)
+    assert int(w["watched_date"][:4]) <= 2020
