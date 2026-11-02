@@ -10,7 +10,7 @@
 
 Matinee is a phone-first, self-hosted family movie collection tracker. A primary use case for family members and AI assistants is answering *"Where is our copy of Inception?"* or *"What 4K discs are on the shelf in the Family Room?"*
 
-Currently, Matinee tracks physical copies (`4K UHD`, `Blu-ray`, `DVD`, `VHS`), but has no model for where those physical discs physically reside. This specification introduces:
+Currently, Matinee tracks physical copies (`4K UHD`, `Blu-ray`, `DVD`, `VHS`), but has no model for where those physical discs physically reside. In addition, when logging watch history for older titles, users often remember a rough timeframe rather than an exact calendar date. This specification introduces:
 1. Hierarchical storage locations (e.g. `Family Room › Media Cabinet › Shelf 2` or `Garage › Bin 4`).
 2. Location associations on physical copies.
 3. Complete CRUD management APIs for locations and location-aware copy updates.
@@ -20,6 +20,7 @@ Currently, Matinee tracks physical copies (`4K UHD`, `Blu-ray`, `DVD`, `VHS`), b
    - Hierarchical collection filtering by location (matching a parent location matches items in child shelves/bins).
    - Admin management interface for adding, renaming, and removing shelves and bins.
 5. FastMCP server `where_is(title: str)` tool to query physical storage locations (or digital service names) via AI agents.
+6. Approximate past watch date buckets ("Within the Past Year", "1–2 Years Ago", "2–5 Years Ago", "5–10 Years Ago", "Over 10 Years Ago") storing an estimated anchor date for sorting and recommender recency while preserving human-friendly bucket display.
 
 ---
 
@@ -103,6 +104,16 @@ CREATE TABLE IF NOT EXISTS copies (
 );
 CREATE INDEX IF NOT EXISTS copies_title ON copies(title_id);
 CREATE INDEX IF NOT EXISTS copies_location ON copies(location_id);
+CREATE TABLE IF NOT EXISTS watches (
+  id INTEGER PRIMARY KEY,
+  title_id INTEGER NOT NULL REFERENCES titles(id) ON DELETE CASCADE,
+  watched_date TEXT,
+  notes TEXT,
+  date_bucket TEXT,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS watches_title_date ON watches(title_id, watched_date DESC);
+CREATE INDEX IF NOT EXISTS watches_date ON watches(watched_date DESC);
 ```
 
 #### Migration Pattern (`SCHEMA_VERSION = "4"`)
@@ -117,6 +128,9 @@ In `migrate(con)`:
    - Rename `copies_new` to `copies`.
    - Recreate indexes `copies_title` and `copies_location`.
    - `PRAGMA foreign_keys=ON;`
+4. Check `PRAGMA table_info(watches)`.
+   - If `"date_bucket" not in cols`:
+     - `ALTER TABLE watches ADD COLUMN date_bucket TEXT;`
 
 ### 4.2 Hierarchy Resolution & Helpers (`app.py`)
 
@@ -206,6 +220,26 @@ In `migrate(con)`:
     - Digital: `service` (e.g. `"Apple TV"`, `"Movies Anywhere"`).
     - Formatted summary string for easy display in chat.
   - Implemented in both direct SQLite mode and REST API client mode in `MatineeClient`.
+
+### 4.6 Approximate Past Watch Date Buckets
+
+- **Supported Buckets & Estimated Offsets**:
+  - `past_year`: "Within the Past Year" (~6 months ago: `today - 180 days`)
+  - `1_2_years`: "1–2 Years Ago" (~1.5 years ago: `today - 548 days`)
+  - `2_5_years`: "2–5 Years Ago" (~3.5 years ago: `today - 1278 days`)
+  - `5_10_years`: "5–10 Years Ago" (~7.5 years ago: `today - 2738 days`)
+  - `over_10_years`: "Over 10 Years Ago" (~12 years ago: `today - 4380 days`)
+  - `unknown`: "Date Unknown" (`watched_date = NULL`)
+- **API**:
+  - `POST /admin/api/titles/<title_id>/watches`:
+    - Accepts `{"date_bucket": "5_10_years"}` or `{"date_bucket": "Watched 5–10 Years Ago"}` or `{"watched_date": "YYYY-MM-DD"}`.
+    - If `date_bucket` is provided and no explicit `watched_date` is given, automatically computes and stores the estimated anchor date in `watched_date`.
+    - Returns `{"ok": True, "watch": {"id": ..., "title_id": ..., "watched_date": ..., "date_bucket": ..., "notes": ...}}`.
+- **UI**:
+  - Logging form offers a timing selector: "Exact Date", "Within the Past Year", "1–2 Years Ago", "2–5 Years Ago", "5–10 Years Ago", "Over 10 Years Ago", or "Date Unknown".
+  - Watch list item displays: `📅 Watched 5–10 Years Ago <span class="badge badge-subtle">Estimated</span>`.
+- **Recommendations & Sorting**:
+  - Because `watched_date` is populated with the estimated date, sorting by `last_watched` naturally places more recent buckets ahead of older ones, and `forgotten_gems` filters (> 1 year ago) cleanly include older buckets without requiring complex SQL changes.
 
 ---
 

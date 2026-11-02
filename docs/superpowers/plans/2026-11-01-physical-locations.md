@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Implement physical locations and shelving hierarchy ("Where is it?") across the SQLite database, REST API, Web UI, and FastMCP server.
+**Goal:** Implement physical locations and shelving hierarchy ("Where is it?") across the SQLite database, REST API, Web UI, and FastMCP server, along with approximate watch date buckets ("Within the Past Year", "1–2 Years Ago", "2–5 Years Ago", "5–10 Years Ago", "Over 10 Years Ago") with estimated dates for chronological sorting and recommendation recency.
 
-**Architecture:** Add a self-referencing `locations` table and `copies.location_id` column with `ON DELETE SET NULL` via SQLite table recreation migration. Compute cycle-safe breadcrumb paths and descendant filtering in Python. Enhance Vanilla JS frontend with location chips, copy modal location select, admin location manager modal, and grid location filter. Expose `where_is(title)` in FastMCP server.
+**Architecture:** Add a self-referencing `locations` table and `copies.location_id` column with `ON DELETE SET NULL` via SQLite table recreation migration. Add `watches.date_bucket` column via migration. Compute cycle-safe breadcrumb paths and descendant filtering in Python. Support approximate date bucket resolution to estimated anchor dates for sorting. Enhance Vanilla JS frontend with location chips, copy modal location select, admin location manager modal, grid location filter, and watch timing selector with estimated badges. Expose `where_is(title)` in FastMCP server.
 
 **Tech Stack:** Python 3 (Flask, SQLite3, FastMCP), Vanilla JavaScript (ES6+), CSS3, pytest.
 
@@ -20,11 +20,12 @@
 
 ## Review Focus
 
-- Table recreation in `migrate(con)` must preserve all existing copies, formats, services, titles, and watches when upgrading from schema v3.
+- Table recreation in `migrate(con)` must preserve all existing copies, formats, services, titles, and watches when upgrading from schema v3, and add `watches.date_bucket`.
 - Location reparenting in `PUT /admin/api/locations/<id>` must reject cycles (cannot set parent to self or any descendant).
 - Digital copies must reject `location_id` with HTTP 400 (`"Digital copies cannot have a physical storage location"`).
 - Deleting a parent location must cascade delete child locations and set referencing copies' `location_id` to `NULL`.
 - Filtering titles by parent location (`/api/titles?location_id=<id>`) must return titles located in that parent or any descendant location.
+- Approximate watch buckets ("Within the Past Year", "1–2 Years Ago", "2–5 Years Ago", "5–10 Years Ago", "Over 10 Years Ago") correctly compute anchor dates so catalog sort by `last_watched` orders them chronologically and `forgotten_gems` recommendation includes older buckets while excluding past year.
 
 ---
 
@@ -38,7 +39,8 @@
 - `SCHEMA_VERSION = "4"`
 - `locations` table in `SCHEMA` (`id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES locations(id) ON DELETE CASCADE, name TEXT NOT NULL, sort_order INTEGER DEFAULT 0`)
 - `copies` table in `SCHEMA` with `location_id INTEGER REFERENCES locations(id) ON DELETE SET NULL`
-- `migrate(con)`: recreates `copies` table if `location_id` missing in `PRAGMA table_info(copies)`.
+- `watches` table in `SCHEMA` with `date_bucket TEXT`
+- `migrate(con)`: recreates `copies` table if `location_id` missing in `PRAGMA table_info(copies)`. Adds `date_bucket TEXT` to `watches` if missing.
 - `get_locations(con) -> List[Dict[str, Any]]`: returns list of dicts with `id`, `parent_id`, `name`, `sort_order`, `path`, `depth`, `copy_count`.
 - `get_location_path_map(con) -> Dict[int, str]`: mapping from `location_id` to breadcrumb string.
 - `get_descendant_location_ids(con, location_id: int) -> Set[int]`: returns set containing `location_id` and all descendant IDs.
@@ -87,6 +89,8 @@ def test_migration_v3_to_v4(tmp_path, monkeypatch):
     migrate(con)
     cols = [r[1] for r in con.execute("PRAGMA table_info(copies)").fetchall()]
     assert "location_id" in cols
+    watch_cols = [r[1] for r in con.execute("PRAGMA table_info(watches)").fetchall()]
+    assert "date_bucket" in watch_cols
     # Verify existing copy preserved
     row = con.execute("SELECT id, title_id, kind, format, location_id FROM copies WHERE id=1").fetchone()
     assert row == (1, 1, 'physical', '4K UHD', None)
@@ -173,6 +177,7 @@ git commit -m "feat(locations): add locations schema, v4 migration, and tree hel
 - `PUT /admin/api/locations/<int:loc_id>` -> `{"ok": True, "location": {...}}`
 - `DELETE /admin/api/locations/<int:loc_id>` -> `{"ok": True, "deleted_id": int}`
 - `POST /admin/api/copies` & `PUT /admin/api/copies/<int:copy_id>`: accepts `location_id`. Rejects `location_id` for digital copies (400). Validates existence for physical copies.
+- `POST /admin/api/titles/<int:title_id>/watches`: accepts `date_bucket`. If `date_bucket` is supplied (e.g. `past_year`, `1_2_years`, `2_5_years`, `5_10_years`, `over_10_years`), calculates estimated anchor `watched_date`.
 - `GET /api/titles?location_id=<id>`: filters titles hierarchically using `get_descendant_location_ids`.
 
 - [ ] **Step 1: Write failing tests for Locations and Copies API**
@@ -259,6 +264,21 @@ def test_hierarchical_titles_filter(client):
     titles = res.get_json()["titles"]
     assert len(titles) == 1
     assert titles[0]["title"] == "Alien"
+
+def test_watch_date_buckets_estimation(client):
+    con = connect()
+    con.execute("INSERT INTO titles (id, tmdb_id, title, sort_title, search_text, fetched_at) VALUES (1, 101, 'Alien', 'alien', 'alien', '2026-01-01')")
+    con.commit()
+    con.close()
+
+    # Log watch with bucket
+    res = client.post("/admin/api/titles/1/watches", json={"date_bucket": "5_10_years"})
+    assert res.status_code == 200
+    w = res.get_json()["watch"]
+    assert w["date_bucket"] == "5_10_years"
+    assert w["watched_date"] is not None  # Estimated date set
+    # Should be roughly 7.5 years ago (around 2018-2019)
+    assert int(w["watched_date"][:4]) <= 2020
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -395,7 +415,9 @@ git commit -m "feat(mcp): add where_is tool for querying physical shelving and d
 
 **Interfaces:**
 - Detail view: Physical copies render `<span class="copy-location">📍 ${esc(cp.location_path)}</span>`.
+- Detail view: Watch entries render bucket badge (e.g. `📅 Watched 5–10 Years Ago <span class="badge badge-subtle">Estimated</span>`).
 - Add/Edit copy modal: Select dropdown `#copy-location-id` populated with hierarchical paths from `/api/locations`.
+- Watch logging UI: Timing selector with exact date and buckets ("Within the Past Year", "1–2 Years Ago", "2–5 Years Ago", "5–10 Years Ago", "Over 10 Years Ago", "Date Unknown").
 - Filter popover: "Location" filter in the filter bar popovers.
 - Admin UI: "Shelves & Locations" button opening modal to view tree, add, edit, or delete locations.
 
