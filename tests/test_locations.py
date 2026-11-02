@@ -167,3 +167,26 @@ def test_watch_date_buckets_estimation(client):
     assert w["watched_date"] is not None  # Estimated date set
     # Should be roughly 7.5 years ago (around 2018-2019)
     assert int(w["watched_date"][:4]) <= 2020
+
+from mcp_server import MatineeClient
+
+def test_mcp_where_is_tool(client, tmp_path, monkeypatch):
+    con = connect()
+    con.execute("INSERT INTO titles (id, tmdb_id, title, sort_title, search_text, fetched_at) VALUES (1, 27205, 'Inception', 'inception', 'inception', '2026-01-01')")
+    con.execute("INSERT INTO locations (id, parent_id, name) VALUES (1, NULL, 'Family Room')")
+    con.execute("INSERT INTO locations (id, parent_id, name) VALUES (2, 1, 'Shelf 2')")
+    con.execute("INSERT INTO copies (id, title_id, kind, format, location_id) VALUES (1, 1, 'physical', '4K UHD', 2)")
+    con.execute("INSERT INTO copies (id, title_id, kind, format, service) VALUES (2, 1, 'digital', 'Digital 4K', 'Apple TV')")
+    con.commit()
+    con.close()
+
+    mcp_client = MatineeClient(api_url="http://localhost", db_path=str(tmp_path / "test.db"))
+    res = mcp_client.where_is("Inception")
+    assert res["found"] is True
+    assert res["title"] == "Inception"
+    assert len(res["copies"]) == 2
+    phys = [c for c in res["copies"] if c["kind"] == "physical"][0]
+    assert phys["location_path"] == "Family Room › Shelf 2"
+    dig = [c for c in res["copies"] if c["kind"] == "digital"][0]
+    assert dig["service"] == "Apple TV"
+    assert "Family Room › Shelf 2" in res["summary"]

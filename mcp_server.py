@@ -228,6 +228,127 @@ class MatineeClient:
 
         return self._api_request("GET", f"{self._read_prefix}/titles/{title_id}")
 
+    def where_is(self, title: str) -> Dict[str, Any]:
+        """Find where physical copies of a movie are stored or which digital services host it."""
+        con = self._get_db()
+        if con is not None:
+            try:
+                q_clean = title.strip().lower()
+                row = con.execute(
+                    "SELECT id, title, year FROM titles WHERE lower(title) = ? AND EXISTS (SELECT 1 FROM copies c WHERE c.title_id=titles.id)",
+                    (q_clean,),
+                ).fetchone()
+                if not row:
+                    row = con.execute(
+                        "SELECT id, title, year FROM titles WHERE search_text LIKE ? AND EXISTS (SELECT 1 FROM copies c WHERE c.title_id=titles.id) ORDER BY length(title) ASC LIMIT 1",
+                        (f"%{q_clean}%",),
+                    ).fetchone()
+                if not row:
+                    return {
+                        "found": False,
+                        "title": title,
+                        "message": f"'{title}' is not currently in the collection.",
+                        "copies": [],
+                        "summary": f"'{title}' is not currently in the collection.",
+                    }
+
+                title_id = row["id"]
+                title_name = row["title"]
+                year = row["year"]
+
+                loc_rows = con.execute("SELECT id, parent_id, name, sort_order FROM locations").fetchall()
+                by_id = {r["id"]: dict(r) for r in loc_rows}
+
+                def build_path(loc_id, visited=None):
+                    if visited is None:
+                        visited = set()
+                    if loc_id in visited or loc_id not in by_id:
+                        return by_id.get(loc_id, {}).get("name", "")
+                    visited.add(loc_id)
+                    loc = by_id[loc_id]
+                    pid = loc["parent_id"]
+                    if pid and pid in by_id and pid not in visited:
+                        parent_path = build_path(pid, visited)
+                        return f"{parent_path} › {loc['name']}" if parent_path else loc["name"]
+                    return loc["name"]
+
+                copies_rows = con.execute(
+                    "SELECT id, kind, format, service, location_id FROM copies WHERE title_id=? ORDER BY created_at, id",
+                    (title_id,),
+                ).fetchall()
+
+                copies_list = []
+                summary_parts = []
+                for c in copies_rows:
+                    loc_path = build_path(c["location_id"]) if c["location_id"] else None
+                    cp_dict = {
+                        "id": c["id"],
+                        "kind": c["kind"],
+                        "format": c["format"],
+                        "service": c["service"],
+                        "location_id": c["location_id"],
+                        "location_path": loc_path,
+                    }
+                    copies_list.append(cp_dict)
+                    if c["kind"] == "physical":
+                        loc_str = loc_path or "Unassigned shelf"
+                        summary_parts.append(f"{c['format']} at {loc_str}")
+                    else:
+                        srv_str = c["service"] or "Digital"
+                        summary_parts.append(f"{c['format']} on {srv_str}")
+
+                summary_str = f"{title_name} ({year}): " + "; ".join(summary_parts) if summary_parts else f"{title_name}: No copies recorded."
+                return {
+                    "found": True,
+                    "title": title_name,
+                    "year": year,
+                    "copies": copies_list,
+                    "summary": summary_str,
+                }
+            finally:
+                con.close()
+
+        # REST mode
+        results = self.search_collection(query=title, limit=5)
+        if not results:
+            return {
+                "found": False,
+                "title": title,
+                "message": f"'{title}' is not currently in the collection.",
+                "copies": [],
+                "summary": f"'{title}' is not currently in the collection.",
+            }
+        movie = self.get_movie(results[0]["id"])
+        copies = movie.get("copies", [])
+        copies_list = []
+        summary_parts = []
+        for c in copies:
+            cp_dict = {
+                "id": c.get("id"),
+                "kind": c.get("kind"),
+                "format": c.get("format"),
+                "service": c.get("service"),
+                "location_id": c.get("location_id"),
+                "location_path": c.get("location_path"),
+            }
+            copies_list.append(cp_dict)
+            if c.get("kind") == "physical":
+                loc_str = c.get("location_path") or "Unassigned shelf"
+                summary_parts.append(f"{c.get('format')} at {loc_str}")
+            else:
+                srv_str = c.get("service") or "Digital"
+                summary_parts.append(f"{c.get('format')} on {srv_str}")
+
+        year_str = f" ({movie.get('year')})" if movie.get("year") else ""
+        summary_str = f"{movie.get('title')}{year_str}: " + "; ".join(summary_parts) if summary_parts else f"{movie.get('title')}: No copies recorded."
+        return {
+            "found": True,
+            "title": movie.get("title"),
+            "year": movie.get("year"),
+            "copies": copies_list,
+            "summary": summary_str,
+        }
+
     def get_recommendations(
         self,
         mode: str = "forgotten_gems",
@@ -468,6 +589,11 @@ if mcp:
     def get_movie(title_id: int) -> Dict[str, Any]:
         """Get full details for a movie in the collection including physical/digital copies, user rating, and watch history."""
         return _default_client.get_movie(title_id)
+
+    @mcp.tool()
+    def where_is(title: str) -> Dict[str, Any]:
+        """Find where physical copies of a movie are stored (shelf/cabinet/room) or which digital services host it."""
+        return _default_client.where_is(title)
 
     @mcp.tool()
     def get_recommendations(
