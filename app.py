@@ -125,14 +125,14 @@ CREATE INDEX IF NOT EXISTS user_ratings_score ON user_ratings(rating);
 CREATE TABLE IF NOT EXISTS watches (
   id INTEGER PRIMARY KEY,
   title_id INTEGER NOT NULL REFERENCES titles(id) ON DELETE CASCADE,
-  watched_date TEXT NOT NULL,
+  watched_date TEXT,
   notes TEXT,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS watches_title_date ON watches(title_id, watched_date DESC);
 CREATE INDEX IF NOT EXISTS watches_date ON watches(watched_date DESC);
 """
-SCHEMA_VERSION = "2"
+SCHEMA_VERSION = "3"
 
 # Checked in the app (not the schema) so a new format or service needs no table rebuild.
 FORMATS = {"physical": ["4K UHD", "Blu-ray", "3D Blu-ray", "DVD", "VHS"],
@@ -193,7 +193,7 @@ def migrate(con):
     CREATE TABLE IF NOT EXISTS watches (
       id INTEGER PRIMARY KEY,
       title_id INTEGER NOT NULL REFERENCES titles(id) ON DELETE CASCADE,
-      watched_date TEXT NOT NULL,
+      watched_date TEXT,
       notes TEXT,
       created_at TEXT DEFAULT CURRENT_TIMESTAMP
     );
@@ -203,6 +203,32 @@ def migrate(con):
     cols = [r[1] for r in con.execute("PRAGMA table_info(watches)").fetchall()]
     if "notes" not in cols:
         con.execute("ALTER TABLE watches ADD COLUMN notes TEXT")
+
+    # If watched_date is NOT NULL, recreate table to allow NULL
+    watches_info = con.execute("PRAGMA table_info(watches)").fetchall()
+    needs_recreation = False
+    for col in watches_info:
+        if col[1] == "watched_date" and col[3] == 1:
+            needs_recreation = True
+            break
+    if needs_recreation:
+        con.execute("PRAGMA foreign_keys=OFF")
+        con.executescript("""
+        CREATE TABLE watches_new (
+          id INTEGER PRIMARY KEY,
+          title_id INTEGER NOT NULL REFERENCES titles(id) ON DELETE CASCADE,
+          watched_date TEXT,
+          notes TEXT,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        INSERT INTO watches_new (id, title_id, watched_date, notes, created_at)
+          SELECT id, title_id, watched_date, notes, created_at FROM watches;
+        DROP TABLE watches;
+        ALTER TABLE watches_new RENAME TO watches;
+        CREATE INDEX IF NOT EXISTS watches_title_date ON watches(title_id, watched_date DESC);
+        CREATE INDEX IF NOT EXISTS watches_date ON watches(watched_date DESC);
+        """)
+        con.execute("PRAGMA foreign_keys=ON")
 
 
 def init_db():
@@ -1312,10 +1338,9 @@ def add_watch(title_id):
     if not row:
         abort(make_err(404, "No such title"))
     data = request.get_json(silent=True) or {}
-    raw_date = data.get("watched_date")
-    if not raw_date:
-        watched_date = dt.date.today().isoformat()
-    else:
+    raw_date = data.get("watched_date") if "watched_date" in data else data.get("watched_at")
+    watched_date = None
+    if raw_date is not None and str(raw_date).strip():
         try:
             parsed = dt.date.fromisoformat(str(raw_date).strip())
             watched_date = parsed.isoformat()
