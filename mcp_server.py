@@ -9,6 +9,7 @@ Can operate in:
 import json
 import os
 import sqlite3
+import sys
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -559,8 +560,8 @@ if mcp:
 
 def main():
     if not mcp:
-        print("MCP SDK not installed. Please install with: pip install mcp")
-        return
+        print("MCP SDK not installed. Please install with: pip install mcp", file=sys.stderr)
+        sys.exit(1)
     mcp.run()
 
 
