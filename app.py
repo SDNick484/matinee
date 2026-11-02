@@ -93,16 +93,26 @@ CREATE TABLE IF NOT EXISTS title_genres (
   genre_id INTEGER NOT NULL REFERENCES genres(id),
   PRIMARY KEY (title_id, genre_id)
 );
+CREATE TABLE IF NOT EXISTS locations (
+  id INTEGER PRIMARY KEY,
+  parent_id INTEGER REFERENCES locations(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  sort_order INTEGER DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS locations_parent ON locations(parent_id);
+
 CREATE TABLE IF NOT EXISTS copies (
   id INTEGER PRIMARY KEY,
   title_id INTEGER NOT NULL REFERENCES titles(id) ON DELETE CASCADE,
   kind TEXT NOT NULL CHECK (kind IN ('physical','digital')),
   format TEXT NOT NULL,
   service TEXT,
+  location_id INTEGER REFERENCES locations(id) ON DELETE SET NULL,
   added_by TEXT,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS copies_title ON copies(title_id);
+CREATE INDEX IF NOT EXISTS copies_location ON copies(location_id);
 CREATE TABLE IF NOT EXISTS upc_cache (
   upc TEXT PRIMARY KEY,
   raw_title TEXT,
@@ -127,12 +137,13 @@ CREATE TABLE IF NOT EXISTS watches (
   title_id INTEGER NOT NULL REFERENCES titles(id) ON DELETE CASCADE,
   watched_date TEXT,
   notes TEXT,
+  date_bucket TEXT,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS watches_title_date ON watches(title_id, watched_date DESC);
 CREATE INDEX IF NOT EXISTS watches_date ON watches(watched_date DESC);
 """
-SCHEMA_VERSION = "3"
+SCHEMA_VERSION = "4"
 
 # Checked in the app (not the schema) so a new format or service needs no table rebuild.
 FORMATS = {"physical": ["4K UHD", "Blu-ray", "3D Blu-ray", "DVD", "VHS"],
@@ -180,6 +191,14 @@ def _close(_exc):
 def migrate(con):
     """Add tables and columns that newer versions expect to an older database."""
     con.executescript("""
+    CREATE TABLE IF NOT EXISTS locations (
+      id INTEGER PRIMARY KEY,
+      parent_id INTEGER REFERENCES locations(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      sort_order INTEGER DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS locations_parent ON locations(parent_id);
+
     CREATE TABLE IF NOT EXISTS user_ratings (
       id INTEGER PRIMARY KEY,
       title_id INTEGER NOT NULL UNIQUE REFERENCES titles(id) ON DELETE CASCADE,
@@ -195,40 +214,73 @@ def migrate(con):
       title_id INTEGER NOT NULL REFERENCES titles(id) ON DELETE CASCADE,
       watched_date TEXT,
       notes TEXT,
+      date_bucket TEXT,
       created_at TEXT DEFAULT CURRENT_TIMESTAMP
     );
     CREATE INDEX IF NOT EXISTS watches_title_date ON watches(title_id, watched_date DESC);
     CREATE INDEX IF NOT EXISTS watches_date ON watches(watched_date DESC);
     """)
-    cols = [r[1] for r in con.execute("PRAGMA table_info(watches)").fetchall()]
-    if "notes" not in cols:
-        con.execute("ALTER TABLE watches ADD COLUMN notes TEXT")
 
-    # If watched_date is NOT NULL, recreate table to allow NULL
-    watches_info = con.execute("PRAGMA table_info(watches)").fetchall()
-    needs_recreation = False
-    for col in watches_info:
-        if col[1] == "watched_date" and col[3] == 1:
-            needs_recreation = True
-            break
-    if needs_recreation:
-        con.execute("PRAGMA foreign_keys=OFF")
-        con.executescript("""
-        CREATE TABLE watches_new (
-          id INTEGER PRIMARY KEY,
-          title_id INTEGER NOT NULL REFERENCES titles(id) ON DELETE CASCADE,
-          watched_date TEXT,
-          notes TEXT,
-          created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        );
-        INSERT INTO watches_new (id, title_id, watched_date, notes, created_at)
-          SELECT id, title_id, watched_date, notes, created_at FROM watches;
-        DROP TABLE watches;
-        ALTER TABLE watches_new RENAME TO watches;
-        CREATE INDEX IF NOT EXISTS watches_title_date ON watches(title_id, watched_date DESC);
-        CREATE INDEX IF NOT EXISTS watches_date ON watches(watched_date DESC);
-        """)
-        con.execute("PRAGMA foreign_keys=ON")
+    # Check copies table for location_id
+    has_copies = con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='copies'").fetchone()
+    if has_copies:
+        copy_cols = [r[1] for r in con.execute("PRAGMA table_info(copies)").fetchall()]
+        if "location_id" not in copy_cols:
+            con.execute("PRAGMA foreign_keys=OFF")
+            con.executescript("""
+            CREATE TABLE copies_new (
+              id INTEGER PRIMARY KEY,
+              title_id INTEGER NOT NULL REFERENCES titles(id) ON DELETE CASCADE,
+              kind TEXT NOT NULL CHECK (kind IN ('physical','digital')),
+              format TEXT NOT NULL,
+              service TEXT,
+              location_id INTEGER REFERENCES locations(id) ON DELETE SET NULL,
+              added_by TEXT,
+              created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            INSERT INTO copies_new (id, title_id, kind, format, service, added_by, created_at, updated_at)
+              SELECT id, title_id, kind, format, service, added_by, created_at, updated_at FROM copies;
+            DROP TABLE copies;
+            ALTER TABLE copies_new RENAME TO copies;
+            CREATE INDEX IF NOT EXISTS copies_title ON copies(title_id);
+            CREATE INDEX IF NOT EXISTS copies_location ON copies(location_id);
+            """)
+            con.execute("PRAGMA foreign_keys=ON")
+
+    has_watches = con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='watches'").fetchone()
+    if has_watches:
+        cols = [r[1] for r in con.execute("PRAGMA table_info(watches)").fetchall()]
+        if "notes" not in cols:
+            con.execute("ALTER TABLE watches ADD COLUMN notes TEXT")
+        if "date_bucket" not in cols:
+            con.execute("ALTER TABLE watches ADD COLUMN date_bucket TEXT")
+
+        # If watched_date is NOT NULL, recreate table to allow NULL
+        watches_info = con.execute("PRAGMA table_info(watches)").fetchall()
+        needs_recreation = False
+        for col in watches_info:
+            if col[1] == "watched_date" and col[3] == 1:
+                needs_recreation = True
+                break
+        if needs_recreation:
+            con.execute("PRAGMA foreign_keys=OFF")
+            con.executescript("""
+            CREATE TABLE watches_new (
+              id INTEGER PRIMARY KEY,
+              title_id INTEGER NOT NULL REFERENCES titles(id) ON DELETE CASCADE,
+              watched_date TEXT,
+              notes TEXT,
+              date_bucket TEXT,
+              created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            INSERT INTO watches_new (id, title_id, watched_date, notes, date_bucket, created_at)
+              SELECT id, title_id, watched_date, notes, date_bucket, created_at FROM watches;
+            DROP TABLE watches;
+            ALTER TABLE watches_new RENAME TO watches;
+            CREATE INDEX IF NOT EXISTS watches_title_date ON watches(title_id, watched_date DESC);
+            CREATE INDEX IF NOT EXISTS watches_date ON watches(watched_date DESC);
+            """)
+            con.execute("PRAGMA foreign_keys=ON")
 
 
 def init_db():
@@ -650,16 +702,111 @@ TITLE_COLS = ("tmdb_id", "imdb_id", "title", "sort_title", "search_text", "year"
               "poster_path", "backdrop_path", "poster_file", "backdrop_file", "fetched_at")
 
 
+def get_locations(con):
+    """Return sorted flat list of locations with path, depth, and copy_count."""
+    rows = con.execute("SELECT id, parent_id, name, sort_order FROM locations ORDER BY sort_order ASC, name COLLATE NOCASE ASC").fetchall()
+    by_id = {r["id"]: dict(r) for r in rows}
+    children = {}
+    for r in rows:
+        pid = r["parent_id"]
+        children.setdefault(pid, []).append(r["id"])
+
+    counts = dict(con.execute("SELECT location_id, count(*) FROM copies WHERE location_id IS NOT NULL GROUP BY location_id").fetchall())
+
+    def build_path(loc_id, visited=None):
+        if visited is None:
+            visited = set()
+        if loc_id in visited:
+            return by_id[loc_id]["name"]
+        visited.add(loc_id)
+        loc = by_id[loc_id]
+        pid = loc["parent_id"]
+        if pid and pid in by_id and pid not in visited:
+            return f"{build_path(pid, visited)} › {loc['name']}"
+        return loc["name"]
+
+    result = []
+    visited_c = set()
+
+    def traverse(parent_id, depth):
+        for cid in children.get(parent_id, []):
+            if cid in visited_c:
+                continue
+            visited_c.add(cid)
+            loc = by_id[cid]
+            result.append({
+                "id": loc["id"],
+                "parent_id": loc["parent_id"],
+                "name": loc["name"],
+                "sort_order": loc["sort_order"],
+                "path": build_path(loc["id"]),
+                "depth": depth,
+                "copy_count": counts.get(loc["id"], 0),
+            })
+            traverse(cid, depth + 1)
+
+    traverse(None, 0)
+    for r in rows:
+        if r["id"] not in visited_c:
+            visited_c.add(r["id"])
+            result.append({
+                "id": r["id"],
+                "parent_id": r["parent_id"],
+                "name": r["name"],
+                "sort_order": r["sort_order"],
+                "path": build_path(r["id"]),
+                "depth": 0,
+                "copy_count": counts.get(r["id"], 0),
+            })
+    return result
+
+
+def get_location_path_map(con):
+    """Return dict mapping location_id -> full breadcrumb path string."""
+    return {l["id"]: l["path"] for l in get_locations(con)}
+
+
+def get_descendant_location_ids(con, location_id):
+    """Return set of location_id and all its direct and indirect child IDs."""
+    rows = con.execute("SELECT id, parent_id FROM locations").fetchall()
+    children = {}
+    for r in rows:
+        children.setdefault(r["parent_id"], []).append(r["id"])
+
+    descendants = set()
+    queue = [location_id]
+    while queue:
+        curr = queue.pop()
+        descendants.add(curr)
+        for child in children.get(curr, []):
+            if child not in descendants:
+                queue.append(child)
+    return descendants
+
+
 def copy_label(c):
     return f"{c['format']} ({c['service']})" if c.get("service") else c["format"]
 
 
-def copy_out(r, private):
+def copy_out(r, private, loc_map=None):
     d = dict(r)
     if not private:
         for k in PRIVATE_COPY:
             d.pop(k, None)
     d["label"] = copy_label(d)
+    loc_id = d.get("location_id")
+    if loc_id:
+        if loc_map is not None:
+            d["location_path"] = loc_map.get(loc_id)
+        else:
+            try:
+                con = db()
+                loc_map = get_location_path_map(con)
+                d["location_path"] = loc_map.get(loc_id)
+            except Exception:
+                d["location_path"] = None
+    else:
+        d["location_path"] = None
     return d
 
 
@@ -676,7 +823,8 @@ def title_detail(title_id, private):
     d["genres"] = [r["name"] for r in con.execute(
         "SELECT g.name FROM title_genres tg JOIN genres g ON g.id=tg.genre_id WHERE tg.title_id=? ORDER BY g.name",
         (title_id,))]
-    d["copies"] = [copy_out(r, private) for r in con.execute(
+    loc_map = get_location_path_map(con)
+    d["copies"] = [copy_out(r, private, loc_map) for r in con.execute(
         "SELECT * FROM copies WHERE title_id=? ORDER BY created_at, id", (title_id,))]
     d["owned"] = bool(d["copies"])
     d["added_on"] = min((c["created_at"] for c in d["copies"]), default=None)
