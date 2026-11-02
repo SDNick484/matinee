@@ -529,6 +529,7 @@
     const genre = state.grid.genre || [];
     const rating = state.grid.rating || "";
     const watched = state.grid.watched || "";
+    const locationId = state.grid.location_id || "";
 
     const hasFilters =
       medium.length > 0 ||
@@ -548,7 +549,6 @@
     const watchedLabel = getWatchedLabel(watched);
     const ratingLabel = getRatingLabel(rating);
 
-    const locationId = state.grid.location_id || "";
     let locationLabel = "All Locations";
     if (locationId && f.locations) {
       const matchLoc = f.locations.find((l) => String(l.id) === String(locationId));
