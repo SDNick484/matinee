@@ -16,7 +16,7 @@ Health:  /healthz          {ok, titles, copies}
 Environment (see /etc/conf.d/matinee and .env.example):
   PORT, DATA_DIR, CF_TEAM_DOMAIN, CF_AUD, ADMIN_EMAILS, LAN_EDIT, PUBLIC_VIEW, TMDB_READ_TOKEN, MATINEE_API_KEY
 """
-import datetime as dt, hashlib, hmac, json, os, re, sqlite3, sys, unicodedata
+import datetime as dt, hashlib, hmac, json, os, re, sqlite3, sys, time, unicodedata
 import urllib.error, urllib.parse, urllib.request
 from functools import wraps
 from pathlib import Path
@@ -1889,13 +1889,14 @@ def batch_refresh_ratings():
             ratings = omdb_get(imdb_id)
             if ratings:
                 write_omdb_ratings(con, title_id, imdb_id, ratings)
+                con.commit()
                 refreshed += 1
             else:
                 skipped += 1
         except Exception:
             errors += 1
+        time.sleep(0.1)
 
-    con.commit()
     return jsonify(ok=True, refreshed=refreshed, errors=errors, skipped=skipped)
 
 

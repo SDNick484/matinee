@@ -6,7 +6,9 @@
 
 set -u
 CONF=/etc/conf.d/matinee
+set -a
 [ -f "$CONF" ] && . "$CONF"
+set +a
 
 if [ -n "${OMDB_API_KEY:-}" ]; then
   python3 /opt/matinee/ops/refresh_ratings.py --limit 50 >> /var/log/ops.log 2>&1 || true

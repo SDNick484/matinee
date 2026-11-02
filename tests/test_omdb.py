@@ -203,6 +203,30 @@ def test_batch_refresh_ratings_api(client, monkeypatch):
     assert len(rows) == 2
     con.close()
 
+def test_batch_refresh_throttling_and_commits(client, monkeypatch):
+    monkeypatch.setattr(matinee_app, "OMDB_API_KEY", "test_key")
+    con = matinee_app.connect()
+    con.execute("INSERT INTO titles (id, tmdb_id, imdb_id, title, sort_title, search_text, fetched_at) VALUES (1, 101, 'tt001', 'Movie 1', 'movie 1', 'movie 1', '2026-01-01')")
+    con.execute("INSERT INTO titles (id, tmdb_id, imdb_id, title, sort_title, search_text, fetched_at) VALUES (2, 102, 'tt002', 'Movie 2', 'movie 2', 'movie 2', '2026-01-01')")
+    con.commit()
+    con.close()
+
+    sleep_calls = []
+    if hasattr(matinee_app, "time"):
+        monkeypatch.setattr(matinee_app.time, "sleep", lambda s: sleep_calls.append(s))
+    else:
+        import time
+        monkeypatch.setattr(time, "sleep", lambda s: sleep_calls.append(s))
+
+    monkeypatch.setattr(matinee_app, "omdb_get", lambda imdb_id: {
+        "imdb_rating": 8.0, "imdb_votes": 1000, "rotten_tomatoes_score": 80, "metacritic_score": 70
+    })
+
+    res = client.post("/admin/api/refresh-ratings", json={"limit": 5})
+    assert res.status_code == 200
+    assert len(sleep_calls) == 2
+    assert sleep_calls == [0.1, 0.1]
+
 def test_refresh_ratings_cli(tmp_path, monkeypatch):
     import ops.refresh_ratings as refresh_cli
     db_file = tmp_path / "test.db"
