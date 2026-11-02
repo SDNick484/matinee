@@ -2819,7 +2819,7 @@
           const ratingBadge = ratingVal ? `<span class="movie-night-score">★ ${ratingVal}</span>` : "";
 
           content.innerHTML = `
-            <div class="movie-night-card">
+            <div class="movie-night-card movie-night-animated">
               ${currentPick.poster_url ? `<img src="${currentPick.poster_url}" class="movie-night-poster" alt="${escapeHtml(currentPick.title)}">` : '<div class="movie-night-poster placeholder">No Poster</div>'}
               <div class="movie-night-info">
                 <div class="movie-night-title-row">
@@ -2836,14 +2836,16 @@
         } else {
           currentPick = null;
           content.innerHTML = `
-            <div class="movie-night-empty">
-              <p>No matching movies found in your collection for this category.</p>
+            <div class="movie-night-empty movie-night-animated">
+              <div style="font-size:2rem;margin-bottom:8px">🍿</div>
+              <p style="font-weight:600;color:var(--ink);margin-bottom:4px">No matching movies found</p>
+              <p style="font-size:var(--fs-xs);color:var(--ink-2)">Try rolling in another category like "Quick Picks" or "Surprise Me"!</p>
             </div>
           `;
           if (viewBtn) viewBtn.disabled = true;
         }
       } catch (err) {
-        content.innerHTML = `<div class="movie-night-empty"><p>Failed to load recommendation: ${escapeHtml(err.message || String(err))}</p></div>`;
+        content.innerHTML = `<div class="movie-night-empty movie-night-animated"><p>Failed to load recommendation: ${escapeHtml(err.message || String(err))}</p></div>`;
         if (viewBtn) viewBtn.disabled = true;
       }
     }
