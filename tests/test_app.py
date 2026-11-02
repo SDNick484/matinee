@@ -126,11 +126,11 @@ def test_copy_values():
             matinee.copy_values({"kind": "digital", "format": "Digital 4K"})
         assert "Which service" in e.value.response.get_json()["error"]
         assert matinee.copy_values({"kind": "physical", "format": "4K UHD", "service": "Apple TV"}) == \
-            {"kind": "physical", "format": "4K UHD", "service": None}
+            {"kind": "physical", "format": "4K UHD", "service": None, "location_id": None}
         assert matinee.copy_values({"kind": "digital", "format": "Digital HD", "service": "Vudu"}) == \
-            {"kind": "digital", "format": "Digital HD", "service": "Fandango at Home"}
+            {"kind": "digital", "format": "Digital HD", "service": "Fandango at Home", "location_id": None}
         assert matinee.copy_values({"kind": "digital", "format": "digital hd", "service": "movies anywhere"}) == \
-            {"kind": "digital", "format": "Digital HD", "service": "Movies Anywhere"}
+            {"kind": "digital", "format": "Digital HD", "service": "Movies Anywhere", "location_id": None}
 
 
 def test_frozen_digital_hd_on_movies_anywhere_saves():
