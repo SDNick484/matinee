@@ -19,7 +19,22 @@ def test_migration_v3_to_v4(tmp_path, monkeypatch):
     con.executescript("""
     CREATE TABLE meta (k TEXT PRIMARY KEY, v TEXT);
     INSERT INTO meta VALUES ('schema', '3');
-    CREATE TABLE titles (id INTEGER PRIMARY KEY, tmdb_id INTEGER UNIQUE, title TEXT, sort_title TEXT, search_text TEXT, fetched_at TEXT);
+    CREATE TABLE titles (
+      id INTEGER PRIMARY KEY,
+      tmdb_id INTEGER NOT NULL UNIQUE,
+      imdb_id TEXT,
+      title TEXT NOT NULL,
+      sort_title TEXT NOT NULL,
+      search_text TEXT NOT NULL,
+      year INTEGER, release_date TEXT, runtime INTEGER, overview TEXT,
+      certification TEXT,
+      collection_tmdb_id INTEGER, collection_name TEXT,
+      tmdb_vote REAL, tmdb_votes INTEGER,
+      poster_path TEXT, backdrop_path TEXT,
+      poster_file TEXT, backdrop_file TEXT,
+      fetched_at TEXT NOT NULL,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
     CREATE TABLE copies (
       id INTEGER PRIMARY KEY,
       title_id INTEGER,
@@ -49,6 +64,65 @@ def test_migration_v3_to_v4(tmp_path, monkeypatch):
     # Verify existing copy preserved
     row = con.execute("SELECT id, title_id, kind, format, location_id FROM copies WHERE id=1").fetchone()
     assert row == (1, 1, 'physical', '4K UHD', None)
+    con.close()
+
+def test_init_db_upgrade_from_v3(tmp_path, monkeypatch):
+    import app as matinee_app
+    db_path = tmp_path / "matinee.db"
+    con = sqlite3.connect(db_path)
+    con.executescript("""
+    CREATE TABLE meta (k TEXT PRIMARY KEY, v TEXT);
+    INSERT INTO meta VALUES ('schema', '3');
+    CREATE TABLE titles (
+      id INTEGER PRIMARY KEY,
+      tmdb_id INTEGER NOT NULL UNIQUE,
+      imdb_id TEXT,
+      title TEXT NOT NULL,
+      sort_title TEXT NOT NULL,
+      search_text TEXT NOT NULL,
+      year INTEGER, release_date TEXT, runtime INTEGER, overview TEXT,
+      certification TEXT,
+      collection_tmdb_id INTEGER, collection_name TEXT,
+      tmdb_vote REAL, tmdb_votes INTEGER,
+      poster_path TEXT, backdrop_path TEXT,
+      poster_file TEXT, backdrop_file TEXT,
+      fetched_at TEXT NOT NULL,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE copies (
+      id INTEGER PRIMARY KEY,
+      title_id INTEGER,
+      kind TEXT,
+      format TEXT,
+      service TEXT,
+      added_by TEXT,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE watches (
+      id INTEGER PRIMARY KEY,
+      title_id INTEGER,
+      watched_date TEXT,
+      notes TEXT,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+    INSERT INTO titles (id, tmdb_id, title, sort_title, search_text, fetched_at) VALUES (1, 100, 'Inception', 'inception', 'inception', '2026-01-01');
+    INSERT INTO copies (id, title_id, kind, format) VALUES (1, 1, 'physical', '4K UHD');
+    """)
+    con.commit()
+    con.close()
+
+    monkeypatch.setattr(matinee_app, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(matinee_app, "IMAGE_DIR", tmp_path / "images")
+    monkeypatch.setattr(matinee_app, "DB_PATH", db_path)
+
+    matinee_app.init_db()
+
+    con = sqlite3.connect(db_path)
+    cols = [r[1] for r in con.execute("PRAGMA table_info(copies)").fetchall()]
+    assert "location_id" in cols
+    indices = [r[1] for r in con.execute("PRAGMA index_list(copies)").fetchall()]
+    assert "copies_location" in indices
     con.close()
 
 def test_location_tree_and_breadcrumbs(client):

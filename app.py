@@ -112,7 +112,6 @@ CREATE TABLE IF NOT EXISTS copies (
   created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS copies_title ON copies(title_id);
-CREATE INDEX IF NOT EXISTS copies_location ON copies(location_id);
 CREATE TABLE IF NOT EXISTS upc_cache (
   upc TEXT PRIMARY KEY,
   raw_title TEXT,
@@ -246,6 +245,8 @@ def migrate(con):
             CREATE INDEX IF NOT EXISTS copies_location ON copies(location_id);
             """)
             con.execute("PRAGMA foreign_keys=ON")
+        else:
+            con.execute("CREATE INDEX IF NOT EXISTS copies_location ON copies(location_id)")
 
     has_watches = con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='watches'").fetchone()
     if has_watches:
