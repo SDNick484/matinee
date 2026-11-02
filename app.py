@@ -93,16 +93,26 @@ CREATE TABLE IF NOT EXISTS title_genres (
   genre_id INTEGER NOT NULL REFERENCES genres(id),
   PRIMARY KEY (title_id, genre_id)
 );
+CREATE TABLE IF NOT EXISTS locations (
+  id INTEGER PRIMARY KEY,
+  parent_id INTEGER REFERENCES locations(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  sort_order INTEGER DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS locations_parent ON locations(parent_id);
+
 CREATE TABLE IF NOT EXISTS copies (
   id INTEGER PRIMARY KEY,
   title_id INTEGER NOT NULL REFERENCES titles(id) ON DELETE CASCADE,
   kind TEXT NOT NULL CHECK (kind IN ('physical','digital')),
   format TEXT NOT NULL,
   service TEXT,
+  location_id INTEGER REFERENCES locations(id) ON DELETE SET NULL,
   added_by TEXT,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS copies_title ON copies(title_id);
+CREATE INDEX IF NOT EXISTS copies_location ON copies(location_id);
 CREATE TABLE IF NOT EXISTS upc_cache (
   upc TEXT PRIMARY KEY,
   raw_title TEXT,
@@ -127,12 +137,13 @@ CREATE TABLE IF NOT EXISTS watches (
   title_id INTEGER NOT NULL REFERENCES titles(id) ON DELETE CASCADE,
   watched_date TEXT,
   notes TEXT,
+  date_bucket TEXT,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS watches_title_date ON watches(title_id, watched_date DESC);
 CREATE INDEX IF NOT EXISTS watches_date ON watches(watched_date DESC);
 """
-SCHEMA_VERSION = "3"
+SCHEMA_VERSION = "4"
 
 # Checked in the app (not the schema) so a new format or service needs no table rebuild.
 FORMATS = {"physical": ["4K UHD", "Blu-ray", "3D Blu-ray", "DVD", "VHS"],
@@ -180,6 +191,14 @@ def _close(_exc):
 def migrate(con):
     """Add tables and columns that newer versions expect to an older database."""
     con.executescript("""
+    CREATE TABLE IF NOT EXISTS locations (
+      id INTEGER PRIMARY KEY,
+      parent_id INTEGER REFERENCES locations(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      sort_order INTEGER DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS locations_parent ON locations(parent_id);
+
     CREATE TABLE IF NOT EXISTS user_ratings (
       id INTEGER PRIMARY KEY,
       title_id INTEGER NOT NULL UNIQUE REFERENCES titles(id) ON DELETE CASCADE,
@@ -195,40 +214,73 @@ def migrate(con):
       title_id INTEGER NOT NULL REFERENCES titles(id) ON DELETE CASCADE,
       watched_date TEXT,
       notes TEXT,
+      date_bucket TEXT,
       created_at TEXT DEFAULT CURRENT_TIMESTAMP
     );
     CREATE INDEX IF NOT EXISTS watches_title_date ON watches(title_id, watched_date DESC);
     CREATE INDEX IF NOT EXISTS watches_date ON watches(watched_date DESC);
     """)
-    cols = [r[1] for r in con.execute("PRAGMA table_info(watches)").fetchall()]
-    if "notes" not in cols:
-        con.execute("ALTER TABLE watches ADD COLUMN notes TEXT")
 
-    # If watched_date is NOT NULL, recreate table to allow NULL
-    watches_info = con.execute("PRAGMA table_info(watches)").fetchall()
-    needs_recreation = False
-    for col in watches_info:
-        if col[1] == "watched_date" and col[3] == 1:
-            needs_recreation = True
-            break
-    if needs_recreation:
-        con.execute("PRAGMA foreign_keys=OFF")
-        con.executescript("""
-        CREATE TABLE watches_new (
-          id INTEGER PRIMARY KEY,
-          title_id INTEGER NOT NULL REFERENCES titles(id) ON DELETE CASCADE,
-          watched_date TEXT,
-          notes TEXT,
-          created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        );
-        INSERT INTO watches_new (id, title_id, watched_date, notes, created_at)
-          SELECT id, title_id, watched_date, notes, created_at FROM watches;
-        DROP TABLE watches;
-        ALTER TABLE watches_new RENAME TO watches;
-        CREATE INDEX IF NOT EXISTS watches_title_date ON watches(title_id, watched_date DESC);
-        CREATE INDEX IF NOT EXISTS watches_date ON watches(watched_date DESC);
-        """)
-        con.execute("PRAGMA foreign_keys=ON")
+    # Check copies table for location_id
+    has_copies = con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='copies'").fetchone()
+    if has_copies:
+        copy_cols = [r[1] for r in con.execute("PRAGMA table_info(copies)").fetchall()]
+        if "location_id" not in copy_cols:
+            con.execute("PRAGMA foreign_keys=OFF")
+            con.executescript("""
+            CREATE TABLE copies_new (
+              id INTEGER PRIMARY KEY,
+              title_id INTEGER NOT NULL REFERENCES titles(id) ON DELETE CASCADE,
+              kind TEXT NOT NULL CHECK (kind IN ('physical','digital')),
+              format TEXT NOT NULL,
+              service TEXT,
+              location_id INTEGER REFERENCES locations(id) ON DELETE SET NULL,
+              added_by TEXT,
+              created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            INSERT INTO copies_new (id, title_id, kind, format, service, added_by, created_at, updated_at)
+              SELECT id, title_id, kind, format, service, added_by, created_at, updated_at FROM copies;
+            DROP TABLE copies;
+            ALTER TABLE copies_new RENAME TO copies;
+            CREATE INDEX IF NOT EXISTS copies_title ON copies(title_id);
+            CREATE INDEX IF NOT EXISTS copies_location ON copies(location_id);
+            """)
+            con.execute("PRAGMA foreign_keys=ON")
+
+    has_watches = con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='watches'").fetchone()
+    if has_watches:
+        cols = [r[1] for r in con.execute("PRAGMA table_info(watches)").fetchall()]
+        if "notes" not in cols:
+            con.execute("ALTER TABLE watches ADD COLUMN notes TEXT")
+        if "date_bucket" not in cols:
+            con.execute("ALTER TABLE watches ADD COLUMN date_bucket TEXT")
+
+        # If watched_date is NOT NULL, recreate table to allow NULL
+        watches_info = con.execute("PRAGMA table_info(watches)").fetchall()
+        needs_recreation = False
+        for col in watches_info:
+            if col[1] == "watched_date" and col[3] == 1:
+                needs_recreation = True
+                break
+        if needs_recreation:
+            con.execute("PRAGMA foreign_keys=OFF")
+            con.executescript("""
+            CREATE TABLE watches_new (
+              id INTEGER PRIMARY KEY,
+              title_id INTEGER NOT NULL REFERENCES titles(id) ON DELETE CASCADE,
+              watched_date TEXT,
+              notes TEXT,
+              date_bucket TEXT,
+              created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            INSERT INTO watches_new (id, title_id, watched_date, notes, date_bucket, created_at)
+              SELECT id, title_id, watched_date, notes, date_bucket, created_at FROM watches;
+            DROP TABLE watches;
+            ALTER TABLE watches_new RENAME TO watches;
+            CREATE INDEX IF NOT EXISTS watches_title_date ON watches(title_id, watched_date DESC);
+            CREATE INDEX IF NOT EXISTS watches_date ON watches(watched_date DESC);
+            """)
+            con.execute("PRAGMA foreign_keys=ON")
 
 
 def init_db():
@@ -650,16 +702,111 @@ TITLE_COLS = ("tmdb_id", "imdb_id", "title", "sort_title", "search_text", "year"
               "poster_path", "backdrop_path", "poster_file", "backdrop_file", "fetched_at")
 
 
+def get_locations(con):
+    """Return sorted flat list of locations with path, depth, and copy_count."""
+    rows = con.execute("SELECT id, parent_id, name, sort_order FROM locations ORDER BY sort_order ASC, name COLLATE NOCASE ASC").fetchall()
+    by_id = {r["id"]: dict(r) for r in rows}
+    children = {}
+    for r in rows:
+        pid = r["parent_id"]
+        children.setdefault(pid, []).append(r["id"])
+
+    counts = dict(con.execute("SELECT location_id, count(*) FROM copies WHERE location_id IS NOT NULL GROUP BY location_id").fetchall())
+
+    def build_path(loc_id, visited=None):
+        if visited is None:
+            visited = set()
+        if loc_id in visited:
+            return by_id[loc_id]["name"]
+        visited.add(loc_id)
+        loc = by_id[loc_id]
+        pid = loc["parent_id"]
+        if pid and pid in by_id and pid not in visited:
+            return f"{build_path(pid, visited)} › {loc['name']}"
+        return loc["name"]
+
+    result = []
+    visited_c = set()
+
+    def traverse(parent_id, depth):
+        for cid in children.get(parent_id, []):
+            if cid in visited_c:
+                continue
+            visited_c.add(cid)
+            loc = by_id[cid]
+            result.append({
+                "id": loc["id"],
+                "parent_id": loc["parent_id"],
+                "name": loc["name"],
+                "sort_order": loc["sort_order"],
+                "path": build_path(loc["id"]),
+                "depth": depth,
+                "copy_count": counts.get(loc["id"], 0),
+            })
+            traverse(cid, depth + 1)
+
+    traverse(None, 0)
+    for r in rows:
+        if r["id"] not in visited_c:
+            visited_c.add(r["id"])
+            result.append({
+                "id": r["id"],
+                "parent_id": r["parent_id"],
+                "name": r["name"],
+                "sort_order": r["sort_order"],
+                "path": build_path(r["id"]),
+                "depth": 0,
+                "copy_count": counts.get(r["id"], 0),
+            })
+    return result
+
+
+def get_location_path_map(con):
+    """Return dict mapping location_id -> full breadcrumb path string."""
+    return {l["id"]: l["path"] for l in get_locations(con)}
+
+
+def get_descendant_location_ids(con, location_id):
+    """Return set of location_id and all its direct and indirect child IDs."""
+    rows = con.execute("SELECT id, parent_id FROM locations").fetchall()
+    children = {}
+    for r in rows:
+        children.setdefault(r["parent_id"], []).append(r["id"])
+
+    descendants = set()
+    queue = [location_id]
+    while queue:
+        curr = queue.pop()
+        descendants.add(curr)
+        for child in children.get(curr, []):
+            if child not in descendants:
+                queue.append(child)
+    return descendants
+
+
 def copy_label(c):
     return f"{c['format']} ({c['service']})" if c.get("service") else c["format"]
 
 
-def copy_out(r, private):
+def copy_out(r, private, loc_map=None):
     d = dict(r)
     if not private:
         for k in PRIVATE_COPY:
             d.pop(k, None)
     d["label"] = copy_label(d)
+    loc_id = d.get("location_id")
+    if loc_id:
+        if loc_map is not None:
+            d["location_path"] = loc_map.get(loc_id)
+        else:
+            try:
+                con = db()
+                loc_map = get_location_path_map(con)
+                d["location_path"] = loc_map.get(loc_id)
+            except Exception:
+                d["location_path"] = None
+    else:
+        d["location_path"] = None
     return d
 
 
@@ -676,7 +823,8 @@ def title_detail(title_id, private):
     d["genres"] = [r["name"] for r in con.execute(
         "SELECT g.name FROM title_genres tg JOIN genres g ON g.id=tg.genre_id WHERE tg.title_id=? ORDER BY g.name",
         (title_id,))]
-    d["copies"] = [copy_out(r, private) for r in con.execute(
+    loc_map = get_location_path_map(con)
+    d["copies"] = [copy_out(r, private, loc_map) for r in con.execute(
         "SELECT * FROM copies WHERE title_id=? ORDER BY created_at, id", (title_id,))]
     d["owned"] = bool(d["copies"])
     d["added_on"] = min((c["created_at"] for c in d["copies"]), default=None)
@@ -688,7 +836,7 @@ def title_detail(title_id, private):
     d["tmdb_url"] = f"https://www.themoviedb.org/movie/{t['tmdb_id']}"
     rating_row = con.execute("SELECT rating FROM user_ratings WHERE title_id=?", (title_id,)).fetchone()
     d["user_rating"] = rating_row["rating"] if rating_row else None
-    watches = con.execute("SELECT id, watched_date, notes, created_at FROM watches WHERE title_id=? ORDER BY watched_date DESC, id DESC",
+    watches = con.execute("SELECT id, watched_date, notes, date_bucket, created_at FROM watches WHERE title_id=? ORDER BY watched_date DESC, id DESC",
                           (title_id,)).fetchall()
     d["watches"] = [dict(w) for w in watches]
     d["last_watched"] = watches[0]["watched_date"] if watches else None
@@ -801,6 +949,20 @@ def list_titles(private):
     elif watched_param == "unwatched":
         where.append("NOT EXISTS (SELECT 1 FROM watches w WHERE w.title_id=t.id)")
 
+    raw_loc = a.get("location_id") or a.get("location")
+    if raw_loc:
+        try:
+            loc_id = int(raw_loc)
+            descendant_ids = list(get_descendant_location_ids(db(), loc_id))
+            if descendant_ids:
+                loc_q = ",".join("?" * len(descendant_ids))
+                where.append(f"EXISTS (SELECT 1 FROM copies c WHERE c.title_id=t.id AND c.location_id IN ({loc_q}))")
+                args += descendant_ids
+            else:
+                where.append("0=1")
+        except (ValueError, TypeError):
+            pass
+
     sort = a.get("sort") if a.get("sort") in SORTS else "title"
     rows = db().execute(
         f"""SELECT t.id, t.title, t.year, t.poster_file, t.fetched_at,
@@ -841,7 +1003,22 @@ def facets(private):
     genres = [r[0] for r in con.execute(
         """SELECT DISTINCT gn.name FROM genres gn JOIN title_genres tg ON tg.genre_id=gn.id
            WHERE EXISTS (SELECT 1 FROM copies c WHERE c.title_id=tg.title_id) ORDER BY gn.name""")]
-    return jsonify(kinds=kinds, formats=formats, services=services, genres=genres, has_both=has_both)
+    locations = get_locations(con)
+    return jsonify(kinds=kinds, formats=formats, services=services, genres=genres, has_both=has_both, locations=locations)
+
+
+def api_locations(private):
+    con = db()
+    locs = get_locations(con)
+    by_id = {l["id"]: dict(l, children=[]) for l in locs}
+    tree = []
+    for l in locs:
+        node = by_id[l["id"]]
+        if l["parent_id"] and l["parent_id"] in by_id:
+            by_id[l["parent_id"]]["children"].append(node)
+        else:
+            tree.append(node)
+    return jsonify(locations=locs, tree=tree)
 
 
 def collection_stats(private):
@@ -1079,6 +1256,7 @@ for prefix, private in (("/api", False), ("/admin/api", True)):
     app.add_url_rule(f"{prefix}/facets", f"facets_{private}", _wrap(facets))
     app.add_url_rule(f"{prefix}/stats", f"stats_{private}", _wrap(collection_stats))
     app.add_url_rule(f"{prefix}/recommendations", f"recommendations_{private}", _wrap(recommendations))
+    app.add_url_rule(f"{prefix}/locations", f"locations_{private}", _wrap(api_locations))
 
 
 
@@ -1099,8 +1277,26 @@ def match(v, options):
     return next((o for o in options if fold(o) == v), None)
 
 
+WATCH_BUCKET_OFFSETS = {
+    "past_year": 180,       # ~6 months ago
+    "1_2_years": 548,       # ~1.5 years ago
+    "2_5_years": 1278,      # ~3.5 years ago
+    "5_10_years": 2738,     # ~7.5 years ago
+    "over_10_years": 4380,  # ~12 years ago
+}
+
+WATCH_BUCKET_LABELS = {
+    "past_year": "Within the Past Year",
+    "1_2_years": "1–2 Years Ago",
+    "2_5_years": "2–5 Years Ago",
+    "5_10_years": "5–10 Years Ago",
+    "over_10_years": "Over 10 Years Ago",
+    "unknown": "Date Unknown",
+}
+
+
 def copy_values(data):
-    """Validate {kind, format, service} -> clean values, or abort 400 with a message for the form."""
+    """Validate {kind, format, service, location_id} -> clean values, or abort 400 with a message for the form."""
     kind = (clean(data.get("kind")) or "").lower()
     if kind not in FORMATS:
         abort(make_err(400, "Is it a physical copy or a digital one?"))
@@ -1112,7 +1308,10 @@ def copy_values(data):
         abort(make_err(400, f"{fmt} is a {other} format. {kind.capitalize()} formats are "
                             f"{', '.join(FORMATS[kind][:-1])} or {FORMATS[kind][-1]}."))
     service = None
+    location_id = None
     if kind == "digital":
+        if data.get("location_id") is not None and str(data.get("location_id")).strip() != "":
+            abort(make_err(400, "Digital copies cannot have a physical storage location."))
         raw_srv = clean(data.get("service"))
         if not raw_srv:
             abort(make_err(400, f"Which service is it on? Pick {', '.join(SERVICES[:-1])} or {SERVICES[-1]}."))
@@ -1120,7 +1319,17 @@ def copy_values(data):
         service = match(aliased, SERVICES)
         if not service:
             abort(make_err(400, f"Unknown service. Pick {', '.join(SERVICES[:-1])} or {SERVICES[-1]}."))
-    return {"kind": kind, "format": fmt, "service": service}
+    elif kind == "physical":
+        raw_loc = data.get("location_id")
+        if raw_loc is not None and str(raw_loc).strip() != "":
+            try:
+                location_id = int(raw_loc)
+            except (ValueError, TypeError):
+                abort(make_err(400, "Invalid location_id."))
+            row = db().execute("SELECT id FROM locations WHERE id=?", (location_id,)).fetchone()
+            if not row:
+                abort(make_err(400, "Location does not exist."))
+    return {"kind": kind, "format": fmt, "service": service, "location_id": location_id}
 
 
 def tmdb_id_arg(v):
@@ -1257,23 +1466,111 @@ def api_upc_lookup(upc):
     })
 
 
+@app.post("/admin/api/locations")
+@editor_required
+def add_location():
+    data = request.get_json(silent=True) or {}
+    name = clean(data.get("name"))
+    if not name:
+        abort(make_err(400, "Location name is required."))
+    parent_id = data.get("parent_id")
+    con = db()
+    if parent_id is not None and str(parent_id).strip() != "":
+        try:
+            parent_id = int(parent_id)
+        except (ValueError, TypeError):
+            abort(make_err(400, "Invalid parent_id."))
+        if not con.execute("SELECT id FROM locations WHERE id=?", (parent_id,)).fetchone():
+            abort(make_err(400, "Parent location does not exist."))
+    else:
+        parent_id = None
+    sort_order = int(data.get("sort_order") or 0)
+    cur = con.execute("INSERT INTO locations(parent_id, name, sort_order) VALUES (?, ?, ?)",
+                      (parent_id, name, sort_order))
+    con.commit()
+    loc_id = cur.lastrowid
+    locs = get_locations(con)
+    loc = next((l for l in locs if l["id"] == loc_id), None)
+    return jsonify(ok=True, location=loc), 201
+
+
+@app.put("/admin/api/locations/<int:loc_id>")
+@editor_required
+def edit_location(loc_id):
+    con = db()
+    cur = con.execute("SELECT * FROM locations WHERE id=?", (loc_id,)).fetchone()
+    if not cur:
+        abort(make_err(404, "No such location."))
+    data = request.get_json(silent=True) or {}
+    name = clean(data.get("name")) if "name" in data else cur["name"]
+    if not name:
+        abort(make_err(400, "Location name cannot be empty."))
+
+    parent_id = cur["parent_id"]
+    if "parent_id" in data:
+        raw_p = data.get("parent_id")
+        if raw_p is not None and str(raw_p).strip() != "":
+            try:
+                parent_id = int(raw_p)
+            except (ValueError, TypeError):
+                abort(make_err(400, "Invalid parent_id."))
+            if parent_id == loc_id:
+                abort(make_err(400, "A location cannot be its own parent."))
+            descendants = get_descendant_location_ids(con, loc_id)
+            if parent_id in descendants:
+                abort(make_err(400, "A location cannot have one of its descendants as its parent."))
+            if not con.execute("SELECT id FROM locations WHERE id=?", (parent_id,)).fetchone():
+                abort(make_err(400, "Parent location does not exist."))
+        else:
+            parent_id = None
+
+    sort_order = int(data.get("sort_order") if "sort_order" in data else cur["sort_order"])
+    con.execute("UPDATE locations SET name=?, parent_id=?, sort_order=? WHERE id=?",
+                (name, parent_id, sort_order, loc_id))
+    con.commit()
+    locs = get_locations(con)
+    loc = next((l for l in locs if l["id"] == loc_id), None)
+    return jsonify(ok=True, location=loc)
+
+
+@app.delete("/admin/api/locations/<int:loc_id>")
+@editor_required
+def delete_location(loc_id):
+    con = db()
+    cur = con.execute("SELECT * FROM locations WHERE id=?", (loc_id,)).fetchone()
+    if not cur:
+        abort(make_err(404, "No such location."))
+    con.execute("DELETE FROM locations WHERE id=?", (loc_id,))
+    con.commit()
+    return jsonify(ok=True, deleted_id=loc_id)
+
+
 @app.post("/admin/api/copies")
 @editor_required
 def add_copy():
     data = request.get_json(silent=True) or {}
     vals = copy_values(data)
-    tmdb_id = tmdb_id_arg(data.get("tmdb_id"))
     con = db()
-    row = con.execute("SELECT id FROM titles WHERE tmdb_id=?", (tmdb_id,)).fetchone()
-    if row:  # already in the catalog: no TMDB call
-        title_id = row["id"]
+    if data.get("title_id"):
+        try:
+            title_id = int(data["title_id"])
+        except (ValueError, TypeError):
+            abort(make_err(400, "title_id must be a number"))
+        row = con.execute("SELECT id FROM titles WHERE id=?", (title_id,)).fetchone()
+        if not row:
+            abort(make_err(404, "No such title"))
     else:
-        t = tmdb_details(tmdb_id)  # raises before anything is written
-        files = fetch_images(t)
-        row = con.execute("SELECT id FROM titles WHERE tmdb_id=?", (tmdb_id,)).fetchone()  # added meanwhile?
-        title_id = row["id"] if row else write_title(con, t, files)
-    cid = con.execute("INSERT INTO copies(title_id, kind, format, service, added_by) VALUES (?,?,?,?,?)",
-                      (title_id, vals["kind"], vals["format"], vals["service"], who())).lastrowid
+        tmdb_id = tmdb_id_arg(data.get("tmdb_id"))
+        row = con.execute("SELECT id FROM titles WHERE tmdb_id=?", (tmdb_id,)).fetchone()
+        if row:  # already in the catalog: no TMDB call
+            title_id = row["id"]
+        else:
+            t = tmdb_details(tmdb_id)  # raises before anything is written
+            files = fetch_images(t)
+            row = con.execute("SELECT id FROM titles WHERE tmdb_id=?", (tmdb_id,)).fetchone()  # added meanwhile?
+            title_id = row["id"] if row else write_title(con, t, files)
+    cid = con.execute("INSERT INTO copies(title_id, kind, format, service, location_id, added_by) VALUES (?,?,?,?,?,?)",
+                      (title_id, vals["kind"], vals["format"], vals["service"], vals["location_id"], who())).lastrowid
     con.commit()
     out = title_detail(title_id, True)
     out["copy_id"] = cid
@@ -1292,11 +1589,11 @@ def copy_row(copy_id):
 def edit_copy(copy_id):
     cur = copy_row(copy_id)
     data = request.get_json(silent=True) or {}
-    merged = {k: data[k] if k in data else cur[k] for k in ("kind", "format", "service")}
+    merged = {k: data[k] if k in data else cur[k] for k in ("kind", "format", "service", "location_id")}
     vals = copy_values(merged)
     con = db()
-    con.execute("UPDATE copies SET kind=?, format=?, service=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
-                (vals["kind"], vals["format"], vals["service"], copy_id))
+    con.execute("UPDATE copies SET kind=?, format=?, service=?, location_id=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                (vals["kind"], vals["format"], vals["service"], vals["location_id"], copy_id))
     con.commit()
     return jsonify(title_detail(cur["title_id"], True))
 
@@ -1341,6 +1638,17 @@ def add_watch(title_id):
         abort(make_err(404, "No such title"))
     data = request.get_json(silent=True) or {}
     raw_date = data.get("watched_date") if "watched_date" in data else data.get("watched_at")
+    raw_bucket = clean(data.get("date_bucket"))
+    date_bucket = None
+    if raw_bucket:
+        normalized = raw_bucket.lower().replace("-", "_").replace(" ", "_").replace("–", "_")
+        for k in WATCH_BUCKET_LABELS:
+            if normalized in (k, WATCH_BUCKET_LABELS[k].lower().replace("-", "_").replace(" ", "_").replace("–", "_")):
+                date_bucket = k
+                break
+        if not date_bucket:
+            date_bucket = raw_bucket
+
     watched_date = None
     if raw_date is not None and str(raw_date).strip():
         try:
@@ -1350,10 +1658,22 @@ def add_watch(title_id):
             abort(make_err(400, "Invalid watched_date: format must be YYYY-MM-DD"))
         if parsed > dt.date.today() + dt.timedelta(days=1):
             abort(make_err(400, "watched_date cannot be in the future."))
+    elif date_bucket and date_bucket in WATCH_BUCKET_OFFSETS:
+        days = WATCH_BUCKET_OFFSETS[date_bucket]
+        estimated_date = dt.date.today() - dt.timedelta(days=days)
+        watched_date = estimated_date.isoformat()
+
     notes = clean(data.get("notes"))
-    cur = con.execute("INSERT INTO watches(title_id, watched_date, notes) VALUES (?, ?, ?)", (title_id, watched_date, notes))
+    cur = con.execute("INSERT INTO watches(title_id, watched_date, notes, date_bucket) VALUES (?, ?, ?, ?)",
+                      (title_id, watched_date, notes, date_bucket))
     con.commit()
-    return jsonify(ok=True, watch={"id": cur.lastrowid, "title_id": title_id, "watched_date": watched_date, "notes": notes})
+    return jsonify(ok=True, watch={
+        "id": cur.lastrowid,
+        "title_id": title_id,
+        "watched_date": watched_date,
+        "notes": notes,
+        "date_bucket": date_bucket
+    })
 
 
 @app.delete("/admin/api/titles/<int:title_id>/watches/<int:watch_id>")

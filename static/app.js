@@ -154,6 +154,15 @@
     return copy.format;
   }
 
+  const BUCKET_LABELS = {
+    past_year: "Within the Past Year",
+    "1_2_years": "1–2 Years Ago",
+    "2_5_years": "2–5 Years Ago",
+    "5_10_years": "5–10 Years Ago",
+    over_10_years: "Over 10 Years Ago",
+    unknown: "Date Unknown",
+  };
+
   function formatRelativeDate(isoDateStr) {
     if (!isoDateStr) return "Never";
     const parts = isoDateStr.split("-").map(Number);
@@ -236,6 +245,9 @@
         <button type="button" class="btn btn-sm btn-ghost" id="btn-header-movie-night" title="Movie Night Picker">
           🎲 Movie Night
         </button>
+        <button type="button" class="btn btn-sm btn-ghost" id="btn-header-locations" title="Manage Shelves &amp; Locations">
+          📍 Locations
+        </button>
         <a href="#/stats" class="btn btn-sm btn-ghost" id="btn-header-stats">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
           Stats
@@ -261,6 +273,7 @@
       `;
     }
     document.getElementById("btn-header-movie-night")?.addEventListener("click", () => openMovieNightModal());
+    document.getElementById("btn-header-locations")?.addEventListener("click", () => openLocationsManagerModal());
 
     const footerLinks = document.getElementById("footer-links");
     if (footerLinks) {
@@ -340,6 +353,7 @@
     const format = state.route.query.get("format") || "";
     const service = state.route.query.get("service") || "";
     const sort = state.route.query.get("sort") || "title";
+    const locationId = (state.route.query.get("location_id") || state.route.query.get("location") || "").trim();
 
     const medium = mediumStr ? mediumStr.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean) : [];
     if (!medium.length) {
@@ -363,6 +377,7 @@
     state.grid.genre = genre;
     state.grid.rating = rating;
     state.grid.watched = watched;
+    state.grid.location_id = locationId;
     state.grid.kind = kind;
     state.grid.both = both;
     state.grid.format = format;
@@ -521,6 +536,7 @@
       genre.length > 0 ||
       Boolean(rating) ||
       Boolean(watched) ||
+      Boolean(locationId) ||
       state.grid.kind ||
       state.grid.both ||
       state.grid.format ||
@@ -531,6 +547,13 @@
     const genreLabel = getGenreLabel(genre);
     const watchedLabel = getWatchedLabel(watched);
     const ratingLabel = getRatingLabel(rating);
+
+    const locationId = state.grid.location_id || "";
+    let locationLabel = "All Locations";
+    if (locationId && f.locations) {
+      const matchLoc = f.locations.find((l) => String(l.id) === String(locationId));
+      if (matchLoc) locationLabel = matchLoc.name;
+    }
 
     const genresList = f.genres || [];
 
@@ -655,6 +678,36 @@
         </div>
       </div>
 
+      <!-- Location Dropdown -->
+      ${
+        f.locations && f.locations.length
+          ? `
+      <div class="filter-popover" id="popover-location">
+        <button type="button" class="filter-btn ${locationId ? "active" : ""}" data-toggle="popover" aria-expanded="false" aria-haspopup="true">
+          <span>📍 ${esc(locationLabel)}</span>
+          <span class="caret">▾</span>
+        </button>
+        <div class="popover-menu" role="menu">
+          <label class="popover-item is-all">
+            <input type="checkbox" data-facet="location" data-val="" ${!locationId ? "checked" : ""}>
+            <span>All Locations</span>
+          </label>
+          ${f.locations
+            .map(
+              (loc) => `
+            <label class="popover-item" style="padding-left:calc(var(--s3) + ${loc.depth * 12}px)">
+              <input type="checkbox" data-facet="location" data-val="${loc.id}" ${String(locationId) === String(loc.id) ? "checked" : ""}>
+              <span>${esc(loc.name)} <span style="color:var(--ink-3);font-size:var(--fs-xs)">(${loc.copy_count})</span></span>
+            </label>
+          `
+            )
+            .join("")}
+        </div>
+      </div>
+      `
+          : ""
+      }
+
       ${hasFilters ? `<button type="button" class="filter-reset-btn" id="filter-reset-btn">✕ Reset</button>` : ""}
     `;
 
@@ -764,6 +817,14 @@
           } else {
             q.set("rating", val);
           }
+        } else if (facet === "location") {
+          if (!val || (String(val) === String(state.grid.location_id) && !checked)) {
+            q.delete("location_id");
+            q.delete("location");
+          } else {
+            q.set("location_id", val);
+            q.delete("location");
+          }
         }
 
         const qStr = q.toString();
@@ -785,6 +846,8 @@
       q.delete("both");
       q.delete("format");
       q.delete("service");
+      q.delete("location_id");
+      q.delete("location");
       const qStr = q.toString();
       location.hash = qStr ? `#/?${qStr}` : "#/";
     });
@@ -1066,13 +1129,19 @@
             isAdmin
               ? `
             <div class="watch-log-form">
-              <div class="watch-log-inputs">
+              <select id="select-watch-timing" class="watch-timing-select" aria-label="Select watch timing">
+                <option value="exact">Exact Date</option>
+                <option value="past_year">Watched Within the Past Year</option>
+                <option value="1_2_years">Watched 1–2 Years Ago</option>
+                <option value="2_5_years">Watched 2–5 Years Ago</option>
+                <option value="5_10_years">Watched 5–10 Years Ago</option>
+                <option value="over_10_years">Watched Over 10 Years Ago</option>
+                <option value="unknown">Date Unknown (Historical)</option>
+              </select>
+              <div class="watch-log-inputs" id="wrap-watch-date">
                 <input type="date" id="input-watch-date" class="watch-date-input" max="${new Date().toISOString().slice(0, 10)}">
-                <button type="button" class="btn btn-sm btn-ghost" id="btn-log-watch">Log Past Date</button>
               </div>
-              <label class="watch-historical-label">
-                <input type="checkbox" id="chk-watch-historical"> I don't know the exact date (historical watch)
-              </label>
+              <button type="button" class="btn btn-sm btn-ghost" id="btn-log-watch" style="width:100%;margin-top:var(--s1)">Log Past Watch</button>
             </div>
           `
               : ""
@@ -1089,15 +1158,15 @@
                 <div class="watch-row ${idx >= 3 ? "watch-row-extra hidden" : ""}" data-watch-id="${w.id}">
                   <div class="watch-row-main" style="display:flex;align-items:center;gap:var(--s2);flex-wrap:wrap">
                     ${
-                      w.watched_date
-                        ? `
-                      <span class="watch-row-date">📅 ${formatReadableDate(w.watched_date)}</span>
-                      <span class="watch-row-rel">(${formatRelativeDate(w.watched_date)})</span>
-                    `
-                        : `
-                      <span class="watch-row-date">📅 Watched (Date unknown)</span>
-                      <span class="badge badge-subtle">Historical</span>
-                    `
+                      w.date_bucket && BUCKET_LABELS[w.date_bucket]
+                        ? (w.date_bucket === "unknown"
+                            ? `<span class="watch-row-date">📅 Watched (Date unknown)</span><span class="badge badge-subtle">Historical</span>`
+                            : `<span class="watch-row-date">📅 Watched ${esc(BUCKET_LABELS[w.date_bucket])}</span><span class="badge badge-subtle">Estimated</span>`
+                          )
+                        : (w.watched_date
+                            ? `<span class="watch-row-date">📅 ${formatReadableDate(w.watched_date)}</span><span class="watch-row-rel">(${formatRelativeDate(w.watched_date)})</span>`
+                            : `<span class="watch-row-date">📅 Watched (Date unknown)</span><span class="badge badge-subtle">Historical</span>`
+                          )
                     }
                   </div>
                   ${w.notes ? `<div class="watch-row-notes" style="width:100%;font-size:var(--fs-xs);color:var(--ink-2);margin-top:2px;padding-left:4px">${esc(w.notes)}</div>` : ""}
@@ -1139,6 +1208,10 @@
                 .map((cp) => {
                   const label = formatCopyLabel(cp);
                   const chipCls = getChipClass(cp.format);
+                  const locBadge =
+                    cp.kind === "physical" && cp.location_path
+                      ? `<span class="copy-location">📍 ${esc(cp.location_path)}</span>`
+                      : "";
                   const addedInfo = cp.added_by
                     ? `<span class="copy-meta">Added by ${esc(cp.added_by)}</span>`
                     : "";
@@ -1147,6 +1220,7 @@
                     <div class="copy-row" data-copy-id="${cp.id}">
                       <div class="copy-info">
                         <span class="chip ${chipCls}">${getChipIcon(cp.format)} ${esc(label)}</span>
+                        ${locBadge}
                         ${addedInfo}
                       </div>
                       ${
@@ -1305,30 +1379,19 @@
       });
 
       // Watch history listeners
-      const chkHistorical = document.getElementById("chk-watch-historical");
+      const selectTiming = document.getElementById("select-watch-timing");
+      const wrapDate = document.getElementById("wrap-watch-date");
       const inputWatchDate = document.getElementById("input-watch-date");
       const btnLogWatch = document.getElementById("btn-log-watch");
 
-      chkHistorical?.addEventListener("change", () => {
-        if (chkHistorical.checked) {
-          if (inputWatchDate) {
-            inputWatchDate.disabled = true;
-            inputWatchDate.value = "";
-          }
-          if (btnLogWatch) {
-            btnLogWatch.textContent = "Log Historical Watch";
-            btnLogWatch.classList.remove("btn-ghost");
-            btnLogWatch.classList.add("btn-secondary");
-          }
+      selectTiming?.addEventListener("change", () => {
+        const mode = selectTiming.value;
+        if (mode === "exact") {
+          if (wrapDate) wrapDate.style.display = "flex";
+          if (btnLogWatch) btnLogWatch.textContent = "Log Past Date";
         } else {
-          if (inputWatchDate) {
-            inputWatchDate.disabled = false;
-          }
-          if (btnLogWatch) {
-            btnLogWatch.textContent = "Log Past Date";
-            btnLogWatch.classList.remove("btn-secondary");
-            btnLogWatch.classList.add("btn-ghost");
-          }
+          if (wrapDate) wrapDate.style.display = "none";
+          if (btnLogWatch) btnLogWatch.textContent = "Log Approximate Watch";
         }
       });
 
@@ -1347,21 +1410,27 @@
       });
 
       btnLogWatch?.addEventListener("click", async () => {
-        const isHistorical = !!chkHistorical?.checked;
-        const val = inputWatchDate?.value?.trim();
-        if (!isHistorical && !val) {
-          toast("Please choose a date or select historical watch");
-          return;
+        const mode = selectTiming ? selectTiming.value : "exact";
+        let payload = {};
+        if (mode === "exact") {
+          const val = inputWatchDate?.value?.trim();
+          if (!val) {
+            toast("Please choose a date");
+            return;
+          }
+          payload = { watched_date: val };
+        } else {
+          payload = { date_bucket: mode };
         }
         try {
           await api(`${apiPrefix}/titles/${titleId}/watches`, {
             method: "POST",
-            body: isHistorical ? { watched_date: null } : { watched_date: val },
+            body: payload,
           });
-          toast(isHistorical ? "Logged historical watch!" : `Logged watch date: ${val}`);
+          toast("Watch logged!");
           await renderDetail(container, titleId);
         } catch (e) {
-          toast(e.message || "Failed to log watch date");
+          toast(e.message || "Failed to log watch");
         }
       });
 
@@ -2041,6 +2110,14 @@
     const modalRoot = document.getElementById("modal-root");
     if (!modalRoot) return;
 
+    let locationsList = [];
+    try {
+      const locData = await api("/api/locations");
+      locationsList = locData.locations || [];
+    } catch {
+      locationsList = [];
+    }
+
     const initialKind = prefill.kind || "physical";
     const initialFormat = prefill.format || (initialKind === "physical" ? "4K UHD" : "Digital HD");
     const initialService = prefill.service || "";
@@ -2089,6 +2166,14 @@
               <div class="chip-select-grid" id="service-select-grid">
                 <!-- Injected for digital -->
               </div>
+            </div>
+
+            <div class="form-group" id="location-group" style="${initialKind === "physical" ? "display:flex;flex-direction:column;gap:var(--s1)" : "display:none"}">
+              <label class="form-label">Storage Location</label>
+              <select id="select-copy-location" class="form-select" style="width:100%;padding:var(--s2);background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--ink)">
+                <option value="">(Unassigned / No shelf)</option>
+                ${locationsList.map((l) => `<option value="${l.id}">${esc(l.path)}</option>`).join("")}
+              </select>
             </div>
 
             <div class="form-actions">
@@ -2189,6 +2274,10 @@
         document.querySelectorAll("#kind-toggle .toggle-btn").forEach((b) => b.classList.remove("active"));
         btn.classList.add("active");
         formState.kind = btn.dataset.kind;
+        const locGroup = document.getElementById("location-group");
+        if (locGroup) {
+          locGroup.style.display = formState.kind === "physical" ? "flex" : "none";
+        }
         updateFormatGrid();
         updateServiceGrid();
         checkDuplicateWarning();
@@ -2233,11 +2322,14 @@
 
     // Form submission
     async function submitCopy(andAddAnother = false) {
+      const locSelect = document.getElementById("select-copy-location");
+      const locVal = locSelect?.value ? parseInt(locSelect.value, 10) : null;
       const payload = {
         tmdb_id: formState.tmdb_id,
         kind: formState.kind,
         format: formState.format,
         service: formState.kind === "digital" ? formState.service : null,
+        location_id: formState.kind === "physical" ? locVal : null,
       };
 
       const saveBtn = document.getElementById("btn-save-copy");
@@ -2301,9 +2393,17 @@
   }
 
   // Modal for editing an existing copy
-  function openEditCopyModal(copy, title) {
+  async function openEditCopyModal(copy, title) {
     const modalRoot = document.getElementById("modal-root");
     if (!modalRoot) return;
+
+    let locationsList = [];
+    try {
+      const locData = await api("/api/locations");
+      locationsList = locData.locations || [];
+    } catch {
+      locationsList = [];
+    }
 
     modalRoot.innerHTML = `
       <div class="modal-overlay" id="modal-overlay">
@@ -2333,6 +2433,14 @@
             <div class="form-group" id="edit-service-group" style="display:${copy.kind === "digital" ? "flex" : "none"}">
               <label class="form-label">Service</label>
               <div class="chip-select-grid" id="edit-service-select-grid"></div>
+            </div>
+
+            <div class="form-group" id="edit-location-group" style="${copy.kind === "physical" ? "display:flex;flex-direction:column;gap:var(--s1)" : "display:none"}">
+              <label class="form-label">Storage Location</label>
+              <select id="edit-select-copy-location" class="form-select" style="width:100%;padding:var(--s2);background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--ink)">
+                <option value="">(Unassigned / No shelf)</option>
+                ${locationsList.map((l) => `<option value="${l.id}" ${copy.location_id === l.id ? "selected" : ""}>${esc(l.path)}</option>`).join("")}
+              </select>
             </div>
 
             <div class="form-actions">
@@ -2411,6 +2519,10 @@
         document.querySelectorAll("#edit-kind-toggle .toggle-btn").forEach((b) => b.classList.remove("active"));
         btn.classList.add("active");
         formState.kind = btn.dataset.kind;
+        const locGroup = document.getElementById("edit-location-group");
+        if (locGroup) {
+          locGroup.style.display = formState.kind === "physical" ? "flex" : "none";
+        }
         updateFormatGrid();
         updateServiceGrid();
       });
@@ -2427,6 +2539,8 @@
 
     document.getElementById("edit-copy-form")?.addEventListener("submit", async (e) => {
       e.preventDefault();
+      const locSelect = document.getElementById("edit-select-copy-location");
+      const locVal = locSelect?.value ? parseInt(locSelect.value, 10) : null;
       try {
         await api(`/admin/api/copies/${copy.id}`, {
           method: "PUT",
@@ -2434,6 +2548,7 @@
             kind: formState.kind,
             format: formState.format,
             service: formState.kind === "digital" ? formState.service : null,
+            location_id: formState.kind === "physical" ? locVal : null,
           },
         });
         toast("Copy updated");
@@ -2853,6 +2968,166 @@
 
     renderModalSkeleton();
     await fetchPick();
+  }
+
+  // ================================================================= Locations Manager Modal
+  async function openLocationsManagerModal() {
+    const modalRoot = document.getElementById("modal-root");
+    if (!modalRoot) return;
+
+    let locations = [];
+    try {
+      const data = await api("/admin/api/locations");
+      locations = data.locations || [];
+    } catch (err) {
+      toast(err.message || "Failed to load locations");
+      return;
+    }
+
+    modalRoot.innerHTML = `
+      <div class="modal-overlay" id="modal-overlay">
+        <div class="modal-dialog" style="max-width:640px">
+          <div class="modal-header">
+            <div>
+              <div class="modal-title">📍 Shelves &amp; Locations</div>
+              <div style="font-size:var(--fs-xs);color:var(--ink-3)">Manage physical storage locations (rooms, cabinets, shelves, bins)</div>
+            </div>
+            <button type="button" class="btn-close" id="btn-modal-close" aria-label="Close">✕</button>
+          </div>
+
+          <div style="display:flex;flex-direction:column;gap:var(--s4)">
+            <!-- Add New Location Form -->
+            <form id="add-location-form" style="display:flex;flex-direction:column;gap:var(--s3);padding:var(--s3);background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--radius-sm)">
+              <div style="font-weight:600;font-size:var(--fs-sm)">Add New Shelf / Location</div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--s2)">
+                <div class="form-group">
+                  <label class="form-label" style="font-size:var(--fs-xs)">Name</label>
+                  <input type="text" id="loc-add-name" class="form-input" placeholder="e.g. Media Cabinet, Shelf 2" required style="padding:var(--s2);font-size:var(--fs-sm)">
+                </div>
+                <div class="form-group">
+                  <label class="form-label" style="font-size:var(--fs-xs)">Parent Location (Optional)</label>
+                  <select id="loc-add-parent" class="form-select" style="padding:var(--s2);font-size:var(--fs-sm)">
+                    <option value="">(None - Top Level)</option>
+                    ${locations.map(l => `<option value="${l.id}">${esc(l.path)}</option>`).join("")}
+                  </select>
+                </div>
+              </div>
+              <div style="display:flex;justify-content:flex-end">
+                <button type="submit" class="btn btn-sm" id="btn-loc-submit">＋ Add Location</button>
+              </div>
+            </form>
+
+            <!-- Locations Tree List -->
+            <div>
+              <div style="font-weight:600;font-size:var(--fs-sm);margin-bottom:var(--s2)">Existing Locations (${locations.length})</div>
+              ${
+                locations.length === 0
+                  ? `<div style="text-align:center;padding:var(--s4);color:var(--ink-3);font-size:var(--fs-sm)">No physical locations configured yet. Add one above!</div>`
+                  : `
+                <div class="locations-list">
+                  ${locations
+                    .map(
+                      loc => `
+                    <div class="location-row" data-id="${loc.id}">
+                      <div class="location-row-main" style="padding-left:calc(var(--s1) + ${loc.depth * 16}px)">
+                        <span>${loc.depth === 0 ? "🏠" : "📁"}</span>
+                        <span class="location-path">${esc(loc.name)}</span>
+                        ${loc.depth > 0 ? `<span style="font-size:var(--fs-xs);color:var(--ink-3)">(${esc(loc.path)})</span>` : ""}
+                        <span class="location-count-pill">${loc.copy_count} ${loc.copy_count === 1 ? "copy" : "copies"}</span>
+                      </div>
+                      <div class="location-actions">
+                        <button type="button" class="btn btn-xs btn-ghost btn-loc-edit" data-id="${loc.id}" data-name="${esc(loc.name)}" data-parent="${loc.parent_id || ""}" title="Rename">✏️ Rename</button>
+                        <button type="button" class="btn btn-xs btn-ghost btn-loc-delete" data-id="${loc.id}" data-name="${esc(loc.name)}" data-copies="${loc.copy_count}" title="Delete" style="color:var(--danger)">🗑️</button>
+                      </div>
+                    </div>
+                  `
+                    )
+                    .join("")}
+                </div>
+              `
+              }
+            </div>
+
+            <div class="modal-actions" style="margin-top:var(--s2)">
+              <button type="button" class="btn btn-ghost" id="btn-modal-cancel">Close</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+
+    document.getElementById("btn-modal-close")?.addEventListener("click", closeModal);
+    document.getElementById("btn-modal-cancel")?.addEventListener("click", closeModal);
+    document.getElementById("modal-overlay")?.addEventListener("click", (e) => {
+      if (e.target.id === "modal-overlay") closeModal();
+    });
+
+    // Add location form submit
+    document.getElementById("add-location-form")?.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const nameInput = document.getElementById("loc-add-name");
+      const parentSelect = document.getElementById("loc-add-parent");
+      const name = nameInput ? nameInput.value.trim() : "";
+      const parent_id = parentSelect && parentSelect.value ? parseInt(parentSelect.value, 10) : null;
+      if (!name) return;
+
+      try {
+        await api("/admin/api/locations", {
+          method: "POST",
+          body: { name, parent_id },
+        });
+        toast(`Location "${name}" added`);
+        await openLocationsManagerModal();
+      } catch (err) {
+        toast(err.message || "Failed to add location");
+      }
+    });
+
+    // Edit location button
+    modalRoot.querySelectorAll(".btn-loc-edit").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        const id = btn.dataset.id;
+        const currentName = btn.dataset.name;
+        const newName = window.prompt("Rename location:", currentName);
+        if (newName === null) return;
+        const trimmed = newName.trim();
+        if (!trimmed || trimmed === currentName) return;
+
+        try {
+          await api(`/admin/api/locations/${id}`, {
+            method: "PUT",
+            body: { name: trimmed },
+          });
+          toast("Location updated");
+          await openLocationsManagerModal();
+        } catch (err) {
+          toast(err.message || "Failed to update location");
+        }
+      });
+    });
+
+    // Delete location button
+    modalRoot.querySelectorAll(".btn-loc-delete").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        const id = btn.dataset.id;
+        const name = btn.dataset.name;
+        const copies = parseInt(btn.dataset.copies, 10) || 0;
+        const confirmMsg = copies > 0
+          ? `Delete "${name}"? This location currently holds ${copies} copies (which will become unassigned), and any child sub-shelves will be deleted.`
+          : `Delete "${name}"?`;
+        if (!window.confirm(confirmMsg)) return;
+
+        try {
+          await api(`/admin/api/locations/${id}`, {
+            method: "DELETE",
+          });
+          toast("Location deleted");
+          await openLocationsManagerModal();
+        } catch (err) {
+          toast(err.message || "Failed to delete location");
+        }
+      });
+    });
   }
 
   // ================================================================= Initialization
