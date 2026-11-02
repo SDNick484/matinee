@@ -33,7 +33,7 @@ jobs:
 
       - name: Run pytest test suite
         run: |
-          pytest -v
+          python -m pytest -v
 
       - name: Verify JavaScript syntax
         run: |
