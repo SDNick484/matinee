@@ -1151,10 +1151,42 @@ main#view {
 }
 .watch-log-form {
   display: flex;
-  align-items: center;
+  flex-direction: column;
   gap: var(--s2);
   margin-bottom: var(--s3);
+}
+.watch-log-inputs {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
   flex-wrap: wrap;
+}
+.watch-historical-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--fs-xs);
+  color: var(--ink-2);
+  cursor: pointer;
+  user-select: none;
+  min-height: 44px;
+}
+.watch-historical-label input[type="checkbox"] {
+  cursor: pointer;
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
+}
+.badge-subtle {
+  display: inline-flex;
+  align-items: center;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  background: rgba(148, 163, 184, 0.15);
+  color: var(--ink-2);
+  border: 1px solid var(--line);
 }
 .watch-date-input {
   background: var(--raised);
@@ -1164,6 +1196,7 @@ main#view {
   border-radius: var(--r-card);
   font-size: var(--fs-sm);
   font-family: inherit;
+  min-height: 44px;
 }
 .watch-log-list {
   display: flex;
