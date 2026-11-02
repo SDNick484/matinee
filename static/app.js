@@ -155,11 +155,11 @@
   }
 
   const BUCKET_LABELS = {
-    past_year: "Within the Past Year",
-    "1_2_years": "1–2 Years Ago",
-    "2_5_years": "2–5 Years Ago",
-    "5_10_years": "5–10 Years Ago",
-    over_10_years: "Over 10 Years Ago",
+    past_year: "Past Year",
+    "1_2_years": "1–2 Years",
+    "2_5_years": "2–5 Years",
+    "5_10_years": "5–10 Years",
+    over_10_years: "10+ Years",
     unknown: "Date Unknown",
   };
 
@@ -1129,19 +1129,18 @@
             isAdmin
               ? `
             <div class="watch-log-form">
-              <select id="select-watch-timing" class="watch-timing-select" aria-label="Select watch timing">
-                <option value="exact">Exact Date</option>
-                <option value="past_year">Watched Within the Past Year</option>
-                <option value="1_2_years">Watched 1–2 Years Ago</option>
-                <option value="2_5_years">Watched 2–5 Years Ago</option>
-                <option value="5_10_years">Watched 5–10 Years Ago</option>
-                <option value="over_10_years">Watched Over 10 Years Ago</option>
-                <option value="unknown">Date Unknown (Historical)</option>
-              </select>
-              <div class="watch-log-inputs" id="wrap-watch-date">
+              <div class="watch-log-inputs">
                 <input type="date" id="input-watch-date" class="watch-date-input" max="${new Date().toISOString().slice(0, 10)}">
+                <button type="button" class="btn btn-sm btn-ghost" id="btn-log-watch">Log Date</button>
               </div>
-              <button type="button" class="btn btn-sm btn-ghost" id="btn-log-watch" style="width:100%;margin-top:var(--s1)">Log Past Watch</button>
+              <div class="watch-bucket-buttons">
+                <button type="button" class="btn btn-watch-bucket" data-bucket="past_year">Past Year</button>
+                <button type="button" class="btn btn-watch-bucket" data-bucket="1_2_years">1–2 Years</button>
+                <button type="button" class="btn btn-watch-bucket" data-bucket="2_5_years">2–5 Years</button>
+                <button type="button" class="btn btn-watch-bucket" data-bucket="5_10_years">5–10 Years</button>
+                <button type="button" class="btn btn-watch-bucket" data-bucket="over_10_years">10+ Years</button>
+                <button type="button" class="btn btn-watch-bucket" data-bucket="unknown">Date Unknown</button>
+              </div>
             </div>
           `
               : ""
@@ -1379,21 +1378,8 @@
       });
 
       // Watch history listeners
-      const selectTiming = document.getElementById("select-watch-timing");
-      const wrapDate = document.getElementById("wrap-watch-date");
       const inputWatchDate = document.getElementById("input-watch-date");
       const btnLogWatch = document.getElementById("btn-log-watch");
-
-      selectTiming?.addEventListener("change", () => {
-        const mode = selectTiming.value;
-        if (mode === "exact") {
-          if (wrapDate) wrapDate.style.display = "flex";
-          if (btnLogWatch) btnLogWatch.textContent = "Log Past Date";
-        } else {
-          if (wrapDate) wrapDate.style.display = "none";
-          if (btnLogWatch) btnLogWatch.textContent = "Log Approximate Watch";
-        }
-      });
 
       document.getElementById("btn-watched-today")?.addEventListener("click", async () => {
         try {
@@ -1410,28 +1396,38 @@
       });
 
       btnLogWatch?.addEventListener("click", async () => {
-        const mode = selectTiming ? selectTiming.value : "exact";
-        let payload = {};
-        if (mode === "exact") {
-          const val = inputWatchDate?.value?.trim();
-          if (!val) {
-            toast("Please choose a date");
-            return;
-          }
-          payload = { watched_date: val };
-        } else {
-          payload = { date_bucket: mode };
+        const val = inputWatchDate?.value?.trim();
+        if (!val) {
+          toast("Please choose a date");
+          return;
         }
         try {
           await api(`${apiPrefix}/titles/${titleId}/watches`, {
             method: "POST",
-            body: payload,
+            body: { watched_date: val },
           });
-          toast("Watch logged!");
+          toast(`Logged watch date: ${val}`);
           await renderDetail(container, titleId);
         } catch (e) {
-          toast(e.message || "Failed to log watch");
+          toast(e.message || "Failed to log watch date");
         }
+      });
+
+      container.querySelectorAll(".btn-watch-bucket").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const bucket = btn.dataset.bucket;
+          const label = BUCKET_LABELS[bucket] || bucket;
+          try {
+            await api(`${apiPrefix}/titles/${titleId}/watches`, {
+              method: "POST",
+              body: { date_bucket: bucket },
+            });
+            toast(`Logged watch: ${label}`);
+            await renderDetail(container, titleId);
+          } catch (e) {
+            toast(e.message || "Failed to log watch");
+          }
+        });
       });
 
       container.querySelectorAll(".btn-delete-watch").forEach((btn) => {

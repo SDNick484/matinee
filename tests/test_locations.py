@@ -242,6 +242,20 @@ def test_watch_date_buckets_estimation(client):
     # Should be roughly 7.5 years ago (around 2018-2019)
     assert int(w["watched_date"][:4]) <= 2020
 
+    # Test "10+ Years" label parsing
+    res = client.post("/admin/api/titles/1/watches", json={"date_bucket": "10+ Years"})
+    assert res.status_code == 200
+    w = res.get_json()["watch"]
+    assert w["date_bucket"] == "over_10_years"
+    assert int(w["watched_date"][:4]) <= 2016
+
+    # Test "Date Unknown" label parsing
+    res = client.post("/admin/api/titles/1/watches", json={"date_bucket": "Date Unknown"})
+    assert res.status_code == 200
+    w = res.get_json()["watch"]
+    assert w["date_bucket"] == "unknown"
+    assert w["watched_date"] is None
+
 from mcp_server import MatineeClient
 
 def test_mcp_where_is_tool(client, tmp_path, monkeypatch):

@@ -1929,13 +1929,28 @@ main#view {
   gap: 6px;
 }
 
-.watch-timing-select {
-  width: 100%;
-  padding: var(--s2);
+.watch-bucket-buttons {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+
+.btn-watch-bucket {
+  font-size: var(--fs-xs);
+  padding: 5px 10px;
+  border-radius: var(--radius-sm, 4px);
+  color: var(--ink-2);
   background: var(--bg-surface);
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm, 4px);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
+}
+
+.btn-watch-bucket:hover {
   color: var(--ink);
-  font-size: var(--fs-sm);
-  margin-bottom: var(--s2);
+  background: var(--bg-card);
+  border-color: var(--ink-3);
 }

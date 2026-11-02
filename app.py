@@ -1287,11 +1287,11 @@ WATCH_BUCKET_OFFSETS = {
 }
 
 WATCH_BUCKET_LABELS = {
-    "past_year": "Within the Past Year",
-    "1_2_years": "1–2 Years Ago",
-    "2_5_years": "2–5 Years Ago",
-    "5_10_years": "5–10 Years Ago",
-    "over_10_years": "Over 10 Years Ago",
+    "past_year": "Past Year",
+    "1_2_years": "1–2 Years",
+    "2_5_years": "2–5 Years",
+    "5_10_years": "5–10 Years",
+    "over_10_years": "10+ Years",
     "unknown": "Date Unknown",
 }
 
@@ -1642,13 +1642,20 @@ def add_watch(title_id):
     raw_bucket = clean(data.get("date_bucket"))
     date_bucket = None
     if raw_bucket:
-        normalized = raw_bucket.lower().replace("-", "_").replace(" ", "_").replace("–", "_")
+        normalized = raw_bucket.lower().replace("-", "_").replace(" ", "_").replace("–", "_").replace("+", "")
         for k in WATCH_BUCKET_LABELS:
-            if normalized in (k, WATCH_BUCKET_LABELS[k].lower().replace("-", "_").replace(" ", "_").replace("–", "_")):
+            clean_k = k.lower().replace("-", "_").replace(" ", "_").replace("–", "_").replace("+", "")
+            clean_lbl = WATCH_BUCKET_LABELS[k].lower().replace("-", "_").replace(" ", "_").replace("–", "_").replace("+", "")
+            if normalized in (clean_k, clean_lbl):
                 date_bucket = k
                 break
         if not date_bucket:
-            date_bucket = raw_bucket
+            if "10" in normalized:
+                date_bucket = "over_10_years"
+            elif "unknown" in normalized:
+                date_bucket = "unknown"
+            else:
+                date_bucket = raw_bucket
 
     watched_date = None
     if raw_date is not None and str(raw_date).strip():
