@@ -770,9 +770,16 @@ def test_watches_api_and_filters(monkeypatch):
     assert res.status_code == 401
     monkeypatch.setattr(matinee, "LAN_EDIT", True)
 
-    # 2. Add watch defaulting to today
+    # 2. Add dateless watch on t3 to verify absent date stores None, then delete it
+    res_dl = c.post(f"/admin/api/titles/{t3['id']}/watches", json={})
+    assert res_dl.status_code == 200
+    w_dl = res_dl.get_json()["watch"]
+    assert w_dl["watched_date"] is None
+    c.delete(f"/admin/api/titles/{t3['id']}/watches/{w_dl['id']}")
+
+    # Add explicit today watch for t1
     today_iso = dt.date.today().isoformat()
-    res = c.post(f"/admin/api/titles/{t1['id']}/watches", json={})
+    res = c.post(f"/admin/api/titles/{t1['id']}/watches", json={"watched_date": today_iso})
     assert res.status_code == 200
     w1 = res.get_json()["watch"]
     assert w1["watched_date"] == today_iso
@@ -871,6 +878,13 @@ def test_stats_watched_and_rating():
     assert rs["rated_percent"] == 66.7
     assert rs["average_rating"] == 8.0
     assert rs["high_rated_count"] == 1
+
+
+def test_static_app_js_no_undefined_escapeHtml():
+    js = (matinee.APP_DIR / "static" / "app.js").read_text(encoding="utf-8")
+    if "escapeHtml(" in js:
+        assert "function escapeHtml" in js or "const escapeHtml" in js or "let escapeHtml" in js
+
 
 
 

@@ -246,9 +246,8 @@ class MatineeClient:
 
                 if mode == "forgotten_gems":
                     where.append("(SELECT rating FROM user_ratings r WHERE r.title_id=t.id) >= 8.0")
-                    where.append("((SELECT MAX(watched_date) FROM watches w WHERE w.title_id=t.id) IS NULL "
-                                 "OR (SELECT MAX(watched_date) FROM watches w WHERE w.title_id=t.id) < date('now', '-365 days'))")
-                    order_by = "user_rating DESC, COALESCE(last_watched, '1970-01-01') ASC, t.sort_title ASC"
+                    where.append("COALESCE((SELECT MAX(watched_date) FROM watches w WHERE w.title_id=t.id), '0000-00-00') < date('now', '-365 days')")
+                    order_by = "user_rating DESC, COALESCE(last_watched, '0000-00-00') ASC, t.sort_title ASC"
                 elif mode == "never_watched":
                     where.append("NOT EXISTS (SELECT 1 FROM watches w WHERE w.title_id=t.id)")
                     order_by = "COALESCE(t.tmdb_vote, 0) DESC, t.year DESC, t.sort_title ASC"
@@ -304,7 +303,17 @@ class MatineeClient:
                     runtime = r["runtime"]
 
                     if mode == "forgotten_gems":
-                        reason = f"Rated {user_r:.1f} ★ · Forgotten gem" if user_r else "High rated gem"
+                        if last_w:
+                            try:
+                                w_date = dt.date.fromisoformat(last_w)
+                                months = max(1, (dt.date.today() - w_date).days // 30)
+                                reason = f"Rated {user_r:.1f} ★ · Not watched in {months} months"
+                            except Exception:
+                                reason = f"Rated {user_r:.1f} ★ · Forgotten gem"
+                        elif r["watch_count"] > 0:
+                            reason = f"Rated {user_r:.1f} ★ · Historical watch (Date unknown)"
+                        else:
+                            reason = f"Rated {user_r:.1f} ★ · Never logged as watched"
                     elif mode == "never_watched":
                         reason = f"Unwatched backlog · TMDB {tmdb_v:.1f} ★" if tmdb_v else "Unwatched backlog"
                     elif mode == "quick_picks":
@@ -324,6 +333,7 @@ class MatineeClient:
                         "formats": (r["formats"] or "").split(",") if r["formats"] else [],
                         "genres": genres_list,
                         "recommendation_reason": reason,
+                        "reason": reason,
                     })
                 return {"mode": mode, "count": len(results), "results": results}
             finally:
@@ -394,11 +404,11 @@ class MatineeClient:
         title_id: int,
         watched_date: Optional[str] = None,
         notes: Optional[str] = None,
+        watched_at: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Record a watch event for a title with date and optional notes."""
-        payload = {}
-        if watched_date:
-            payload["watched_date"] = watched_date
+        date_val = watched_date if watched_date is not None else watched_at
+        payload: Dict[str, Any] = {"watched_date": date_val}
         if notes:
             payload["notes"] = notes
         return self._api_request("POST", f"/admin/api/titles/{title_id}/watches", payload)
@@ -487,10 +497,13 @@ if mcp:
 
     @mcp.tool()
     def log_watch(
-        title_id: int, watched_date: Optional[str] = None, notes: Optional[str] = None
+        title_id: int,
+        watched_date: Optional[str] = None,
+        notes: Optional[str] = None,
+        watched_at: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Record a watch event with an ISO date (YYYY-MM-DD, defaults to today) and optional notes."""
-        return _default_client.log_watch(title_id, watched_date=watched_date, notes=notes)
+        """Record a watch event with an optional ISO date (YYYY-MM-DD; omit or pass null for dateless/historical watch) and optional notes."""
+        return _default_client.log_watch(title_id, watched_date=watched_date, notes=notes, watched_at=watched_at)
 
     @mcp.tool()
     def search_tmdb(query: str) -> List[Dict[str, Any]]:

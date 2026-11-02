@@ -67,6 +67,7 @@
       .replace(/"/g, "&quot;")
       .replace(/'/g, "&#39;");
   }
+  const escapeHtml = esc;
 
   let toastTimer = null;
   function toast(msg, duration = 4000) {
@@ -180,11 +181,16 @@
     return date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
   }
 
-  function formatLastWatched(lastWatchedDate) {
-    if (!lastWatchedDate) return "Never watched";
-    const relative = formatRelativeDate(lastWatchedDate);
-    const readable = formatReadableDate(lastWatchedDate);
-    return `Watched ${relative} (${readable})`;
+  function formatLastWatched(lastWatchedDate, watchCount = 0) {
+    if (lastWatchedDate) {
+      const relative = formatRelativeDate(lastWatchedDate);
+      const readable = formatReadableDate(lastWatchedDate);
+      return `Watched ${relative} (${readable})`;
+    }
+    if (watchCount > 0) {
+      return "Watched (Date unknown)";
+    }
+    return "Never watched";
   }
 
   // ================================================================= Router
@@ -1042,7 +1048,7 @@
             <div>
               <h3 style="margin-bottom:2px">Watch History</h3>
               <div class="last-watched-tag" id="last-watched-tag">
-                ${formatLastWatched(title.last_watched)}
+                ${formatLastWatched(title.last_watched, title.watch_count)}
               </div>
             </div>
             ${
@@ -1060,8 +1066,13 @@
             isAdmin
               ? `
             <div class="watch-log-form">
-              <input type="date" id="input-watch-date" class="watch-date-input" max="${new Date().toISOString().slice(0, 10)}">
-              <button type="button" class="btn btn-sm btn-ghost" id="btn-log-watch">Log Past Date</button>
+              <div class="watch-log-inputs">
+                <input type="date" id="input-watch-date" class="watch-date-input" max="${new Date().toISOString().slice(0, 10)}">
+                <button type="button" class="btn btn-sm btn-ghost" id="btn-log-watch">Log Past Date</button>
+              </div>
+              <label class="watch-historical-label">
+                <input type="checkbox" id="chk-watch-historical"> I don't know the exact date (historical watch)
+              </label>
             </div>
           `
               : ""
@@ -1076,8 +1087,20 @@
                 .map(
                   (w, idx) => `
                 <div class="watch-row ${idx >= 3 ? "watch-row-extra hidden" : ""}" data-watch-id="${w.id}">
-                  <span class="watch-row-date">📅 ${formatReadableDate(w.watched_date)}</span>
-                  <span class="watch-row-rel">(${formatRelativeDate(w.watched_date)})</span>
+                  <div class="watch-row-main" style="display:flex;align-items:center;gap:var(--s2);flex-wrap:wrap">
+                    ${
+                      w.watched_date
+                        ? `
+                      <span class="watch-row-date">📅 ${formatReadableDate(w.watched_date)}</span>
+                      <span class="watch-row-rel">(${formatRelativeDate(w.watched_date)})</span>
+                    `
+                        : `
+                      <span class="watch-row-date">📅 Watched (Date unknown)</span>
+                      <span class="badge badge-subtle">Historical</span>
+                    `
+                    }
+                  </div>
+                  ${w.notes ? `<div class="watch-row-notes" style="width:100%;font-size:var(--fs-xs);color:var(--ink-2);margin-top:2px;padding-left:4px">${esc(w.notes)}</div>` : ""}
                   ${
                     isAdmin
                       ? `<button type="button" class="btn btn-sm btn-danger btn-delete-watch" data-id="${w.id}" title="Delete watch entry" style="margin-left:auto;padding:2px 8px;font-size:var(--fs-xs)">✕</button>`
@@ -1282,11 +1305,39 @@
       });
 
       // Watch history listeners
+      const chkHistorical = document.getElementById("chk-watch-historical");
+      const inputWatchDate = document.getElementById("input-watch-date");
+      const btnLogWatch = document.getElementById("btn-log-watch");
+
+      chkHistorical?.addEventListener("change", () => {
+        if (chkHistorical.checked) {
+          if (inputWatchDate) {
+            inputWatchDate.disabled = true;
+            inputWatchDate.value = "";
+          }
+          if (btnLogWatch) {
+            btnLogWatch.textContent = "Log Historical Watch";
+            btnLogWatch.classList.remove("btn-ghost");
+            btnLogWatch.classList.add("btn-secondary");
+          }
+        } else {
+          if (inputWatchDate) {
+            inputWatchDate.disabled = false;
+          }
+          if (btnLogWatch) {
+            btnLogWatch.textContent = "Log Past Date";
+            btnLogWatch.classList.remove("btn-secondary");
+            btnLogWatch.classList.add("btn-ghost");
+          }
+        }
+      });
+
       document.getElementById("btn-watched-today")?.addEventListener("click", async () => {
         try {
+          const todayIso = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
           await api(`${apiPrefix}/titles/${titleId}/watches`, {
             method: "POST",
-            body: {},
+            body: { watched_date: todayIso },
           });
           toast("Marked as watched today!");
           await renderDetail(container, titleId);
@@ -1295,19 +1346,19 @@
         }
       });
 
-      document.getElementById("btn-log-watch")?.addEventListener("click", async () => {
-        const input = document.getElementById("input-watch-date");
-        const val = input?.value?.trim();
-        if (!val) {
-          toast("Please choose a date to log");
+      btnLogWatch?.addEventListener("click", async () => {
+        const isHistorical = !!chkHistorical?.checked;
+        const val = inputWatchDate?.value?.trim();
+        if (!isHistorical && !val) {
+          toast("Please choose a date or select historical watch");
           return;
         }
         try {
           await api(`${apiPrefix}/titles/${titleId}/watches`, {
             method: "POST",
-            body: { watched_date: val },
+            body: isHistorical ? { watched_date: null } : { watched_date: val },
           });
-          toast(`Logged watch date: ${val}`);
+          toast(isHistorical ? "Logged historical watch!" : `Logged watch date: ${val}`);
           await renderDetail(container, titleId);
         } catch (e) {
           toast(e.message || "Failed to log watch date");
@@ -2769,16 +2820,16 @@
           const ratingBadge = ratingVal ? `<span class="movie-night-score">★ ${ratingVal}</span>` : "";
 
           content.innerHTML = `
-            <div class="movie-night-card">
-              ${currentPick.poster_url ? `<img src="${currentPick.poster_url}" class="movie-night-poster" alt="${escapeHtml(currentPick.title)}">` : '<div class="movie-night-poster placeholder">No Poster</div>'}
+            <div class="movie-night-card movie-night-animated">
+              ${currentPick.poster_url ? `<img src="${currentPick.poster_url}" class="movie-night-poster" alt="${esc(currentPick.title)}">` : '<div class="movie-night-poster placeholder">No Poster</div>'}
               <div class="movie-night-info">
                 <div class="movie-night-title-row">
-                  <h3 class="movie-night-title">${escapeHtml(currentPick.title)}</h3>
+                  <h3 class="movie-night-title">${esc(currentPick.title)}</h3>
                   ${ratingBadge}
                 </div>
-                <div class="movie-night-meta">${escapeHtml(metaParts)}</div>
-                ${currentPick.genres && currentPick.genres.length > 0 ? `<div class="movie-night-genres">${currentPick.genres.map(g => `<span class="genre-tag">${escapeHtml(g)}</span>`).join(" ")}</div>` : ""}
-                <div class="movie-night-reason">${escapeHtml(currentPick.recommendation_reason || "Curated pick")}</div>
+                <div class="movie-night-meta">${esc(metaParts)}</div>
+                ${currentPick.genres && currentPick.genres.length > 0 ? `<div class="movie-night-genres">${currentPick.genres.map(g => `<span class="genre-tag">${esc(g)}</span>`).join(" ")}</div>` : ""}
+                <div class="movie-night-reason">${esc(currentPick.recommendation_reason || "Curated pick")}</div>
               </div>
             </div>
           `;
@@ -2786,14 +2837,16 @@
         } else {
           currentPick = null;
           content.innerHTML = `
-            <div class="movie-night-empty">
-              <p>No matching movies found in your collection for this category.</p>
+            <div class="movie-night-empty movie-night-animated">
+              <div style="font-size:2rem;margin-bottom:8px">🍿</div>
+              <p style="font-weight:600;color:var(--ink);margin-bottom:4px">No matching movies found</p>
+              <p style="font-size:var(--fs-xs);color:var(--ink-2)">Try rolling in another category like "Quick Picks" or "Surprise Me"!</p>
             </div>
           `;
           if (viewBtn) viewBtn.disabled = true;
         }
       } catch (err) {
-        content.innerHTML = `<div class="movie-night-empty"><p>Failed to load recommendation: ${escapeHtml(err.message || String(err))}</p></div>`;
+        content.innerHTML = `<div class="movie-night-empty movie-night-animated"><p>Failed to load recommendation: ${esc(err.message || String(err))}</p></div>`;
         if (viewBtn) viewBtn.disabled = true;
       }
     }
