@@ -880,6 +880,13 @@ def test_stats_watched_and_rating():
     assert rs["high_rated_count"] == 1
 
 
+def test_static_app_js_no_undefined_escapeHtml():
+    js = (matinee.APP_DIR / "static" / "app.js").read_text(encoding="utf-8")
+    if "escapeHtml(" in js:
+        assert "function escapeHtml" in js or "const escapeHtml" in js or "let escapeHtml" in js
+
+
+
 
 
 

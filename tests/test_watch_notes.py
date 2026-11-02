@@ -62,6 +62,16 @@ def test_add_dateless_watch_null(client):
     assert data["watch"]["watched_date"] is None
     assert data["watch"]["notes"] == "Saw in theaters years ago"
 
+    # Verify detail returns dateless watch correctly
+    detail_res = client.get("/api/titles/3")
+    assert detail_res.status_code == 200
+    d_data = detail_res.get_json()
+    assert d_data["last_watched"] is None
+    assert d_data["watch_count"] == 1
+    assert len(d_data["watches"]) == 1
+    assert d_data["watches"][0]["watched_date"] is None
+    assert d_data["watches"][0]["notes"] == "Saw in theaters years ago"
+
 def test_add_dateless_watch_empty_or_absent(client):
     con = db()
     con.execute(

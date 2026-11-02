@@ -498,9 +498,9 @@ if mcp:
     @mcp.tool()
     def log_watch(
         title_id: int,
-        watched_at: Optional[str] = None,
         watched_date: Optional[str] = None,
         notes: Optional[str] = None,
+        watched_at: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Record a watch event with an optional ISO date (YYYY-MM-DD; omit or pass null for dateless/historical watch) and optional notes."""
         return _default_client.log_watch(title_id, watched_date=watched_date, notes=notes, watched_at=watched_at)

@@ -67,6 +67,7 @@
       .replace(/"/g, "&quot;")
       .replace(/'/g, "&#39;");
   }
+  const escapeHtml = esc;
 
   let toastTimer = null;
   function toast(msg, duration = 4000) {
@@ -2820,15 +2821,15 @@
 
           content.innerHTML = `
             <div class="movie-night-card movie-night-animated">
-              ${currentPick.poster_url ? `<img src="${currentPick.poster_url}" class="movie-night-poster" alt="${escapeHtml(currentPick.title)}">` : '<div class="movie-night-poster placeholder">No Poster</div>'}
+              ${currentPick.poster_url ? `<img src="${currentPick.poster_url}" class="movie-night-poster" alt="${esc(currentPick.title)}">` : '<div class="movie-night-poster placeholder">No Poster</div>'}
               <div class="movie-night-info">
                 <div class="movie-night-title-row">
-                  <h3 class="movie-night-title">${escapeHtml(currentPick.title)}</h3>
+                  <h3 class="movie-night-title">${esc(currentPick.title)}</h3>
                   ${ratingBadge}
                 </div>
-                <div class="movie-night-meta">${escapeHtml(metaParts)}</div>
-                ${currentPick.genres && currentPick.genres.length > 0 ? `<div class="movie-night-genres">${currentPick.genres.map(g => `<span class="genre-tag">${escapeHtml(g)}</span>`).join(" ")}</div>` : ""}
-                <div class="movie-night-reason">${escapeHtml(currentPick.recommendation_reason || "Curated pick")}</div>
+                <div class="movie-night-meta">${esc(metaParts)}</div>
+                ${currentPick.genres && currentPick.genres.length > 0 ? `<div class="movie-night-genres">${currentPick.genres.map(g => `<span class="genre-tag">${esc(g)}</span>`).join(" ")}</div>` : ""}
+                <div class="movie-night-reason">${esc(currentPick.recommendation_reason || "Curated pick")}</div>
               </div>
             </div>
           `;
@@ -2845,7 +2846,7 @@
           if (viewBtn) viewBtn.disabled = true;
         }
       } catch (err) {
-        content.innerHTML = `<div class="movie-night-empty movie-night-animated"><p>Failed to load recommendation: ${escapeHtml(err.message || String(err))}</p></div>`;
+        content.innerHTML = `<div class="movie-night-empty movie-night-animated"><p>Failed to load recommendation: ${esc(err.message || String(err))}</p></div>`;
         if (viewBtn) viewBtn.disabled = true;
       }
     }

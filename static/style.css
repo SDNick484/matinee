@@ -1230,6 +1230,14 @@ main#view {
   color: var(--ink-2);
   font-size: var(--fs-xs);
 }
+.btn-delete-watch {
+  min-width: 36px;
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  touch-action: manipulation;
+}
 .watch-toggle-btn {
   margin-top: var(--s2);
   align-self: flex-start;
@@ -1673,7 +1681,9 @@ main#view {
 /* Movie Night Picker */
 .movie-night-dialog {
   max-width: 520px;
-  overflow: hidden;
+  max-height: 90vh;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 .movie-night-tabs {
   display: flex;
@@ -1815,8 +1825,12 @@ main#view {
 }
 
 @media (max-width: 480px) {
+  .modal-overlay {
+    padding: var(--s2);
+  }
   .movie-night-dialog {
-    width: 95vw;
+    width: 100%;
+    max-width: min(95vw, 520px);
     max-height: 90vh;
     padding: var(--s3);
   }
