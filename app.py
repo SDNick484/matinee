@@ -14,9 +14,9 @@ Editors: /admin            same UI with editing; put this path behind Cloudflare
 Health:  /healthz          {ok, titles, copies}
 
 Environment (see /etc/conf.d/matinee and .env.example):
-  PORT, DATA_DIR, CF_TEAM_DOMAIN, CF_AUD, ADMIN_EMAILS, LAN_EDIT, PUBLIC_VIEW, TMDB_READ_TOKEN
+  PORT, DATA_DIR, CF_TEAM_DOMAIN, CF_AUD, ADMIN_EMAILS, LAN_EDIT, PUBLIC_VIEW, TMDB_READ_TOKEN, MATINEE_API_KEY
 """
-import datetime as dt, hashlib, json, os, re, sqlite3, unicodedata
+import datetime as dt, hashlib, hmac, json, os, re, sqlite3, unicodedata
 import urllib.error, urllib.parse, urllib.request
 from functools import wraps
 from pathlib import Path
@@ -59,6 +59,7 @@ CF_AUD = os.environ.get("CF_AUD", "").strip()
 ADMIN_EMAILS = {e.strip().lower() for e in os.environ.get("ADMIN_EMAILS", "").split(",") if e.strip()}
 LAN_EDIT = os.environ.get("LAN_EDIT", "1") == "1"
 PUBLIC_VIEW = os.environ.get("PUBLIC_VIEW", "1") == "1"
+MATINEE_API_KEY = os.environ.get("MATINEE_API_KEY", "").strip()
 TMDB_READ_TOKEN = os.environ.get("TMDB_READ_TOKEN", "").strip()
 TMDB_API = "https://api.themoviedb.org/3"
 TMDB_IMG = "https://image.tmdb.org/t/p"
@@ -125,6 +126,7 @@ CREATE TABLE IF NOT EXISTS watches (
   id INTEGER PRIMARY KEY,
   title_id INTEGER NOT NULL REFERENCES titles(id) ON DELETE CASCADE,
   watched_date TEXT NOT NULL,
+  notes TEXT,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS watches_title_date ON watches(title_id, watched_date DESC);
@@ -192,11 +194,15 @@ def migrate(con):
       id INTEGER PRIMARY KEY,
       title_id INTEGER NOT NULL REFERENCES titles(id) ON DELETE CASCADE,
       watched_date TEXT NOT NULL,
+      notes TEXT,
       created_at TEXT DEFAULT CURRENT_TIMESTAMP
     );
     CREATE INDEX IF NOT EXISTS watches_title_date ON watches(title_id, watched_date DESC);
     CREATE INDEX IF NOT EXISTS watches_date ON watches(watched_date DESC);
     """)
+    cols = [r[1] for r in con.execute("PRAGMA table_info(watches)").fetchall()]
+    if "notes" not in cols:
+        con.execute("ALTER TABLE watches ADD COLUMN notes TEXT")
 
 
 def init_db():
@@ -323,7 +329,17 @@ _jwks = None
 
 
 def access_identity():
-    """Return the editor's email (or 'lan'), or None."""
+    """Return the editor's email (or 'lan' or 'api-key'), or None."""
+    if MATINEE_API_KEY:
+        auth = request.headers.get("Authorization", "")
+        key = request.headers.get("X-API-Key", "")
+        token = ""
+        if auth.lower().startswith("bearer "):
+            token = auth[7:].strip()
+        elif key:
+            token = key.strip()
+        if token and hmac.compare_digest(token, MATINEE_API_KEY):
+            return "api-key"
     token = request.headers.get("Cf-Access-Jwt-Assertion")
     if token and CF_TEAM_DOMAIN and CF_AUD:
         global _jwks
@@ -646,7 +662,7 @@ def title_detail(title_id, private):
     d["tmdb_url"] = f"https://www.themoviedb.org/movie/{t['tmdb_id']}"
     rating_row = con.execute("SELECT rating FROM user_ratings WHERE title_id=?", (title_id,)).fetchone()
     d["user_rating"] = rating_row["rating"] if rating_row else None
-    watches = con.execute("SELECT id, watched_date, created_at FROM watches WHERE title_id=? ORDER BY watched_date DESC, id DESC",
+    watches = con.execute("SELECT id, watched_date, notes, created_at FROM watches WHERE title_id=? ORDER BY watched_date DESC, id DESC",
                           (title_id,)).fetchall()
     d["watches"] = [dict(w) for w in watches]
     d["last_watched"] = watches[0]["watched_date"] if watches else None
@@ -894,6 +910,135 @@ def collection_stats(private):
     )
 
 
+def recommendations(private=False):
+    a = request.args
+    mode = (a.get("mode") or "forgotten_gems").strip().lower()
+    try:
+        limit = max(1, min(int(a.get("limit") or 10), 50))
+    except (ValueError, TypeError):
+        limit = 10
+
+    where = ["EXISTS (SELECT 1 FROM copies c WHERE c.title_id=t.id)"]
+    args = []
+
+    # Mode-specific conditions
+    if mode == "forgotten_gems":
+        where.append("(SELECT rating FROM user_ratings r WHERE r.title_id=t.id) >= 8.0")
+        where.append("((SELECT MAX(watched_date) FROM watches w WHERE w.title_id=t.id) IS NULL "
+                     "OR (SELECT MAX(watched_date) FROM watches w WHERE w.title_id=t.id) < date('now', '-365 days'))")
+        order_by = "user_rating DESC, COALESCE(last_watched, '1970-01-01') ASC, t.sort_title ASC"
+    elif mode == "never_watched":
+        where.append("NOT EXISTS (SELECT 1 FROM watches w WHERE w.title_id=t.id)")
+        order_by = "COALESCE(t.tmdb_vote, 0) DESC, t.year DESC, t.sort_title ASC"
+    elif mode == "quick_picks":
+        max_rt = 95
+        if a.get("max_runtime"):
+            try:
+                max_rt = max(1, int(a.get("max_runtime")))
+            except (ValueError, TypeError):
+                pass
+        where.append("t.runtime > 0 AND t.runtime <= ?")
+        args.append(max_rt)
+        order_by = "COALESCE((SELECT rating FROM user_ratings r WHERE r.title_id=t.id), t.tmdb_vote, 0) DESC, t.runtime ASC"
+    elif mode == "genre_mood":
+        order_by = "COALESCE((SELECT rating FROM user_ratings r WHERE r.title_id=t.id), t.tmdb_vote, 0) DESC, t.sort_title ASC"
+    else:
+        order_by = "COALESCE((SELECT rating FROM user_ratings r WHERE r.title_id=t.id), t.tmdb_vote, 0) DESC, t.sort_title ASC"
+
+    # Additional filters
+    genre = clean(a.get("genre"))
+    if genre:
+        where.append("EXISTS (SELECT 1 FROM title_genres tg JOIN genres gn ON gn.id=tg.genre_id WHERE tg.title_id=t.id AND gn.name = ? COLLATE NOCASE)")
+        args.append(genre)
+
+    medium = (a.get("medium") or "").strip().lower()
+    if medium in ("physical", "digital"):
+        where.append("EXISTS (SELECT 1 FROM copies c WHERE c.title_id=t.id AND c.kind = ?)")
+        args.append(medium)
+
+    if a.get("min_rating"):
+        try:
+            min_r = float(a.get("min_rating"))
+            where.append("COALESCE((SELECT rating FROM user_ratings r WHERE r.title_id=t.id), t.tmdb_vote, 0) >= ?")
+            args.append(min_r)
+        except (ValueError, TypeError):
+            pass
+
+    if a.get("max_runtime") and mode != "quick_picks":
+        try:
+            max_rt = max(1, int(a.get("max_runtime")))
+            where.append("t.runtime > 0 AND t.runtime <= ?")
+            args.append(max_rt)
+        except (ValueError, TypeError):
+            pass
+
+    is_random = (a.get("random") or "").strip().lower() in ("1", "true", "yes")
+    if is_random:
+        order_by = "RANDOM()"
+
+    args.append(limit)
+    rows = db().execute(f"""
+        SELECT t.id, t.title, t.year, t.runtime, t.poster_file, t.fetched_at, t.tmdb_vote,
+               (SELECT rating FROM user_ratings r WHERE r.title_id=t.id) AS user_rating,
+               (SELECT MAX(watched_date) FROM watches w WHERE w.title_id=t.id) AS last_watched,
+               (SELECT count(*) FROM watches w WHERE w.title_id=t.id) AS watch_count,
+               (SELECT group_concat(DISTINCT c.format) FROM copies c WHERE c.title_id=t.id) AS formats,
+               (SELECT group_concat(g.name, ', ') FROM title_genres tg JOIN genres g ON g.id=tg.genre_id WHERE tg.title_id=t.id) AS genres
+        FROM titles t
+        WHERE {' AND '.join(where)}
+        ORDER BY {order_by}
+        LIMIT ?
+    """, args).fetchall()
+
+    today = dt.date.today()
+    results = []
+    for r in rows:
+        genres_list = [g.strip() for g in (r["genres"] or "").split(",") if g.strip()]
+        user_r = r["user_rating"]
+        tmdb_v = r["tmdb_vote"]
+        last_w = r["last_watched"]
+        runtime = r["runtime"]
+
+        if mode == "forgotten_gems":
+            if last_w:
+                try:
+                    w_date = dt.date.fromisoformat(last_w)
+                    months = max(1, (today - w_date).days // 30)
+                    reason = f"Rated {user_r:.1f} ★ · Not watched in {months} months"
+                except Exception:
+                    reason = f"Rated {user_r:.1f} ★ · Not watched recently"
+            else:
+                reason = f"Rated {user_r:.1f} ★ · Never logged as watched"
+        elif mode == "never_watched":
+            reason = f"Unwatched backlog · TMDB {tmdb_v:.1f} ★" if tmdb_v else "Unwatched backlog"
+        elif mode == "quick_picks":
+            reason = f"{runtime} mins · Perfect quick watch" if runtime else "Quick watch"
+        elif mode == "genre_mood":
+            score_str = f"{user_r:.1f} ★" if user_r else (f"{tmdb_v:.1f} ★" if tmdb_v else "")
+            genre_name = genre or (genres_list[0] if genres_list else "movie")
+            reason = f"Top-rated {genre_name} pick" + (f" ({score_str})" if score_str else "")
+        else:
+            reason = "Curated collection pick"
+
+        results.append({
+            "id": r["id"],
+            "title": r["title"],
+            "year": r["year"],
+            "runtime": r["runtime"],
+            "poster_url": image_url(r["poster_file"], r["fetched_at"]),
+            "poster_file": r["poster_file"],
+            "user_rating": user_r,
+            "tmdb_vote": tmdb_v,
+            "last_watched": last_w,
+            "watch_count": r["watch_count"],
+            "formats": sorted_formats((r["formats"] or "").split(",")) if r["formats"] else [],
+            "genres": genres_list,
+            "recommendation_reason": reason,
+        })
+
+    return jsonify(mode=mode, count=len(results), results=results)
+
+
 for prefix, private in (("/api", False), ("/admin/api", True)):
     def _wrap(fn, private=private):
         def f(*a, **kw):
@@ -905,6 +1050,7 @@ for prefix, private in (("/api", False), ("/admin/api", True)):
     app.add_url_rule(f"{prefix}/titles/<int:title_id>", f"title_{private}", _wrap(get_title))
     app.add_url_rule(f"{prefix}/facets", f"facets_{private}", _wrap(facets))
     app.add_url_rule(f"{prefix}/stats", f"stats_{private}", _wrap(collection_stats))
+    app.add_url_rule(f"{prefix}/recommendations", f"recommendations_{private}", _wrap(recommendations))
 
 
 
@@ -1177,9 +1323,10 @@ def add_watch(title_id):
             abort(make_err(400, "Invalid watched_date: format must be YYYY-MM-DD"))
         if parsed > dt.date.today() + dt.timedelta(days=1):
             abort(make_err(400, "watched_date cannot be in the future."))
-    cur = con.execute("INSERT INTO watches(title_id, watched_date) VALUES (?, ?)", (title_id, watched_date))
+    notes = clean(data.get("notes"))
+    cur = con.execute("INSERT INTO watches(title_id, watched_date, notes) VALUES (?, ?, ?)", (title_id, watched_date, notes))
     con.commit()
-    return jsonify(ok=True, watch={"id": cur.lastrowid, "title_id": title_id, "watched_date": watched_date})
+    return jsonify(ok=True, watch={"id": cur.lastrowid, "title_id": title_id, "watched_date": watched_date, "notes": notes})
 
 
 @app.delete("/admin/api/titles/<int:title_id>/watches/<int:watch_id>")

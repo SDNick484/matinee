@@ -227,6 +227,9 @@
 
     if (isAdmin) {
       nav.innerHTML = `
+        <button type="button" class="btn btn-sm btn-ghost" id="btn-header-movie-night" title="Movie Night Picker">
+          🎲 Movie Night
+        </button>
         <a href="#/stats" class="btn btn-sm btn-ghost" id="btn-header-stats">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
           Stats
@@ -238,6 +241,9 @@
       `;
     } else {
       nav.innerHTML = `
+        <button type="button" class="btn btn-sm btn-ghost" id="btn-header-movie-night" title="Movie Night Picker">
+          🎲 Movie Night
+        </button>
         <a href="#/stats" class="btn btn-sm btn-ghost" id="btn-header-stats">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
           Stats
@@ -248,6 +254,7 @@
         </a>
       `;
     }
+    document.getElementById("btn-header-movie-night")?.addEventListener("click", () => openMovieNightModal());
 
     const footerLinks = document.getElementById("footer-links");
     if (footerLinks) {
@@ -2685,6 +2692,114 @@
         <a href="#/" class="btn">Back to collection</a>
       </div>
     `;
+  }
+
+  // ================================================================= Movie Night Modal
+  async function openMovieNightModal() {
+    const modalRoot = document.getElementById("modal-root");
+    if (!modalRoot) return;
+
+    let currentMode = "forgotten_gems";
+    let currentPick = null;
+
+    function renderModalSkeleton() {
+      modalRoot.innerHTML = `
+        <div class="modal-overlay" id="modal-overlay">
+          <div class="modal-dialog movie-night-dialog">
+            <div class="modal-header">
+              <h2>🎲 Movie Night Picker</h2>
+              <button class="btn-close" id="btn-movie-night-close" aria-label="Close">&times;</button>
+            </div>
+            <div class="movie-night-tabs">
+              <button type="button" class="movie-night-tab ${currentMode === "forgotten_gems" ? "active" : ""}" data-mode="forgotten_gems">Forgotten Gems</button>
+              <button type="button" class="movie-night-tab ${currentMode === "quick_picks" ? "active" : ""}" data-mode="quick_picks">Quick Picks</button>
+              <button type="button" class="movie-night-tab ${currentMode === "never_watched" ? "active" : ""}" data-mode="never_watched">Never Watched</button>
+              <button type="button" class="movie-night-tab ${currentMode === "genre_mood" ? "active" : ""}" data-mode="genre_mood">Surprise Me</button>
+            </div>
+            <div class="movie-night-content" id="movie-night-content">
+              <div class="movie-night-loading">Picking a movie…</div>
+            </div>
+            <div class="modal-actions movie-night-actions">
+              <button type="button" class="btn btn-secondary" id="btn-movie-night-roll">🎲 Roll Again</button>
+              <button type="button" class="btn btn-primary" id="btn-movie-night-view" disabled>Open Movie</button>
+              <button type="button" class="btn btn-ghost" id="btn-movie-night-cancel">Close</button>
+            </div>
+          </div>
+        </div>
+      `;
+
+      modalRoot.querySelectorAll(".movie-night-tab").forEach(tab => {
+        tab.addEventListener("click", () => {
+          modalRoot.querySelectorAll(".movie-night-tab").forEach(t => t.classList.remove("active"));
+          tab.classList.add("active");
+          currentMode = tab.dataset.mode;
+          fetchPick();
+        });
+      });
+
+      document.getElementById("btn-movie-night-close")?.addEventListener("click", closeModal);
+      document.getElementById("btn-movie-night-cancel")?.addEventListener("click", closeModal);
+      document.getElementById("modal-overlay")?.addEventListener("click", (e) => {
+        if (e.target.id === "modal-overlay") closeModal();
+      });
+      document.getElementById("btn-movie-night-roll")?.addEventListener("click", () => fetchPick());
+      document.getElementById("btn-movie-night-view")?.addEventListener("click", () => {
+        if (currentPick) {
+          closeModal();
+          location.hash = `#/t/${currentPick.id}`;
+        }
+      });
+    }
+
+    async function fetchPick() {
+      const content = document.getElementById("movie-night-content");
+      const viewBtn = document.getElementById("btn-movie-night-view");
+      if (!content) return;
+      content.innerHTML = `<div class="movie-night-loading">Picking a movie…</div>`;
+      if (viewBtn) viewBtn.disabled = true;
+
+      const apiPrefix = isAdmin ? "/admin/api" : "/api";
+      try {
+        const res = await api(`${apiPrefix}/recommendations?mode=${encodeURIComponent(currentMode)}&limit=1&random=1`);
+        if (res && res.results && res.results.length > 0) {
+          currentPick = res.results[0];
+          const runtimeStr = currentPick.runtime ? `${currentPick.runtime}m` : "";
+          const metaParts = [currentPick.year, runtimeStr, (currentPick.formats || []).join(", ")].filter(Boolean).join(" · ");
+          const ratingVal = currentPick.user_rating != null ? currentPick.user_rating.toFixed(1) : (currentPick.tmdb_vote ? currentPick.tmdb_vote.toFixed(1) : null);
+          const ratingBadge = ratingVal ? `<span class="movie-night-score">★ ${ratingVal}</span>` : "";
+
+          content.innerHTML = `
+            <div class="movie-night-card">
+              ${currentPick.poster_url ? `<img src="${currentPick.poster_url}" class="movie-night-poster" alt="${escapeHtml(currentPick.title)}">` : '<div class="movie-night-poster placeholder">No Poster</div>'}
+              <div class="movie-night-info">
+                <div class="movie-night-title-row">
+                  <h3 class="movie-night-title">${escapeHtml(currentPick.title)}</h3>
+                  ${ratingBadge}
+                </div>
+                <div class="movie-night-meta">${escapeHtml(metaParts)}</div>
+                ${currentPick.genres && currentPick.genres.length > 0 ? `<div class="movie-night-genres">${currentPick.genres.map(g => `<span class="genre-tag">${escapeHtml(g)}</span>`).join(" ")}</div>` : ""}
+                <div class="movie-night-reason">${escapeHtml(currentPick.recommendation_reason || "Curated pick")}</div>
+              </div>
+            </div>
+          `;
+          if (viewBtn) viewBtn.disabled = false;
+        } else {
+          currentPick = null;
+          content.innerHTML = `
+            <div class="movie-night-empty">
+              <p>No matching movies found in your collection for this category.</p>
+            </div>
+          `;
+          if (viewBtn) viewBtn.disabled = true;
+        }
+      } catch (err) {
+        content.innerHTML = `<div class="movie-night-empty"><p>Failed to load recommendation: ${escapeHtml(err.message || String(err))}</p></div>`;
+        if (viewBtn) viewBtn.disabled = true;
+      }
+    }
+
+    renderModalSkeleton();
+    await fetchPick();
   }
 
   // ================================================================= Initialization

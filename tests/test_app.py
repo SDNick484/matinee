@@ -88,6 +88,15 @@ def test_env_example_lists_every_documented_variable():
     assert set(re.findall(r"\b[A-Z][A-Z_]{2,}\b", doc)) <= names
 
 
+def test_setup_head_exports_all_env_vars():
+    setup_head = (Path(matinee.APP_DIR) / "installer" / "setup-head.sh").read_text()
+    export_match = re.search(r"^export\s+PORT\s+(.+)$", setup_head, re.M)
+    assert export_match, "setup-head.sh missing export line"
+    exported_vars = set(export_match.group(0).split()[1:])
+    assert "MATINEE_API_KEY" in exported_vars
+    assert "add_setting \"$CONF\" MATINEE_API_KEY" in setup_head
+
+
 # ------------------------------------------------------------------- 2.1 schema
 def test_schema_tables_indexes_and_cascade():
     con = matinee.connect()

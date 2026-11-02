@@ -78,6 +78,7 @@ add_setting "$CONF" ADMIN_EMAILS "" "Only these emails may edit (comma separated
 add_setting "$CONF" LAN_EDIT 1 "1 = direct LAN requests (not through Cloudflare) may edit"
 add_setting "$CONF" PUBLIC_VIEW 1 "1 = anyone can browse the collection at /; 0 = everything behind /admin"
 add_setting "$CONF" TMDB_READ_TOKEN "" "TMDB API Read Access Token (themoviedb.org -> Settings -> API); adding movies needs it"
+add_setting "$CONF" MATINEE_API_KEY "" "Optional API key for headless automation and MCP server (Authorization: Bearer <key>)"
 chmod 640 "$CONF"; chown root:"$SVC_USER" "$CONF"
 
 # health checks: add Matinee to HEALTH_CHECKS if ops config exists
@@ -111,7 +112,7 @@ description="Matinee movie collection"
 : ${PORT:=8769}
 : ${DATA_DIR:=/var/lib/matinee}
 export HOME=/var/lib/matinee  # newer gunicorn keeps a small control socket under $HOME
-export PORT DATA_DIR CF_TEAM_DOMAIN CF_AUD ADMIN_EMAILS LAN_EDIT PUBLIC_VIEW TMDB_READ_TOKEN
+export PORT DATA_DIR CF_TEAM_DOMAIN CF_AUD ADMIN_EMAILS LAN_EDIT PUBLIC_VIEW TMDB_READ_TOKEN MATINEE_API_KEY
 supervisor="supervise-daemon"
 respawn_delay=5
 respawn_max=10
