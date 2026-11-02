@@ -1865,3 +1865,77 @@ main#view {
     width: 100%;
   }
 }
+
+/* Locations & Shelving */
+.copy-location {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--fs-xs);
+  color: var(--ink-2);
+  background: var(--bg-surface);
+  padding: 3px 8px;
+  border-radius: var(--radius-sm, 4px);
+  border: 1px solid var(--border);
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
+.locations-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  margin-top: var(--s3);
+  max-height: 50vh;
+  overflow-y: auto;
+}
+
+.location-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--s2) var(--s3);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 4px);
+  gap: var(--s2);
+}
+
+.location-row-main {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  flex: 1;
+}
+
+.location-path {
+  font-size: var(--fs-sm);
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.location-count-pill {
+  font-size: var(--fs-xs);
+  color: var(--ink-2);
+  background: var(--bg);
+  padding: 2px 6px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+}
+
+.location-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.watch-timing-select {
+  width: 100%;
+  padding: var(--s2);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 4px);
+  color: var(--ink);
+  font-size: var(--fs-sm);
+  margin-bottom: var(--s2);
+}
