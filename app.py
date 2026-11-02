@@ -950,9 +950,8 @@ def recommendations(private=False):
     # Mode-specific conditions
     if mode == "forgotten_gems":
         where.append("(SELECT rating FROM user_ratings r WHERE r.title_id=t.id) >= 8.0")
-        where.append("((SELECT MAX(watched_date) FROM watches w WHERE w.title_id=t.id) IS NULL "
-                     "OR (SELECT MAX(watched_date) FROM watches w WHERE w.title_id=t.id) < date('now', '-365 days'))")
-        order_by = "user_rating DESC, COALESCE(last_watched, '1970-01-01') ASC, t.sort_title ASC"
+        where.append("COALESCE((SELECT MAX(watched_date) FROM watches w WHERE w.title_id=t.id), '0000-00-00') < date('now', '-365 days')")
+        order_by = "user_rating DESC, COALESCE(last_watched, '0000-00-00') ASC, t.sort_title ASC"
     elif mode == "never_watched":
         where.append("NOT EXISTS (SELECT 1 FROM watches w WHERE w.title_id=t.id)")
         order_by = "COALESCE(t.tmdb_vote, 0) DESC, t.year DESC, t.sort_title ASC"
@@ -1033,6 +1032,8 @@ def recommendations(private=False):
                     reason = f"Rated {user_r:.1f} ★ · Not watched in {months} months"
                 except Exception:
                     reason = f"Rated {user_r:.1f} ★ · Not watched recently"
+            elif r["watch_count"] > 0:
+                reason = f"Rated {user_r:.1f} ★ · Historical watch (Date unknown)"
             else:
                 reason = f"Rated {user_r:.1f} ★ · Never logged as watched"
         elif mode == "never_watched":
@@ -1060,6 +1061,7 @@ def recommendations(private=False):
             "formats": sorted_formats((r["formats"] or "").split(",")) if r["formats"] else [],
             "genres": genres_list,
             "recommendation_reason": reason,
+            "reason": reason,
         })
 
     return jsonify(mode=mode, count=len(results), results=results)

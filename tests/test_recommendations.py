@@ -104,3 +104,37 @@ def test_random_and_min_rating(client):
     for r in data["results"]:
         score = r["user_rating"] or r["tmdb_vote"]
         assert score >= 9.0
+
+def test_forgotten_gems_with_dateless_watch(client):
+    setup_catalog(db())
+    con = db()
+    # Title 5: Rated 9.0, dateless historical watch
+    con.execute("""INSERT INTO titles (id, tmdb_id, title, sort_title, search_text, year, runtime, tmdb_vote, fetched_at)
+                   VALUES (5, 105, 'Princess Mononoke', 'Princess Mononoke', 'princess mononoke', 1997, 134, 8.4, '2026-01-01')""")
+    con.execute("INSERT INTO user_ratings (title_id, rating) VALUES (5, 9.0)")
+    con.execute("INSERT INTO watches (title_id, watched_date) VALUES (5, NULL)")
+    con.execute("INSERT INTO copies (title_id, kind, format) VALUES (5, 'physical', 'Blu-ray')")
+    con.commit()
+
+    res = client.get("/api/recommendations?mode=forgotten_gems")
+    assert res.status_code == 200
+    data = res.get_json()
+    ids = [r["id"] for r in data["results"]]
+    assert 5 in ids
+    item = next(r for r in data["results"] if r["id"] == 5)
+    assert "Historical watch (Date unknown)" in item["recommendation_reason"]
+
+def test_never_watched_excludes_dateless_watch(client):
+    setup_catalog(db())
+    con = db()
+    con.execute("""INSERT INTO titles (id, tmdb_id, title, sort_title, search_text, year, runtime, tmdb_vote, fetched_at)
+                   VALUES (5, 105, 'Princess Mononoke', 'Princess Mononoke', 'princess mononoke', 1997, 134, 8.4, '2026-01-01')""")
+    con.execute("INSERT INTO watches (title_id, watched_date) VALUES (5, NULL)")
+    con.execute("INSERT INTO copies (title_id, kind, format) VALUES (5, 'physical', 'Blu-ray')")
+    con.commit()
+
+    res = client.get("/api/recommendations?mode=never_watched")
+    assert res.status_code == 200
+    ids = [r["id"] for r in res.get_json()["results"]]
+    assert 5 not in ids
+
