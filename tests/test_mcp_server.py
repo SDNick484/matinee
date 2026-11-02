@@ -159,3 +159,29 @@ def test_mcp_rest_uses_admin_prefix_when_api_key_set(monkeypatch):
 
     client.get_collection_stats()
     assert any(p.startswith("/admin/api/stats") for p in requested_paths)
+
+def test_log_watch_dateless_and_watched_at(monkeypatch):
+    client = mcp_server.MatineeClient(api_url="http://fake-host", api_key="test-key", db_path="/nonexistent/db.db")
+    posted_payloads = []
+    def fake_request(method, path, data=None):
+        posted_payloads.append((method, path, data))
+        return {"ok": True, "watch": {"id": 1, "watched_date": data.get("watched_date"), "notes": data.get("notes")}}
+
+    monkeypatch.setattr(client, "_api_request", fake_request)
+
+    # 1. Log watch without date
+    res1 = client.log_watch(title_id=42, notes="Old tape")
+    assert res1["ok"] is True
+    assert posted_payloads[-1][2]["watched_date"] is None
+    assert posted_payloads[-1][2]["notes"] == "Old tape"
+
+    # 2. Log watch with watched_at
+    res2 = client.log_watch(title_id=42, watched_at="2024-03-01")
+    assert posted_payloads[-1][2]["watched_date"] == "2024-03-01"
+
+    # 3. FastMCP tool wrapper accepts watched_at optional
+    monkeypatch.setattr(mcp_server._default_client, "_api_request", fake_request)
+    mcp_res = mcp_server.log_watch(title_id=42, watched_at=None, notes="No date")
+    assert mcp_res["ok"] is True
+    assert posted_payloads[-1][2]["watched_date"] is None
+
