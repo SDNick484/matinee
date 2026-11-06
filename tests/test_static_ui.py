@@ -115,3 +115,21 @@ def test_header_top_padding_has_a_floor():
     # which left the admin bar touching the top of the screen.
     assert "max(var(--s3), env(safe-area-inset-top))" in _rule(".site-header")
 
+
+
+# --- Icons: inline SVG, never OS emoji ---------------------------------------
+
+def test_no_color_emoji_in_frontend():
+    # Color emoji need an OS emoji font; Linux desktops without one show empty boxes.
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    pattern = re.compile(r"[\U0001F000-\U0001FFFF]|[☁⚠✏✂]️?")
+    for name, text in (("app.js", JS), ("index.html", html)):
+        found = sorted({m.group() for m in pattern.finditer(text)})
+        assert not found, f"{name} still uses emoji {found}; use icon(...) instead"
+
+
+def test_icon_set_covers_the_ui():
+    for name in ("disc", "cloud", "dice", "pin", "home", "folder", "edit", "trash", "image", "undo"):
+        assert re.search(rf"\b{name}: '<", JS), f"ICONS.{name} missing"
+    assert "function icon(" in JS
+    assert re.search(r"(?m)^\.ico\s*\{", CSS)

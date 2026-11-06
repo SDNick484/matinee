@@ -137,12 +137,43 @@
     return "k-dvd";
   }
 
+  // ================================================================= Icons
+  // Inline SVG icons (24×24, stroke = currentColor). Color emoji (U+1F4BF disc, U+1F3B2 dice, ...)
+  // depend on the viewer's OS having a color-emoji font; without one (e.g. a
+  // Linux desktop without Noto Color Emoji) they render as empty boxes.
+  const ICONS = {
+    disc: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/>',
+    cloud: '<path d="M7 18.5h10.5a4 4 0 0 0 .4-7.98A6 6 0 0 0 6.3 9.3 4.6 4.6 0 0 0 7 18.5z"/>',
+    dice: '<rect x="3.5" y="3.5" width="17" height="17" rx="3.5"/><circle cx="8.5" cy="8.5" r="1.3" fill="currentColor" stroke="none"/><circle cx="15.5" cy="8.5" r="1.3" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.3" fill="currentColor" stroke="none"/><circle cx="8.5" cy="15.5" r="1.3" fill="currentColor" stroke="none"/><circle cx="15.5" cy="15.5" r="1.3" fill="currentColor" stroke="none"/>',
+    pin: '<path d="M12 21.5s-6.5-6-6.5-11.5a6.5 6.5 0 0 1 13 0c0 5.5-6.5 11.5-6.5 11.5z"/><circle cx="12" cy="10" r="2.3"/>',
+    calendar: '<rect x="3.5" y="5" width="17" height="15.5" rx="2"/><path d="M3.5 10h17M8 3v4M16 3v4"/>',
+    search: '<circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/>',
+    camera: '<path d="M4 7.5h3.2l1.8-2.5h6l1.8 2.5H20a1 1 0 0 1 1 1V19a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V8.5a1 1 0 0 1 1-1z"/><circle cx="12" cy="13.5" r="3.5"/>',
+    box: '<path d="M3.5 7.5 12 3.5l8.5 4v9L12 20.5l-8.5-4z"/><path d="M3.5 7.5 12 11.5l8.5-4M12 11.5v9"/>',
+    film: '<rect x="3.5" y="3.5" width="17" height="17" rx="2"/><path d="M7.5 3.5v17M16.5 3.5v17M3.5 8h4M3.5 12h4M3.5 16h4M16.5 8h4M16.5 12h4M16.5 16h4"/>',
+    popcorn: '<path d="M6 10.5 7.6 21h8.8L18 10.5z"/><path d="M10 10.5 10.6 21M14 10.5 13.4 21"/><path d="M6.5 10.5a2.5 2.5 0 0 1 1.7-4.6 3 3 0 0 1 5.6-1 2.6 2.6 0 0 1 3.9 2.6 2 2 0 0 1-.2 3"/>',
+    home: '<path d="M3.5 11 12 4l8.5 7"/><path d="M5.5 9.5V20h13V9.5"/><path d="M10 20v-5h4v5"/>',
+    folder: '<path d="M3.5 7a1.5 1.5 0 0 1 1.5-1.5h4.2l2 2H19a1.5 1.5 0 0 1 1.5 1.5v8.5A1.5 1.5 0 0 1 19 19H5a1.5 1.5 0 0 1-1.5-1.5z"/>',
+    edit: '<path d="M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16z"/><path d="m13.5 6.5 4 4"/>',
+    trash: '<path d="M4 7h16M10 7V4.5h4V7M6 7l1 13h10l1-13M10 11v5.5M14 11v5.5"/>',
+    warn: '<path d="M12 3.5 2.5 20h19z"/><path d="M12 10v4.5"/><circle cx="12" cy="17.3" r="0.6" fill="currentColor"/>',
+    image: '<rect x="3.5" y="4" width="17" height="16" rx="2"/><circle cx="9" cy="9.5" r="1.7"/><path d="m20.5 15.5-5-5-10 9.5"/>',
+    undo: '<path d="M4 9.5h10.5a5 5 0 0 1 0 10H8"/><path d="m7.5 6-3.5 3.5L7.5 13"/>',
+    dot: '<circle cx="12" cy="12" r="6.5" fill="currentColor" stroke="none"/>',
+  };
+
+  function icon(name, cls = "") {
+    const body = ICONS[name];
+    if (!body) return "";
+    return `<svg class="ico${cls ? " " + cls : ""}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">${body}</svg>`;
+  }
+
   function getChipIcon(format) {
     if (format === "4K UHD" || format === "Blu-ray" || format === "3D Blu-ray" || format === "DVD" || format === "VHS") {
-      return "💿 ";
+      return icon("disc");
     }
     if (format === "Digital 4K" || format === "Digital HD" || format === "Digital SD") {
-      return "☁️ ";
+      return icon("cloud");
     }
     return "";
   }
@@ -243,10 +274,10 @@
     if (isAdmin) {
       nav.innerHTML = `
         <button type="button" class="btn btn-sm btn-ghost" id="btn-header-movie-night" title="Movie Night Picker">
-          🎲 Movie Night
+          ${icon("dice")} Movie Night
         </button>
         <button type="button" class="btn btn-sm btn-ghost" id="btn-header-locations" title="Manage Shelves &amp; Locations">
-          📍 Locations
+          ${icon("pin")} Locations
         </button>
         <a href="#/stats" class="btn btn-sm btn-ghost" id="btn-header-stats">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
@@ -260,7 +291,7 @@
     } else {
       nav.innerHTML = `
         <button type="button" class="btn btn-sm btn-ghost" id="btn-header-movie-night" title="Movie Night Picker">
-          🎲 Movie Night
+          ${icon("dice")} Movie Night
         </button>
         <a href="#/stats" class="btn btn-sm btn-ghost" id="btn-header-stats">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
@@ -510,7 +541,7 @@
 
   function getMediumLabel(medium) {
     if (!medium || medium.length === 0) return "Medium: All";
-    if (medium.includes("both")) return "Medium: Disc + Stream 💿☁️";
+    if (medium.includes("both")) return "Medium: Disc + Stream";
     const parts = [];
     if (medium.includes("disc")) parts.push("Disc");
     if (medium.includes("streaming")) parts.push("Streaming");
@@ -606,7 +637,7 @@
           </label>
           <label class="popover-item">
             <input type="checkbox" data-facet="medium" data-val="both" ${medium.includes("both") ? "checked" : ""}>
-            <span>Both Disc + Streaming 💿☁️</span>
+            <span>Both Disc + Streaming</span><span class="ico-pair">${icon("disc")}${icon("cloud")}</span>
           </label>
         </div>
       </div>
@@ -711,7 +742,7 @@
           ? `
       <div class="filter-popover" id="popover-location">
         <button type="button" class="filter-btn ${locationId ? "active" : ""}" data-toggle="popover" aria-expanded="false" aria-haspopup="true">
-          <span>📍 ${esc(locationLabel)}</span>
+          ${icon("pin")}<span>${esc(locationLabel)}</span>
           <span class="caret">▾</span>
         </button>
         <div class="popover-menu" role="menu">
@@ -944,7 +975,7 @@
               ? `<img class="poster-img" src="${posterSrc}" loading="lazy" alt="${esc(t.title)}" onerror="this.onerror=null;this.parentElement.innerHTML='<div class=\\'poster-ph\\'>${esc(t.title)}<br>${t.year || ''}</div>';">`
               : `<div class="poster-ph"><span>${esc(t.title)}<br><small style="font-weight:400;color:var(--ink-3)">${t.year || ""}</small></span></div>`;
 
-            const bothBadge = t.has_both ? `<span class="badge-both" title="Disc + Digital">💿☁️</span>` : "";
+            const bothBadge = t.has_both ? `<span class="badge-both" title="Disc + Digital">${icon("disc")}${icon("cloud")}</span>` : "";
             const ratingBadge = (t.user_rating !== null && t.user_rating !== undefined)
               ? `<span class="badge-rating" title="Personal Rating: ${Number(t.user_rating).toFixed(1)}">★ ${Number(t.user_rating).toFixed(1)}</span>`
               : "";
@@ -1029,10 +1060,10 @@
       }
       if (title.omdb.rotten_tomatoes_score !== null && title.omdb.rotten_tomatoes_score !== undefined) {
         const rtScore = title.omdb.rotten_tomatoes_score;
-        const rtIcon = rtScore >= 60 ? "🍅" : "🟢";
+        const rtIcon = icon("dot", rtScore >= 60 ? "ico-rt-fresh" : "ico-rt-rotten");
         ratingsHtml.push(
           `<span class="rating-badge rating-rt" title="Rotten Tomatoes Tomatometer">` +
-          `<span>${rtIcon}</span> ${rtScore}%` +
+          `${rtIcon} ${rtScore}%` +
           `</span>`
         );
       }
@@ -1225,12 +1256,12 @@
                     ${
                       w.date_bucket && BUCKET_LABELS[w.date_bucket]
                         ? (w.date_bucket === "unknown"
-                            ? `<span class="watch-row-date">📅 Watched (Date unknown)</span><span class="badge badge-subtle">Historical</span>`
-                            : `<span class="watch-row-date">📅 Watched ${esc(BUCKET_LABELS[w.date_bucket])}</span><span class="badge badge-subtle">Estimated</span>`
+                            ? `<span class="watch-row-date">${icon("calendar")} Watched (Date unknown)</span><span class="badge badge-subtle">Historical</span>`
+                            : `<span class="watch-row-date">${icon("calendar")} Watched ${esc(BUCKET_LABELS[w.date_bucket])}</span><span class="badge badge-subtle">Estimated</span>`
                           )
                         : (w.watched_date
-                            ? `<span class="watch-row-date">📅 ${formatReadableDate(w.watched_date)}</span><span class="watch-row-rel">(${formatRelativeDate(w.watched_date)})</span>`
-                            : `<span class="watch-row-date">📅 Watched (Date unknown)</span><span class="badge badge-subtle">Historical</span>`
+                            ? `<span class="watch-row-date">${icon("calendar")} ${formatReadableDate(w.watched_date)}</span><span class="watch-row-rel">(${formatRelativeDate(w.watched_date)})</span>`
+                            : `<span class="watch-row-date">${icon("calendar")} Watched (Date unknown)</span><span class="badge badge-subtle">Historical</span>`
                           )
                     }
                   </div>
@@ -1275,7 +1306,7 @@
                   const chipCls = getChipClass(cp.format);
                   const locBadge =
                     cp.kind === "physical" && cp.location_path
-                      ? `<span class="copy-location">📍 ${esc(cp.location_path)}</span>`
+                      ? `<span class="copy-location">${icon("pin")}${esc(cp.location_path)}</span>`
                       : "";
                   const addedInfo = cp.added_by
                     ? `<span class="copy-meta">Added by ${esc(cp.added_by)}</span>`
@@ -1649,8 +1680,8 @@
         </div>
 
         <div class="scanner-tabs">
-          <button type="button" class="scanner-tab-btn active" id="tab-search">🔍 Search Title</button>
-          <button type="button" class="scanner-tab-btn" id="tab-scan">📷 Scan Barcode</button>
+          <button type="button" class="scanner-tab-btn active" id="tab-search">${icon("search")} Search Title</button>
+          <button type="button" class="scanner-tab-btn" id="tab-scan">${icon("camera")} Scan Barcode</button>
         </div>
 
         <!-- Panel 1: Search -->
@@ -1699,7 +1730,7 @@
           <div id="batch-area" class="batch-panel" style="display:none">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--s3)">
               <div class="batch-queue-counter">
-                <span>📦</span>
+                <span>${icon("box")}</span>
                 <span id="batch-count-label">0 Discs in Queue</span>
               </div>
               <div style="display:flex;gap:var(--s2)">
@@ -1852,7 +1883,7 @@
 
             ${
               data.already_owned
-                ? `<div class="duplicate-banner" style="margin-bottom:var(--s3)">⚠️ In collection: ${esc(data.owned_summary)}. Adding this will attach your physical disc.</div>`
+                ? `<div class="duplicate-banner" style="margin-bottom:var(--s3)">${icon("warn")} In collection: ${esc(data.owned_summary)}. Adding this will attach your physical disc.</div>`
                 : ""
             }
 
@@ -1868,7 +1899,7 @@
                   ${m.thumb ? `<img src="${esc(m.thumb)}" style="width:40px;height:60px;border-radius:4px;object-fit:cover;flex-shrink:0" alt="">` : '<div style="width:40px;height:60px;background:var(--card);border-radius:4px;flex-shrink:0"></div>'}
                   <div style="flex:1;min-width:0">
                     <div style="font-weight:700;font-size:var(--fs-sm);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(m.title)}</div>
-                    <div style="font-size:var(--fs-xs);color:var(--ink-2)">${m.year || ""} ${m.already_owned ? `<span style="color:var(--amber);margin-left:4px">⚠️ Owned: ${esc(m.owned_summary || "")}</span>` : ""}</div>
+                    <div style="font-size:var(--fs-xs);color:var(--ink-2)">${m.year || ""} ${m.already_owned ? `<span style="color:var(--amber);margin-left:4px">${icon("warn")} Owned: ${esc(m.owned_summary || "")}</span>` : ""}</div>
                   </div>
                   <button type="button" class="btn btn-sm btn-select-candidate" data-idx="${idx}">
                     Add Disc
@@ -1993,7 +2024,7 @@
               ${movie.thumb ? `<img src="${esc(movie.thumb)}" style="width:36px;height:54px;border-radius:4px;object-fit:cover" alt="">` : ""}
               <div style="flex:1">
                 <div style="font-weight:700;font-size:var(--fs-sm)">${esc(movie.title)} <span style="font-weight:400;color:var(--ink-2)">(${movie.year || ""})</span></div>
-                <div style="font-size:var(--fs-xs);color:var(--ink-2)"><span class="chip k4" style="height:18px;font-size:10px">${esc(d.format_hint)}</span> ${d.already_owned ? `<span style="color:var(--amber);margin-left:6px">⚠️ Owned: ${esc(d.owned_summary)}</span>` : ""}</div>
+                <div style="font-size:var(--fs-xs);color:var(--ink-2)"><span class="chip k4" style="height:18px;font-size:10px">${esc(d.format_hint)}</span> ${d.already_owned ? `<span style="color:var(--amber);margin-left:6px">${icon("warn")} Owned: ${esc(d.owned_summary)}</span>` : ""}</div>
               </div>
             </div>
           `;
@@ -2198,7 +2229,7 @@
           <div id="modal-owned-status">
             ${
               prefill.duplicateNotice
-                ? `<div class="duplicate-banner">⚠️ In collection: ${esc(prefill.duplicateNotice)}. Adding this will attach your physical disc.</div>`
+                ? `<div class="duplicate-banner">${icon("warn")} In collection: ${esc(prefill.duplicateNotice)}. Adding this will attach your physical disc.</div>`
                 : `<div style="font-size:var(--fs-xs);color:var(--ink-3)">Checking collection…</div>`
             }
           </div>
@@ -2357,7 +2388,7 @@
       if (statusBox) {
         if (prefill.duplicateNotice) {
           statusBox.innerHTML = `
-            <div class="duplicate-banner">⚠️ In collection: ${esc(prefill.duplicateNotice)}. Adding this will attach your physical disc.</div>
+            <div class="duplicate-banner">${icon("warn")} In collection: ${esc(prefill.duplicateNotice)}. Adding this will attach your physical disc.</div>
           `;
         } else if (owned.owned && owned.summary) {
           statusBox.innerHTML = `
@@ -2726,22 +2757,22 @@
         <section>
           <div class="stats-grid-overview">
             <div class="stat-card">
-              <div class="stat-icon">🎬</div>
+              <div class="stat-icon">${icon("film")}</div>
               <div class="stat-val">${ov.titles_count ?? 0}</div>
               <div class="stat-lbl">Unique Movies</div>
             </div>
             <div class="stat-card">
-              <div class="stat-icon">💿</div>
+              <div class="stat-icon">${icon("disc")}</div>
               <div class="stat-val">${ov.physical_count ?? 0}</div>
               <div class="stat-lbl">Physical Discs</div>
             </div>
             <div class="stat-card">
-              <div class="stat-icon">☁️</div>
+              <div class="stat-icon">${icon("cloud")}</div>
               <div class="stat-val">${ov.digital_count ?? 0}</div>
               <div class="stat-lbl">Digital Copies</div>
             </div>
             <div class="stat-card">
-              <div class="stat-icon">💿☁️</div>
+              <div class="stat-icon">${icon("disc")}${icon("cloud")}</div>
               <div class="stat-val">${ov.dual_count ?? 0}</div>
               <div class="stat-lbl">Dual-Owned</div>
             </div>
@@ -2935,7 +2966,7 @@
         <div class="modal-overlay" id="modal-overlay">
           <div class="modal-dialog movie-night-dialog">
             <div class="modal-header">
-              <h2>🎲 Movie Night Picker</h2>
+              <h2>${icon("dice")} Movie Night Picker</h2>
               <button class="btn-close" id="btn-movie-night-close" aria-label="Close">&times;</button>
             </div>
             <div class="movie-night-tabs">
@@ -2948,7 +2979,7 @@
               <div class="movie-night-loading">Picking a movie…</div>
             </div>
             <div class="modal-actions movie-night-actions">
-              <button type="button" class="btn btn-secondary" id="btn-movie-night-roll">🎲 Roll Again</button>
+              <button type="button" class="btn btn-secondary" id="btn-movie-night-roll">${icon("dice")} Roll Again</button>
               <button type="button" class="btn btn-primary" id="btn-movie-night-view" disabled>Open Movie</button>
               <button type="button" class="btn btn-ghost" id="btn-movie-night-cancel">Close</button>
             </div>
@@ -3015,7 +3046,7 @@
           currentPick = null;
           content.innerHTML = `
             <div class="movie-night-empty movie-night-animated">
-              <div style="font-size:2rem;margin-bottom:8px">🍿</div>
+              <div style="font-size:2rem;margin-bottom:8px;color:var(--amber)">${icon("popcorn")}</div>
               <p style="font-weight:600;color:var(--ink);margin-bottom:4px">No matching movies found</p>
               <p style="font-size:var(--fs-xs);color:var(--ink-2)">Try rolling in another category like "Quick Picks" or "Surprise Me"!</p>
             </div>
@@ -3051,7 +3082,7 @@
         <div class="modal-dialog" style="max-width:640px">
           <div class="modal-header">
             <div>
-              <div class="modal-title">📍 Shelves &amp; Locations</div>
+              <div class="modal-title">${icon("pin")} Shelves &amp; Locations</div>
               <div style="font-size:var(--fs-xs);color:var(--ink-3)">Manage physical storage locations (rooms, cabinets, shelves, bins)</div>
             </div>
             <button type="button" class="btn-close" id="btn-modal-close" aria-label="Close">✕</button>
@@ -3092,14 +3123,14 @@
                       loc => `
                     <div class="location-row" data-id="${loc.id}">
                       <div class="location-row-main" style="padding-left:calc(var(--s1) + ${loc.depth * 16}px)">
-                        <span>${loc.depth === 0 ? "🏠" : "📁"}</span>
+                        <span class="location-icon">${icon(loc.depth === 0 ? "home" : "folder")}</span>
                         <span class="location-path">${esc(loc.name)}</span>
                         ${loc.depth > 0 ? `<span class="location-fullpath">(${esc(loc.path)})</span>` : ""}
                         <span class="location-count-pill">${loc.copy_count} ${loc.copy_count === 1 ? "copy" : "copies"}</span>
                       </div>
                       <div class="location-actions">
-                        <button type="button" class="btn btn-xs btn-ghost btn-loc-edit" data-id="${loc.id}" data-name="${esc(loc.name)}" data-parent="${loc.parent_id || ""}" title="Rename" aria-label="Rename ${esc(loc.name)}">✏️ Rename</button>
-                        <button type="button" class="btn btn-xs btn-ghost btn-loc-delete" data-id="${loc.id}" data-name="${esc(loc.name)}" data-copies="${loc.copy_count}" title="Delete" aria-label="Delete ${esc(loc.name)}" style="color:var(--danger)">🗑️</button>
+                        <button type="button" class="btn btn-xs btn-ghost btn-loc-edit" data-id="${loc.id}" data-name="${esc(loc.name)}" data-parent="${loc.parent_id || ""}" title="Rename" aria-label="Rename ${esc(loc.name)}">${icon("edit")} Rename</button>
+                        <button type="button" class="btn btn-xs btn-ghost btn-loc-delete" data-id="${loc.id}" data-name="${esc(loc.name)}" data-copies="${loc.copy_count}" title="Delete" aria-label="Delete ${esc(loc.name)}" style="color:var(--danger)">${icon("trash")}</button>
                       </div>
                     </div>
                   `
