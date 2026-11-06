@@ -183,3 +183,15 @@ def test_mobile_tabs_three_columns():
     block = m.group(1)
     t = re.search(r"\.movie-night-tabs\s*\{([^}]*)\}", block)
     assert t and "grid-template-columns: repeat(3, 1fr)" in t.group(1)
+
+
+def test_movie_night_unrated_sentence_guarded_by_hint():
+    m = re.search(r"currentCap && !\(res && res\.hint && /unrated/i\.test\(res\.hint\)\)", JS)
+    assert m, "UI 'Unrated films' sentence must be skipped when the server hint already says so"
+
+
+def test_movie_night_ignores_stale_responses():
+    assert "const myToken = ++pickToken" in JS
+    assert len(re.findall(r"if \(myToken !== pickToken\) return", JS)) >= 2
+    # the guard sits before any render of a pick (after the await, before currentPick is set)
+    assert JS.index("if (myToken !== pickToken) return") < JS.index("currentPick = res.results[0]")

@@ -3195,16 +3195,19 @@
       });
     }
 
+    let pickToken = 0;
     async function fetchPick() {
       const content = document.getElementById("movie-night-content");
       const viewBtn = document.getElementById("btn-movie-night-view");
       if (!content) return;
+      const myToken = ++pickToken;
       content.innerHTML = `<div class="movie-night-loading">Picking a movie…</div>`;
       if (viewBtn) viewBtn.disabled = true;
 
       const apiPrefix = isAdmin ? "/admin/api" : "/api";
       try {
         const res = await api(`${apiPrefix}/recommendations?mode=${encodeURIComponent(currentMode)}&limit=1&random=1${currentCap ? `&max_cert=${encodeURIComponent(currentCap)}` : ""}`);
+        if (myToken !== pickToken) return; // a newer tab/cap tap superseded this response
         if (res && res.results && res.results.length > 0) {
           currentPick = res.results[0];
           const runtimeStr = currentPick.runtime ? `${currentPick.runtime}m` : "";
@@ -3236,12 +3239,13 @@
               <div style="font-size:2rem;margin-bottom:8px;color:var(--amber)">${icon("popcorn")}</div>
               <p style="font-weight:600;color:var(--ink);margin-bottom:4px">No matching movies found</p>
               <p class="movie-night-hint">${esc((res && res.hint) || 'Try rolling in another category like "Quick Picks" or "Surprise Me"!')}</p>
-              ${currentCap ? `<p class="movie-night-hint">Unrated films are hidden while a rating cap is on.</p>` : ""}
+              ${currentCap && !(res && res.hint && /unrated/i.test(res.hint)) ? `<p class="movie-night-hint">Unrated films are hidden while a rating cap is on.</p>` : ""}
             </div>
           `;
           if (viewBtn) viewBtn.disabled = true;
         }
       } catch (err) {
+        if (myToken !== pickToken) return;
         content.innerHTML = `<div class="movie-night-empty movie-night-animated"><p>Failed to load recommendation: ${esc(err.message || String(err))}</p></div>`;
         if (viewBtn) viewBtn.disabled = true;
       }
