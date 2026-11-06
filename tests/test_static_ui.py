@@ -91,3 +91,27 @@ def test_location_form_grid_can_shrink():
 def test_location_rows_wrap():
     assert "flex-wrap: wrap" in _rule(".location-row")
     assert "min-width: 0" in _rule(".location-row-main")
+
+
+# --- Enhancement: horizontally scrolling header admin bar -------------------
+
+def test_nav_actions_is_a_scroll_row():
+    decl = _rule(".nav-actions")
+    for prop in ("flex-wrap: nowrap", "overflow-x: auto", "min-width: 0",
+                 "scroll-snap-type: x proximity", "overscroll-behavior-x: contain",
+                 "scrollbar-width: none"):
+        assert prop in decl, f".nav-actions missing {prop!r}"
+    assert ".nav-actions::-webkit-scrollbar" in CSS
+    assert ".nav-actions.has-more" in CSS
+
+
+def test_nav_actions_scroll_binding_exists():
+    assert "function bindScrollRow(" in JS
+    assert "scrollIntoView({ inline: \"center\", block: \"nearest\" })" in JS
+
+
+def test_header_top_padding_has_a_floor():
+    # env(safe-area-inset-top, fallback) resolves to 0 on non-notched phones,
+    # which left the admin bar touching the top of the screen.
+    assert "max(var(--s3), env(safe-area-inset-top))" in _rule(".site-header")
+

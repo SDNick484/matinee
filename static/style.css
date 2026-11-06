@@ -225,7 +225,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   border-bottom: 1px solid var(--line);
-  padding: env(safe-area-inset-top, var(--s3)) var(--s4) var(--s3);
+  padding: max(var(--s3), env(safe-area-inset-top)) var(--s4) var(--s3);
 }
 
 .header-inner {
@@ -235,9 +235,11 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   align-items: center;
   justify-content: space-between;
   gap: var(--s3);
+  min-width: 0;
 }
 
 .brand {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   gap: var(--s2);
@@ -261,10 +263,55 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   letter-spacing: 0.05em;
 }
 
+/* Header admin bar: one swipeable row on phones, unchanged when it fits. */
 .nav-actions {
+  flex: 1 1 auto;
+  min-width: 0;
   display: flex;
+  flex-wrap: nowrap;
   align-items: center;
   gap: var(--s2);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-snap-type: x proximity;
+  scroll-padding-inline: 2px;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+  padding: 3px 2px;      /* room for the focus ring inside the scroller */
+  margin: -3px -2px;
+}
+.nav-actions::-webkit-scrollbar {
+  display: none;
+}
+.nav-actions > * {
+  flex: 0 0 auto;
+  scroll-snap-align: start;
+}
+/* Right-align when it fits; auto margin collapses to 0 when it overflows,
+   so the first button stays reachable (justify-content:flex-end would not). */
+.nav-actions > :first-child {
+  margin-left: auto;
+}
+.nav-actions [aria-current="page"] {
+  border-color: var(--amber);
+}
+.nav-actions.has-more {
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent);
+}
+.nav-actions.has-less {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 32px);
+  mask-image: linear-gradient(to right, transparent, #000 32px);
+}
+.nav-actions.has-more.has-less {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 32px, #000 calc(100% - 32px), transparent);
+  mask-image: linear-gradient(to right, transparent, #000 32px, #000 calc(100% - 32px), transparent);
+}
+@media (pointer: coarse) {
+  .nav-actions .btn {
+    height: 44px;
+  }
 }
 
 main#view {

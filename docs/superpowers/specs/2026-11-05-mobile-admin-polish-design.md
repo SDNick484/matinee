@@ -79,6 +79,8 @@ A single global rule on `input:where(:not([type=checkbox], …))` (text-like typ
 ```
 - `justify-content: flex-end` combined with overflow would make the left edge unreachable, so the row uses `margin-left:auto` on the first child instead.
 - `app.js`: `bindScrollRow(el)` toggles `has-more` (more content to the right) and `has-less` (scrolled), on scroll and resize, after every `updateHeader()`. The current route's button (`#/stats` → Stats, `#/add` → Add Movie) is marked `aria-current="page"` and scrolled into view with `scrollIntoView({inline:'center', block:'nearest'})`.
+- `.site-header` top padding changes from `env(safe-area-inset-top, var(--s3))` to `max(var(--s3), env(safe-area-inset-top))`. The env() fallback only applies when the variable is undefined, so in Chrome on a phone it resolved to 0 and the bar touched the top edge.
+- On touch screens (`pointer: coarse`) the header buttons are 44 px tall.
 - The header is already sticky, and that's unchanged. At ≥ 900 px the row fits, so `has-more` never applies and desktop looks the same.
 - **Divergence from Roasted:** Roasted wraps `#nav` under 640 px. Matinee scrolls, because five buttons (four admin buttons plus the brand) can't fit in one line at 412 px, and wrapping would make the sticky header two rows tall over the poster grid.
 

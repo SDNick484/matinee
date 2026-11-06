@@ -275,6 +275,12 @@
     document.getElementById("btn-header-movie-night")?.addEventListener("click", () => openMovieNightModal());
     document.getElementById("btn-header-locations")?.addEventListener("click", () => openLocationsManagerModal());
 
+    // Header admin bar is a swipeable row on phones; mark and reveal the current page's button.
+    const activeId = { "/stats": "btn-header-stats", "/add": "btn-header-add" }[state.route?.path];
+    const activeBtn = activeId ? document.getElementById(activeId) : null;
+    if (activeBtn) activeBtn.setAttribute("aria-current", "page");
+    bindScrollRow(nav, activeBtn);
+
     const footerLinks = document.getElementById("footer-links");
     if (footerLinks) {
       if (isAdmin) {
@@ -293,6 +299,27 @@
         `;
       }
     }
+  }
+
+  // Horizontal scroll row: toggles .has-more / .has-less so CSS can fade the
+  // edge that hides more buttons. Binds listeners once per element.
+  function bindScrollRow(el, activeEl) {
+    if (!el) return;
+    const update = () => {
+      const max = el.scrollWidth - el.clientWidth;
+      el.classList.toggle("has-more", max > 4 && el.scrollLeft < max - 4);
+      el.classList.toggle("has-less", el.scrollLeft > 4);
+    };
+    if (!el.dataset.scrollRow) {
+      el.dataset.scrollRow = "1";
+      el.addEventListener("scroll", update, { passive: true });
+      window.addEventListener("resize", update);
+      if (document.fonts && document.fonts.ready) document.fonts.ready.then(update);
+    }
+    if (activeEl && el.scrollWidth > el.clientWidth) {
+      activeEl.scrollIntoView({ inline: "center", block: "nearest" });
+    }
+    update();
   }
 
   function navigate(hash) {
