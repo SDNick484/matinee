@@ -2,7 +2,7 @@
 
 ## Why
 
-The family's movies are spread across shelves, bins and five or more digital storefronts, and nobody can answer "do we own *Paddington 2*, and where is it?" without hunting. This is build phase 1 of the tracker in `docs/movie-app-prompt.md`. It sets up the Title-versus-Copy data model that every later phase builds on, and ships a usable collection on day one: search TMDB, add what you own, then browse it as a poster grid on the phone.
+The family's movies are spread across shelves, bins and five or more digital storefronts, and nobody can answer "do we own *Paddington 2*, and where is it?" without hunting. This is build phase 1 of the tracker in `docs/vision.md`. It sets up the Title-versus-Copy data model that every later phase builds on, and ships a usable collection on day one: search TMDB, add what you own, then browse it as a poster grid on the phone.
 
 ## What Changes
 
