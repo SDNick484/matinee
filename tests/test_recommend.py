@@ -164,3 +164,124 @@ def test_results_carry_collection_fields(con):
     seed_title(con, 862)  # Toy Story
     r = recommend.recommend(con, recommend.parse_params({"mode": "genre_mood"}))["results"][0]
     assert "collection_tmdb_id" in r and "collection_name" in r
+
+
+# --- franchise modes ----------------------------------------------------------
+
+def _franchise(con, mode, **kw):
+    return recommend.recommend(con, recommend.parse_params({"mode": mode, "limit": 50, **kw}))
+
+
+def _picks(out):
+    return [(r["title"], r["reason"]) for r in out["results"]]
+
+
+def test_next_after(con):
+    seed_title(con, 862, watched=("2026-10-31",))
+    seed_title(con, 10193)
+    assert _picks(_franchise(con, "next_in_franchise")) == [("Toy Story 3", "Toy Story Collection · Next after Toy Story")]
+
+
+def test_gap_fill(con):
+    seed_title(con, 862)
+    seed_title(con, 10193, watched=("2026-10-31",))
+    assert _picks(_franchise(con, "next_in_franchise")) == [
+        ("Toy Story", "Toy Story Collection · Before Toy Story 3 (watched)")]
+
+
+def test_sold_disc_counts(con):
+    seed_title(con, 862, copies=(), watched=("2026-10-31",))
+    seed_title(con, 10193)
+    assert _picks(_franchise(con, "next_in_franchise")) == [("Toy Story 3", "Toy Story Collection · Next after Toy Story")]
+
+
+def test_filter_after_pick(con):
+    for t in (671, 672, 673, 674):
+        seed_title(con, t, watched=("2026-09-01",) if t != 674 else ())
+    assert _franchise(con, "next_in_franchise", max_cert="PG")["results"] == []
+    assert _picks(_franchise(con, "next_in_franchise")) == [
+        ("Harry Potter and the Goblet of Fire",
+         "Harry Potter Collection · Next after Harry Potter and the Prisoner of Azkaban")]
+
+
+def test_start_franchise(con):
+    seed_title(con, 920)
+    seed_title(con, 49013)
+    assert _picks(_franchise(con, "start_franchise")) == [("Cars", "Start the Cars Collection · 2 owned")]
+
+
+def test_start_franchise_needs_two_owned(con):
+    seed_title(con, 49013)
+    out = _franchise(con, "start_franchise")
+    assert out["results"] == []
+    assert out["hint"] == "No unstarted series with 2+ owned films. Try mode=never_watched."
+
+
+def test_start_franchise_skips_started(con):
+    seed_title(con, 920)
+    seed_title(con, 49013, watched=("2026-01-01",))
+    assert _franchise(con, "start_franchise")["results"] == []
+
+
+def test_start_franchise_filter_after_pick(con):
+    seed_title(con, 920)
+    seed_title(con, 49013)
+    assert _franchise(con, "start_franchise", max_runtime=100)["results"] == []  # pick (Cars, 117) fails; no fall-through
+    assert len(_franchise(con, "start_franchise", max_runtime=120)["results"]) == 1
+
+
+def test_next_in_franchise_empty_hint(con):
+    seed_title(con, 862)
+    out = _franchise(con, "next_in_franchise")
+    assert out["count"] == 0
+    assert out["hint"] == "No series in progress. Try mode=start_franchise."
+    out = _franchise(con, "next_in_franchise", max_cert="PG")
+    assert out["hint"] == ("No series in progress. Try mode=start_franchise."
+                           " Unrated films are hidden while max_cert is set.")
+
+
+def test_one_pick_per_collection_ordered_by_last_watch(con):
+    seed_title(con, 671, watched=("2026-09-01",))
+    seed_title(con, 672)
+    seed_title(con, 862, watched=("2026-10-31",))
+    seed_title(con, 863)
+    assert [r["title"] for r in _franchise(con, "next_in_franchise")["results"]] == [
+        "Toy Story 2", "Harry Potter and the Chamber of Secrets"]
+
+
+def test_dateless_watch_starts_series(con):
+    seed_title(con, 671, watched=(None,))
+    seed_title(con, 672)
+    seed_title(con, 862, watched=("2026-10-31",))
+    seed_title(con, 863)
+    assert _picks(_franchise(con, "next_in_franchise")) == [
+        ("Toy Story 2", "Toy Story Collection · Next after Toy Story"),
+        ("Harry Potter and the Chamber of Secrets",
+         "Harry Potter Collection · Next after Harry Potter and the Philosopher's Stone"),
+    ]
+
+
+def test_two_copies_one_pick(con):
+    seed_title(con, 862, watched=("2026-10-31",))
+    seed_title(con, 10193, copies=("Blu-ray", "4K UHD"))
+    out = _franchise(con, "next_in_franchise")
+    assert out["count"] == 1
+    assert out["results"][0]["formats"] == ["4K UHD", "Blu-ray"]
+
+
+def test_null_release_date_sorts_last(con):
+    seed_title(con, 862, watched=("2026-10-31",))
+    seed_title(con, 863)
+    seed_title(con, 10193)
+    con.execute("UPDATE titles SET release_date=NULL WHERE tmdb_id=863")
+    con.commit()
+    assert [r["title"] for r in _franchise(con, "next_in_franchise")["results"]] == ["Toy Story 3"]
+
+
+def test_franchise_random_and_limit(con):
+    seed_title(con, 862, watched=("2026-10-31",))
+    seed_title(con, 10193)
+    seed_title(con, 671, watched=("2026-09-01",))
+    seed_title(con, 672)
+    assert _franchise(con, "next_in_franchise", limit=1)["count"] == 1
+    assert _franchise(con, "next_in_franchise", random="1")["count"] == 2

@@ -1,0 +1,60 @@
+{
+ "adult": false,
+ "id": 674,
+ "imdb_id": "tt0330373",
+ "title": "Harry Potter and the Goblet of Fire",
+ "original_title": "Harry Potter and the Goblet of Fire",
+ "original_language": "en",
+ "release_date": "2005-11-16",
+ "runtime": 157,
+ "status": "Released",
+ "overview": "Harry Potter and the Goblet of Fire (2005).",
+ "tagline": "",
+ "vote_average": 7.8,
+ "vote_count": 10000,
+ "poster_path": "/poster674.jpg",
+ "backdrop_path": "/backdrop674.jpg",
+ "belongs_to_collection": {
+  "id": 1241,
+  "name": "Harry Potter Collection",
+  "poster_path": null,
+  "backdrop_path": null
+ },
+ "genres": [
+  {
+   "id": 12,
+   "name": "Adventure"
+  },
+  {
+   "id": 14,
+   "name": "Fantasy"
+  },
+  {
+   "id": 10751,
+   "name": "Family"
+  }
+ ],
+ "release_dates": {
+  "results": [
+   {
+    "iso_3166_1": "US",
+    "release_dates": [
+     {
+      "certification": "PG-13",
+      "iso_639_1": "",
+      "note": "",
+      "release_date": "2000-01-01T00:00:00.000Z",
+      "type": 3
+     },
+     {
+      "certification": "",
+      "iso_639_1": "",
+      "note": "",
+      "release_date": "2001-01-01T00:00:00.000Z",
+      "type": 4
+     }
+    ]
+   }
+  ]
+ }
+}

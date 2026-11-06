@@ -202,7 +202,8 @@ def test_log_watch_dateless_and_watched_at(monkeypatch):
 
 @pytest.mark.parametrize("max_cert", [None, "PG"])
 @pytest.mark.parametrize("genre", [None, "Animation"])
-@pytest.mark.parametrize("mode", ["forgotten_gems", "never_watched", "quick_picks", "genre_mood"])
+@pytest.mark.parametrize("mode", ["forgotten_gems", "never_watched", "quick_picks", "genre_mood",
+                                  "next_in_franchise", "start_franchise"])
 def test_mcp_direct_sqlite_matches_api(test_env, mode, genre, max_cert):
     from conftest import seed_title
     con = db()
@@ -210,6 +211,9 @@ def test_mcp_direct_sqlite_matches_api(test_env, mode, genre, max_cert):
     seed_title(con, 150540)                                         # Inside Out
     seed_title(con, 10681, rating=8.5)                              # WALL·E
     seed_title(con, 27205, copies=("Blu-ray", "4K UHD"))            # Inception
+    seed_title(con, 10193)                                          # Toy Story 3: next in a started series
+    seed_title(con, 920)                                            # Cars + Cars 2: an unstarted series
+    seed_title(con, 49013)
     qs = f"mode={mode}&limit=50" + (f"&genre={genre}" if genre else "") + \
         (f"&max_cert={max_cert}" if max_cert else "")
     with app.test_client() as c:
