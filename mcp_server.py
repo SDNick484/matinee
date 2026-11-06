@@ -359,6 +359,7 @@ class MatineeClient:
         min_rating: Optional[float] = None,
         limit: int = 5,
         random: bool = False,
+        max_cert: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Query recommendation heuristics (forgotten_gems, never_watched, quick_picks, genre_mood)."""
         con = self._get_db()
@@ -368,6 +369,7 @@ class MatineeClient:
                 out = recommend.recommend(con, recommend.parse_params({
                     "mode": mode, "genre": genre, "medium": medium, "max_runtime": max_runtime,
                     "min_rating": min_rating, "limit": limit, "random": random,
+                    "max_cert": max_cert,
                 }))
                 for r in out["results"]:
                     r.pop("poster_file", None)

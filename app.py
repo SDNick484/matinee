@@ -24,7 +24,7 @@ from pathlib import Path
 from flask import Flask, abort, g, jsonify, make_response, redirect, request, send_from_directory, has_app_context
 from werkzeug.wrappers import Response as WerkzeugResponse
 
-from recommend import FORMAT_ORDER, ParamError, parse_params, recommend, sorted_formats
+from recommend import CERT_VALUES, FORMAT_ORDER, ParamError, parse_params, recommend, sorted_formats
 
 APP_NAME = "Matinee"
 APP_DIR = Path(__file__).resolve().parent
@@ -159,8 +159,6 @@ CREATE TABLE IF NOT EXISTS omdb_ratings (
 CREATE INDEX IF NOT EXISTS omdb_ratings_fetched ON omdb_ratings(fetched_at);
 """
 SCHEMA_VERSION = "7"
-# Allowed editor overrides for a title's US certification (Task 4 swaps in recommend.CERT_VALUES).
-CERT_OVERRIDE_VALUES = ("G", "PG", "PG-13", "R", "NC-17", "NR")
 
 # Checked in the app (not the schema) so a new format or service needs no table rebuild.
 FORMATS = {"physical": ["4K UHD", "Blu-ray", "3D Blu-ray", "DVD", "VHS"],
@@ -1697,8 +1695,8 @@ def set_title_certification(title_id):
     value = data.get("certification")
     if value is not None:
         value = str(value).strip().upper() or None
-    if value is not None and value not in CERT_OVERRIDE_VALUES:
-        abort(make_err(400, "certification must be one of " + ", ".join(CERT_OVERRIDE_VALUES)))
+    if value is not None and value not in CERT_VALUES:
+        abort(make_err(400, "certification must be one of " + ", ".join(CERT_VALUES)))
     con.execute("UPDATE titles SET certification_override=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
                 (value, title_id))
     con.commit()

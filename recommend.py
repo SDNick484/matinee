@@ -8,6 +8,11 @@ from typing import Any, Iterable, Mapping
 
 MODES = ("forgotten_gems", "never_watched", "quick_picks", "genre_mood")
 
+# US certifications, most to least restrictive-friendly. "NR" is an editor-only override
+# value meaning "explicitly unrated"; it never satisfies a max_cert cap.
+CERT_ORDER = ("G", "PG", "PG-13", "R", "NC-17")
+CERT_VALUES = CERT_ORDER + ("NR",)
+
 # Display order for copy formats (physical first, then digital). Mirrors app.FORMATS.
 FORMAT_ORDER = ["4K UHD", "Blu-ray", "3D Blu-ray", "DVD", "VHS",
                 "Digital 4K", "Digital HD", "Digital SD"]
@@ -54,6 +59,10 @@ def parse_params(m: Mapping[str, Any]) -> dict:
         except (ValueError, TypeError):
             pass
 
+    max_cert = (_clean(m.get("max_cert")) or "").upper() or None
+    if max_cert is not None and max_cert not in CERT_ORDER:
+        raise ParamError("max_cert must be one of " + ", ".join(CERT_ORDER))
+
     return {
         "mode": mode,
         "limit": limit,
@@ -61,6 +70,7 @@ def parse_params(m: Mapping[str, Any]) -> dict:
         "medium": medium,
         "min_rating": min_rating,
         "max_runtime": max_runtime,
+        "max_cert": max_cert,
         "random": str(m.get("random") or "").strip().lower() in ("1", "true", "yes"),
     }
 
@@ -110,6 +120,11 @@ def recommend(con, p: dict, today: "dt.date | None" = None) -> dict:
         where.append("t.runtime > 0 AND t.runtime <= ?")
         args.append(p["max_runtime"])
 
+    if p.get("max_cert"):
+        allowed = CERT_ORDER[:CERT_ORDER.index(p["max_cert"]) + 1]
+        where.append(f"COALESCE(t.certification_override, t.certification) IN ({','.join('?' * len(allowed))})")
+        args.extend(allowed)
+
     if p.get("random"):
         order_by = "RANDOM()"
 
@@ -117,6 +132,8 @@ def recommend(con, p: dict, today: "dt.date | None" = None) -> dict:
     rows = con.execute(f"""
         SELECT t.id, t.title, t.year, t.runtime, COALESCE(t.custom_poster_file, t.poster_file) AS poster_file,
                t.fetched_at, t.tmdb_vote,
+               COALESCE(t.certification_override, t.certification) AS certification,
+               t.collection_tmdb_id, t.collection_name,
                (SELECT rating FROM user_ratings r WHERE r.title_id=t.id) AS user_rating,
                (SELECT MAX(watched_date) FROM watches w WHERE w.title_id=t.id) AS last_watched,
                (SELECT count(*) FROM watches w WHERE w.title_id=t.id) AS watch_count,
@@ -166,6 +183,9 @@ def recommend(con, p: dict, today: "dt.date | None" = None) -> dict:
             "runtime": r["runtime"],
             "poster_file": r["poster_file"],
             "fetched_at": r["fetched_at"],
+            "certification": r["certification"],
+            "collection_tmdb_id": r["collection_tmdb_id"],
+            "collection_name": r["collection_name"],
             "user_rating": user_r,
             "tmdb_vote": tmdb_v,
             "last_watched": last_w,
@@ -176,4 +196,10 @@ def recommend(con, p: dict, today: "dt.date | None" = None) -> dict:
             "reason": reason,
         })
 
-    return {"mode": mode, "count": len(results), "results": results}
+    out = {"mode": mode, "count": len(results), "results": results}
+    if not results:
+        hint = "Nothing matched these filters. Try removing a filter or mode=genre_mood."
+        if p.get("max_cert"):
+            hint += " Unrated films are hidden while max_cert is set."
+        out["hint"] = hint
+    return out

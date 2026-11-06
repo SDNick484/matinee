@@ -200,20 +200,22 @@ def test_log_watch_dateless_and_watched_at(monkeypatch):
 
 
 
+@pytest.mark.parametrize("max_cert", [None, "PG"])
 @pytest.mark.parametrize("genre", [None, "Animation"])
 @pytest.mark.parametrize("mode", ["forgotten_gems", "never_watched", "quick_picks", "genre_mood"])
-def test_mcp_direct_sqlite_matches_api(test_env, mode, genre):
+def test_mcp_direct_sqlite_matches_api(test_env, mode, genre, max_cert):
     from conftest import seed_title
     con = db()
     seed_title(con, 862, watched=("2025-01-01",), rating=9.0)      # Toy Story
     seed_title(con, 150540)                                         # Inside Out
     seed_title(con, 10681, rating=8.5)                              # WALL·E
     seed_title(con, 27205, copies=("Blu-ray", "4K UHD"))            # Inception
-    qs = f"mode={mode}&limit=50" + (f"&genre={genre}" if genre else "")
+    qs = f"mode={mode}&limit=50" + (f"&genre={genre}" if genre else "") + \
+        (f"&max_cert={max_cert}" if max_cert else "")
     with app.test_client() as c:
         api = c.get(f"/api/recommendations?{qs}").get_json()
     direct = mcp_server.MatineeClient(db_path=str(test_env)).get_recommendations(
-        mode=mode, genre=genre, limit=50)
+        mode=mode, genre=genre, limit=50, max_cert=max_cert)
 
     def key(res):
         return [(r["id"], r["reason"], r["formats"]) for r in res["results"]]

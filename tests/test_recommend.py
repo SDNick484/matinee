@@ -37,7 +37,7 @@ def test_parse_params_limit(raw, expected):
 def test_parse_params_defaults():
     assert recommend.parse_params({}) == {
         "mode": "forgotten_gems", "limit": 10, "genre": None, "medium": None,
-        "min_rating": None, "max_runtime": None, "random": False,
+        "min_rating": None, "max_runtime": None, "max_cert": None, "random": False,
     }
 
 
@@ -87,3 +87,80 @@ def test_recommend_bad_watch_date_falls_back(con):
     con.commit()
     out = recommend.recommend(con, recommend.parse_params({}), today=dt.date(2026, 11, 6))
     assert out["results"][0]["reason"] == "Rated 9.0 ★ · Not watched recently"
+
+
+# --- max_cert -----------------------------------------------------------------
+
+def _kids_catalog(con):
+    for tmdb_id in (862, 150540, 9487, 10681, 848326, 155):  # Toy Story, Inside Out, A Bug's Life, WALL-E, Kantara, The Dark Knight
+        seed_title(con, tmdb_id)
+
+
+def test_quick_picks_max_cert_pg(con):
+    _kids_catalog(con)
+    out = recommend.recommend(con, recommend.parse_params({"mode": "quick_picks", "max_cert": "PG"}))
+    assert [r["title"] for r in out["results"]] == ["Toy Story", "Inside Out", "A Bug's Life"]
+    assert [r["certification"] for r in out["results"]] == ["G", "PG", "G"]
+
+
+@pytest.mark.parametrize("cap", recommend.CERT_ORDER)
+def test_max_cert_excludes_unrated_in_every_mode(con, cap):
+    _kids_catalog(con)
+    capped = recommend.recommend(con, recommend.parse_params({"mode": "genre_mood", "max_cert": cap, "limit": 50}))
+    assert "Kantara" not in [r["title"] for r in capped["results"]]
+    free = recommend.recommend(con, recommend.parse_params({"mode": "genre_mood", "limit": 50}))
+    assert "Kantara" in [r["title"] for r in free["results"]]
+
+
+@pytest.mark.parametrize("raw,expected", [(" pg-13 ", "PG-13"), ("pg", "PG"), ("", None), (None, None)])
+def test_max_cert_normalizes(raw, expected):
+    assert recommend.parse_params({"max_cert": raw})["max_cert"] == expected
+
+
+@pytest.mark.parametrize("raw", ["PG13", "NR", "X"])
+def test_max_cert_invalid(raw):
+    with pytest.raises(recommend.ParamError, match="max_cert must be one of G, PG, PG-13, R, NC-17"):
+        recommend.parse_params({"max_cert": raw})
+
+
+def _override(con, tmdb_id, value):
+    con.execute("UPDATE titles SET certification_override=? WHERE tmdb_id=?", (value, tmdb_id))
+    con.commit()
+
+
+def _titles(con, **kw):
+    p = recommend.parse_params({"mode": "genre_mood", "limit": 50, **kw})
+    return [r["title"] for r in recommend.recommend(con, p)["results"]]
+
+
+def test_nr_override_still_hidden(con):
+    seed_title(con, 848326)  # Kantara
+    _override(con, 848326, "NR")
+    assert "Kantara" not in _titles(con, max_cert="NC-17")
+    out = recommend.recommend(con, recommend.parse_params({"mode": "genre_mood"}))
+    assert out["results"][0]["certification"] == "NR"
+
+
+def test_override_counts_for_cap(con):
+    seed_title(con, 848326)
+    _override(con, 848326, "PG-13")
+    assert "Kantara" in _titles(con, max_cert="PG-13")
+    assert "Kantara" not in _titles(con, max_cert="PG")
+
+
+def test_empty_hint_mentions_unrated(con):
+    seed_title(con, 155)  # The Dark Knight, PG-13
+    out = recommend.recommend(con, recommend.parse_params({"mode": "genre_mood", "max_cert": "G"}))
+    assert out["count"] == 0
+    assert out["hint"] == ("Nothing matched these filters. Try removing a filter or mode=genre_mood."
+                           " Unrated films are hidden while max_cert is set.")
+    out = recommend.recommend(con, recommend.parse_params({"mode": "never_watched", "genre": "Nope"}))
+    assert out["hint"] == "Nothing matched these filters. Try removing a filter or mode=genre_mood."
+    seed_title(con, 862)
+    assert "hint" not in recommend.recommend(con, recommend.parse_params({"mode": "genre_mood"}))
+
+
+def test_results_carry_collection_fields(con):
+    seed_title(con, 862)  # Toy Story
+    r = recommend.recommend(con, recommend.parse_params({"mode": "genre_mood"}))["results"][0]
+    assert "collection_tmdb_id" in r and "collection_name" in r
