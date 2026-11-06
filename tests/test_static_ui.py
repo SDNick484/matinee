@@ -133,3 +133,10 @@ def test_icon_set_covers_the_ui():
         assert re.search(rf"\b{name}: '<", JS), f"ICONS.{name} missing"
     assert "function icon(" in JS
     assert re.search(r"(?m)^\.ico\s*\{", CSS)
+
+
+def test_every_owned_poster_gets_a_medium_badge():
+    # Not just titles owned both ways: disc-only and digital-only get one too.
+    assert 'class="badge-medium"' in JS
+    assert 't.has_disc ? icon("disc")' in JS and 't.has_digital ? icon("cloud")' in JS
+    assert "badge-both" not in JS + CSS

@@ -1476,7 +1476,7 @@ main#view {
   width: fit-content;
   margin-top: var(--s1);
 }
-.badge-both {
+.badge-medium {
   position: absolute;
   top: 6px;
   left: 6px;
@@ -2230,6 +2230,14 @@ main#view {
     height: 44px;
     min-width: 44px;
   }
+}
+
+.badge-medium {
+  color: var(--ink);
+}
+.badge-medium .ico {
+  width: 14px;
+  height: 14px;
 }
 
 /* Inline SVG icons (see ICONS in app.js): sized to the text, colored by it */

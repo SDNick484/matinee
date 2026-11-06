@@ -1097,8 +1097,8 @@ def list_titles(private):
         f"""SELECT t.id, t.title, t.year, t.poster_file, t.fetched_at,
               (SELECT MIN(c.created_at) FROM copies c WHERE c.title_id=t.id) AS added,
               (SELECT group_concat(DISTINCT c.format) FROM copies c WHERE c.title_id=t.id) AS formats,
-              (EXISTS (SELECT 1 FROM copies c WHERE c.title_id=t.id AND c.kind='physical')
-               AND EXISTS (SELECT 1 FROM copies c WHERE c.title_id=t.id AND c.kind='digital')) AS has_both,
+              EXISTS (SELECT 1 FROM copies c WHERE c.title_id=t.id AND c.kind='physical') AS has_disc,
+              EXISTS (SELECT 1 FROM copies c WHERE c.title_id=t.id AND c.kind='digital') AS has_digital,
               (SELECT rating FROM user_ratings r WHERE r.title_id=t.id) AS user_rating,
               (SELECT MAX(watched_date) FROM watches w WHERE w.title_id=t.id) AS last_watched,
               (SELECT count(*) FROM watches w WHERE w.title_id=t.id) AS watch_count
@@ -1107,7 +1107,9 @@ def list_titles(private):
                "poster_url": image_url(r["poster_file"], r["fetched_at"]),
                "poster_file": r["poster_file"],
                "formats": sorted_formats((r["formats"] or "").split(",")) if r["formats"] else [],
-               "has_both": bool(r["has_both"]),
+               "has_disc": bool(r["has_disc"]),
+               "has_digital": bool(r["has_digital"]),
+               "has_both": bool(r["has_disc"] and r["has_digital"]),
                "added_on": (r["added"] or "")[:10] or None,
                "user_rating": r["user_rating"],
                "last_watched": r["last_watched"],

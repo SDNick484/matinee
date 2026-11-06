@@ -975,7 +975,10 @@
               ? `<img class="poster-img" src="${posterSrc}" loading="lazy" alt="${esc(t.title)}" onerror="this.onerror=null;this.parentElement.innerHTML='<div class=\\'poster-ph\\'>${esc(t.title)}<br>${t.year || ''}</div>';">`
               : `<div class="poster-ph"><span>${esc(t.title)}<br><small style="font-weight:400;color:var(--ink-3)">${t.year || ""}</small></span></div>`;
 
-            const bothBadge = t.has_both ? `<span class="badge-both" title="Disc + Digital">${icon("disc")}${icon("cloud")}</span>` : "";
+            const mediumLabel = t.has_disc && t.has_digital ? "Disc + Digital" : t.has_disc ? "On disc" : t.has_digital ? "Digital" : "";
+            const mediumBadge = mediumLabel
+              ? `<span class="badge-medium" title="${mediumLabel}" aria-label="${mediumLabel}">${t.has_disc ? icon("disc") : ""}${t.has_digital ? icon("cloud") : ""}</span>`
+              : "";
             const ratingBadge = (t.user_rating !== null && t.user_rating !== undefined)
               ? `<span class="badge-rating" title="Personal Rating: ${Number(t.user_rating).toFixed(1)}">★ ${Number(t.user_rating).toFixed(1)}</span>`
               : "";
@@ -986,7 +989,7 @@
             return `
               <a href="#/t/${t.id}" class="movie-card" data-id="${t.id}">
                 <div class="poster-wrap">
-                  ${bothBadge}
+                  ${mediumBadge}
                   ${ratingBadge}
                   ${posterHtml}
                 </div>
