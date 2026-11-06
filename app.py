@@ -24,6 +24,8 @@ from pathlib import Path
 from flask import Flask, abort, g, jsonify, make_response, redirect, request, send_from_directory, has_app_context
 from werkzeug.wrappers import Response as WerkzeugResponse
 
+from recommend import FORMAT_ORDER, ParamError, parse_params, recommend, sorted_formats
+
 APP_NAME = "Matinee"
 APP_DIR = Path(__file__).resolve().parent
 
@@ -160,7 +162,6 @@ SCHEMA_VERSION = "6"
 # Checked in the app (not the schema) so a new format or service needs no table rebuild.
 FORMATS = {"physical": ["4K UHD", "Blu-ray", "3D Blu-ray", "DVD", "VHS"],
            "digital": ["Digital 4K", "Digital HD", "Digital SD"]}
-FORMAT_ORDER = FORMATS["physical"] + FORMATS["digital"]
 SERVICES = ["Movies Anywhere", "Apple TV", "Fandango at Home", "Amazon", "Google Play", "Plex/Jellyfin", "Other"]
 SERVICE_ALIASES = {
     "vudu": "Fandango at Home",
@@ -958,10 +959,6 @@ def copy_out(r, private, loc_map=None):
     return d
 
 
-def sorted_formats(fs):
-    return sorted(set(fs), key=lambda f: FORMAT_ORDER.index(f) if f in FORMAT_ORDER else len(FORMAT_ORDER))
-
-
 def title_detail(title_id, private):
     con = db()
     t = con.execute("SELECT * FROM titles WHERE id=?", (title_id,)).fetchone()
@@ -1280,135 +1277,14 @@ def collection_stats(private):
 
 
 def recommendations(private=False):
-    a = request.args
-    mode = (a.get("mode") or "forgotten_gems").strip().lower()
     try:
-        limit = max(1, min(int(a.get("limit") or 10), 50))
-    except (ValueError, TypeError):
-        limit = 10
-
-    where = ["EXISTS (SELECT 1 FROM copies c WHERE c.title_id=t.id)"]
-    args = []
-
-    # Mode-specific conditions
-    if mode == "forgotten_gems":
-        where.append("(SELECT rating FROM user_ratings r WHERE r.title_id=t.id) >= 8.0")
-        where.append("COALESCE((SELECT MAX(watched_date) FROM watches w WHERE w.title_id=t.id), '0000-00-00') < date('now', '-365 days')")
-        order_by = "user_rating DESC, COALESCE(last_watched, '0000-00-00') ASC, t.sort_title ASC"
-    elif mode == "never_watched":
-        where.append("NOT EXISTS (SELECT 1 FROM watches w WHERE w.title_id=t.id)")
-        order_by = "COALESCE(t.tmdb_vote, 0) DESC, t.year DESC, t.sort_title ASC"
-    elif mode == "quick_picks":
-        max_rt = 95
-        if a.get("max_runtime"):
-            try:
-                max_rt = max(1, int(a.get("max_runtime")))
-            except (ValueError, TypeError):
-                pass
-        where.append("t.runtime > 0 AND t.runtime <= ?")
-        args.append(max_rt)
-        order_by = "COALESCE((SELECT rating FROM user_ratings r WHERE r.title_id=t.id), t.tmdb_vote, 0) DESC, t.runtime ASC"
-    elif mode == "genre_mood":
-        order_by = "COALESCE((SELECT rating FROM user_ratings r WHERE r.title_id=t.id), t.tmdb_vote, 0) DESC, t.sort_title ASC"
-    else:
-        order_by = "COALESCE((SELECT rating FROM user_ratings r WHERE r.title_id=t.id), t.tmdb_vote, 0) DESC, t.sort_title ASC"
-
-    # Additional filters
-    genre = clean(a.get("genre"))
-    if genre:
-        where.append("EXISTS (SELECT 1 FROM title_genres tg JOIN genres gn ON gn.id=tg.genre_id WHERE tg.title_id=t.id AND gn.name = ? COLLATE NOCASE)")
-        args.append(genre)
-
-    medium = (a.get("medium") or "").strip().lower()
-    if medium in ("physical", "digital"):
-        where.append("EXISTS (SELECT 1 FROM copies c WHERE c.title_id=t.id AND c.kind = ?)")
-        args.append(medium)
-
-    if a.get("min_rating"):
-        try:
-            min_r = float(a.get("min_rating"))
-            where.append("COALESCE((SELECT rating FROM user_ratings r WHERE r.title_id=t.id), t.tmdb_vote, 0) >= ?")
-            args.append(min_r)
-        except (ValueError, TypeError):
-            pass
-
-    if a.get("max_runtime") and mode != "quick_picks":
-        try:
-            max_rt = max(1, int(a.get("max_runtime")))
-            where.append("t.runtime > 0 AND t.runtime <= ?")
-            args.append(max_rt)
-        except (ValueError, TypeError):
-            pass
-
-    is_random = (a.get("random") or "").strip().lower() in ("1", "true", "yes")
-    if is_random:
-        order_by = "RANDOM()"
-
-    args.append(limit)
-    rows = db().execute(f"""
-        SELECT t.id, t.title, t.year, t.runtime, COALESCE(t.custom_poster_file, t.poster_file) AS poster_file,
-               t.fetched_at, t.tmdb_vote,
-               (SELECT rating FROM user_ratings r WHERE r.title_id=t.id) AS user_rating,
-               (SELECT MAX(watched_date) FROM watches w WHERE w.title_id=t.id) AS last_watched,
-               (SELECT count(*) FROM watches w WHERE w.title_id=t.id) AS watch_count,
-               (SELECT group_concat(DISTINCT c.format) FROM copies c WHERE c.title_id=t.id) AS formats,
-               (SELECT group_concat(g.name, ', ') FROM title_genres tg JOIN genres g ON g.id=tg.genre_id WHERE tg.title_id=t.id) AS genres
-        FROM titles t
-        WHERE {' AND '.join(where)}
-        ORDER BY {order_by}
-        LIMIT ?
-    """, args).fetchall()
-
-    today = dt.date.today()
-    results = []
-    for r in rows:
-        genres_list = [g.strip() for g in (r["genres"] or "").split(",") if g.strip()]
-        user_r = r["user_rating"]
-        tmdb_v = r["tmdb_vote"]
-        last_w = r["last_watched"]
-        runtime = r["runtime"]
-
-        if mode == "forgotten_gems":
-            if last_w:
-                try:
-                    w_date = dt.date.fromisoformat(last_w)
-                    months = max(1, (today - w_date).days // 30)
-                    reason = f"Rated {user_r:.1f} ★ · Not watched in {months} months"
-                except Exception:
-                    reason = f"Rated {user_r:.1f} ★ · Not watched recently"
-            elif r["watch_count"] > 0:
-                reason = f"Rated {user_r:.1f} ★ · Historical watch (Date unknown)"
-            else:
-                reason = f"Rated {user_r:.1f} ★ · Never logged as watched"
-        elif mode == "never_watched":
-            reason = f"Unwatched backlog · TMDB {tmdb_v:.1f} ★" if tmdb_v else "Unwatched backlog"
-        elif mode == "quick_picks":
-            reason = f"{runtime} mins · Perfect quick watch" if runtime else "Quick watch"
-        elif mode == "genre_mood":
-            score_str = f"{user_r:.1f} ★" if user_r else (f"{tmdb_v:.1f} ★" if tmdb_v else "")
-            genre_name = genre or (genres_list[0] if genres_list else "movie")
-            reason = f"Top-rated {genre_name} pick" + (f" ({score_str})" if score_str else "")
-        else:
-            reason = "Curated collection pick"
-
-        results.append({
-            "id": r["id"],
-            "title": r["title"],
-            "year": r["year"],
-            "runtime": r["runtime"],
-            "poster_url": image_url(r["poster_file"], r["fetched_at"]),
-            "poster_file": r["poster_file"],
-            "user_rating": user_r,
-            "tmdb_vote": tmdb_v,
-            "last_watched": last_w,
-            "watch_count": r["watch_count"],
-            "formats": sorted_formats((r["formats"] or "").split(",")) if r["formats"] else [],
-            "genres": genres_list,
-            "recommendation_reason": reason,
-            "reason": reason,
-        })
-
-    return jsonify(mode=mode, count=len(results), results=results)
+        p = parse_params(request.args)
+    except ParamError as e:
+        return make_err(400, str(e))
+    out = recommend(db(), p)
+    for r in out["results"]:
+        r["poster_url"] = image_url(r["poster_file"], r.pop("fetched_at"))
+    return jsonify(**out)
 
 
 for prefix, private in (("/api", False), ("/admin/api", True)):
