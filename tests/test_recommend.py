@@ -230,6 +230,20 @@ def test_start_franchise_filter_after_pick(con):
     assert len(_franchise(con, "start_franchise", max_runtime=120)["results"]) == 1
 
 
+def test_start_franchise_filter_after_pick_not_skip_ahead(con):
+    seed_title(con, 920)    # Cars, 117 min: the pick
+    seed_title(con, 49013)  # Cars 2, 106 min: would pass if the engine skipped ahead
+    assert _franchise(con, "start_franchise", max_runtime=110)["results"] == []
+
+
+def test_next_in_franchise_medium_filter_after_pick_not_skip_ahead(con):
+    seed_title(con, 862, watched=("2026-10-31",))
+    seed_title(con, 863)                                  # Toy Story 2: physical only, the pick
+    seed_title(con, 10193, copies=(), digital=("Digital HD",))  # Toy Story 3: digital, would pass if skipped ahead
+    assert _franchise(con, "next_in_franchise", medium="digital")["results"] == []
+    assert [r["title"] for r in _franchise(con, "next_in_franchise", medium="physical")["results"]] == ["Toy Story 2"]
+
+
 def test_next_in_franchise_empty_hint(con):
     seed_title(con, 862)
     out = _franchise(con, "next_in_franchise")
