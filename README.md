@@ -121,7 +121,9 @@ rc-service matinee restart
 Matinee includes an official Python **Model Context Protocol (MCP)** server (`mcp_server.py`) and headless API token authentication for AI assistants like Claude Desktop and Antigravity:
 
 - **Headless Auth**: Configure `MATINEE_API_KEY` to grant write permissions to external scripts, assistants, and automations.
-- **Recommendation Engine**: Discovers "Forgotten Gems" ($\ge 8.0$ rating, unviewed in $> 12$ months), unwatched backlog titles, and quick weeknight picks.
+- **Recommendation Engine**: Discovers "Forgotten Gems" ($\ge 8.0$ rating, unviewed in $> 12$ months), unwatched backlog titles, and quick weeknight picks. Two franchise modes cover series: `mode=next_in_franchise` (the next unwatched owned film in a series someone has started) and `mode=start_franchise` (the first film of an owned series of 2+ films that nobody has started).
+- **Kids' Cap**: Any mode accepts `max_cert` (G, PG, PG-13, R, NC-17). The MCP assistant maps "kids' night" to `max_cert="PG-13"` unless a rating is named. Unrated titles are hidden whenever a cap is set. The Movie Night picker on the phone UI defaults to "Any" and remembers the last cap chosen on that device.
+- **Certification Override**: Editors can set a title's US rating (G, PG, PG-13, R, NC-17, or NR) from the title view when TMDB's rating is wrong or missing. The override survives TMDB refreshes, and clearing it restores TMDB's value. It is written with `PUT /admin/api/titles/<id>/certification`, which requires an editor session and returns 401 for anonymous requests.
 - **Read & Write MCP Tools**: Search collection, fetch full title details, query recommendations, log watches with notes, set personal 0.0–10.0 ratings, and import movies from TMDB.
 
 See [docs/mcp-setup.md](docs/mcp-setup.md) for full configuration blocks and prompt workflows.
