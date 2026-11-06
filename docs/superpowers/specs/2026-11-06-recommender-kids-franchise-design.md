@@ -91,6 +91,8 @@ Every result gains `certification` (effective), `collection_tmdb_id`, `collectio
 |------|------|
 | `next_in_franchise` | "No series in progress. Try mode=start_franchise." |
 | `start_franchise` | "No unstarted series with 2+ owned films. Try mode=never_watched." |
+| `next_in_franchise`, a series is started but filters emptied the result | "Nothing in progress passes these filters. Try removing a filter." |
+| `start_franchise`, eligible unstarted series exist but filters emptied the result | "No unstarted series passes these filters. Try removing a filter." |
 | any, with `max_cert` | appended: "Unrated films are hidden while max_cert is set." |
 | others | "Nothing matched these filters. Try removing a filter or mode=genre_mood." |
 
@@ -326,7 +328,7 @@ Seeded via `title_from_tmdb(fixture)` → `write_title`. New hand-written fixtur
 4. **Filter after pick.** Own Harry Potter 1–4; 1–3 watched. `next_in_franchise&max_cert=PG` → no Harry Potter result. Without a cap → **Harry Potter and the Goblet of Fire**, "Harry Potter Collection · Next after Harry Potter and the Prisoner of Azkaban".
 5. **Start a series.** Own Cars + Cars 2, none watched. `start_franchise` → **Cars**, "Start the Cars Collection · 2 owned". Own only Cars 2 → not suggested.
 6. **Kids' cap.** `quick_picks&max_cert=PG` → Toy Story, Inside Out, A Bug's Life; Kantara (no US rating) never appears with any cap.
-7. **Override.** Editor sets Kantara to `PG-13` → appears in `genre_mood&max_cert=PG-13`, not in `genre_mood&max_cert=PG`; `POST /admin/api/titles/<id>/refresh` keeps the override; `null` clears it. Anonymous `PUT` → 403.
+7. **Override.** Editor sets Kantara to `PG-13` → appears in `genre_mood&max_cert=PG-13`, not in `genre_mood&max_cert=PG`; `POST /admin/api/titles/<id>/refresh` keeps the override; `null` clears it. Anonymous `PUT` → 401.
 8. **Bad input.** `max_cert=PG13` → 400 from the API; MCP schema rejects it.
 9. **Empty hint.** `next_in_franchise` with no watches → `count: 0`, hint names `start_franchise`.
 10. **MCP parity.** Every mode × {no cap, `PG`} returns the same ids, order and reasons from `/api/recommendations` and `MatineeClient(db_path=…)`.

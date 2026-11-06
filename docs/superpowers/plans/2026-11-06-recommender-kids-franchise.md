@@ -112,7 +112,7 @@ def test_mcp_forgotten_gems_reason_uses_date_direct_sqlite(test_env):
   - `test_migration_v7_idempotent`: build a v6-shaped `titles` table without the column (same approach as `tests/test_custom_poster.py::test_migration_adds_column_to_v5_idempotently`), run `migrate()` twice; separately `init_db()` on a fresh DB; `PRAGMA table_info(titles)` contains `certification_override` once; `meta.schema == "7"`.
   - `test_certification_override_roundtrip`: add Kantara (848326) via the fixture-backed add flow; `PUT .../certification {"certification": "pg-13"}` → 200, body `certification == "PG-13"`, `certification_tmdb is None`, `certification_override == "PG-13"`; `GET /api/titles/<id>` shows the same three fields; `PUT {"certification": null}` → `certification is None`, `certification_override is None`.
   - `test_certification_override_survives_refresh`: Spirited Away (129, TMDB "PG") overridden to `"G"`, then `POST /admin/api/titles/<id>/refresh` → `certification == "G"`, `certification_tmdb == "PG"`.
-  - `test_certification_override_validation`: `"PG13"` → 400 with the exact error; `/admin/api/titles/999999/certification` → 404; with `LAN_EDIT` off and no identity → 403.
+  - `test_certification_override_validation`: `"PG13"` → 400 with the exact error; `/admin/api/titles/999999/certification` → 404; with `LAN_EDIT` off and no identity → 401.
 - [ ] **Step 2: Run** — FAIL (404 route / missing column).
 - [ ] **Step 3: Implement** the migration block (spec §6), the `SCHEMA` column, the route (mirrors `set_title_rating`), and the three `title_detail` fields.
 - [ ] **Step 4: Run** — `python3 -m pytest -q` → all pass.

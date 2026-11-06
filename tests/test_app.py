@@ -897,12 +897,6 @@ def test_static_app_js_no_undefined_escapeHtml():
         assert "function escapeHtml" in js or "const escapeHtml" in js or "let escapeHtml" in js
 
 
-
-
-
-
-
-
 # ------------------------------------------------------------------- certification override (v7)
 def test_migration_v7_idempotent(tmp_path, monkeypatch):
     import sqlite3
@@ -950,6 +944,16 @@ def test_certification_override_roundtrip():
     assert body["certification"] is None and body["certification_override"] is None
     det = c.get(f"/api/titles/{t['id']}").get_json()
     assert det["certification"] is None and det["certification_override"] is None
+
+
+def test_certification_override_empty_string_clears():
+    t = add(848326)
+    url = f"/admin/api/titles/{t['id']}/certification"
+    assert c.put(url, json={"certification": "PG-13"}).get_json()["certification_override"] == "PG-13"
+    r = c.put(url, json={"certification": ""})
+    assert r.status_code == 200
+    assert r.get_json()["certification_override"] is None
+    assert c.get(f"/api/titles/{t['id']}").get_json()["certification_override"] is None
 
 
 def test_certification_override_survives_refresh():

@@ -254,6 +254,22 @@ def test_next_in_franchise_empty_hint(con):
                            " Unrated films are hidden while max_cert is set.")
 
 
+def test_next_in_franchise_filtered_hint(con):
+    for t in (671, 672, 673, 674):
+        seed_title(con, t, watched=("2026-09-01",) if t != 674 else ())
+    out = _franchise(con, "next_in_franchise", max_cert="PG")
+    assert out["results"] == []
+    assert out["hint"] == ("Nothing in progress passes these filters. Try removing a filter."
+                           " Unrated films are hidden while max_cert is set.")
+
+
+def test_start_franchise_filtered_hint(con):
+    seed_title(con, 920)
+    seed_title(con, 49013)
+    out = _franchise(con, "start_franchise", max_runtime=100)
+    assert out["hint"] == "No unstarted series passes these filters. Try removing a filter."
+
+
 def test_one_pick_per_collection_ordered_by_last_watch(con):
     seed_title(con, 671, watched=("2026-09-01",))
     seed_title(con, 672)
