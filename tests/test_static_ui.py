@@ -74,3 +74,20 @@ def test_location_name_input_hints():
     tag = m.group(0)
     for attr in ('autocapitalize="words"', 'enterkeyhint="done"', 'autocomplete="off"'):
         assert attr in tag, f"loc-add-name missing {attr}"
+
+
+# --- Bug 2: no admin overflow at phone widths -------------------------------
+
+def test_btn_xs_is_defined():
+    assert re.search(r"\.btn-xs\s*\{", CSS)
+
+
+def test_location_form_grid_can_shrink():
+    assert "grid-template-columns:1fr 1fr" not in JS.replace(" ", "")
+    assert 'class="loc-form-grid"' in JS
+    assert "minmax(0, 1fr)" in _rule(".loc-form-grid")
+
+
+def test_location_rows_wrap():
+    assert "flex-wrap: wrap" in _rule(".location-row")
+    assert "min-width: 0" in _rule(".location-row-main")

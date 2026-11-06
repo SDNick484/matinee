@@ -3034,7 +3034,7 @@
             <!-- Add New Location Form -->
             <form id="add-location-form" style="display:flex;flex-direction:column;gap:var(--s3);padding:var(--s3);background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--radius-sm)">
               <div style="font-weight:600;font-size:var(--fs-sm)">Add New Shelf / Location</div>
-              <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--s2)">
+              <div class="loc-form-grid">
                 <div class="form-group">
                   <label class="form-label" style="font-size:var(--fs-xs)">Name</label>
                   <input type="text" id="loc-add-name" class="form-input" placeholder="e.g. Media Cabinet, Shelf 2" required autocapitalize="words" enterkeyhint="done" autocomplete="off" autocorrect="off" spellcheck="false">
@@ -3047,8 +3047,8 @@
                   </select>
                 </div>
               </div>
-              <div style="display:flex;justify-content:flex-end">
-                <button type="submit" class="btn btn-sm" id="btn-loc-submit">＋ Add Location</button>
+              <div class="loc-form-submit">
+                <button type="submit" class="btn" id="btn-loc-submit">＋ Add Location</button>
               </div>
             </form>
 
@@ -3067,12 +3067,12 @@
                       <div class="location-row-main" style="padding-left:calc(var(--s1) + ${loc.depth * 16}px)">
                         <span>${loc.depth === 0 ? "🏠" : "📁"}</span>
                         <span class="location-path">${esc(loc.name)}</span>
-                        ${loc.depth > 0 ? `<span style="font-size:var(--fs-xs);color:var(--ink-3)">(${esc(loc.path)})</span>` : ""}
+                        ${loc.depth > 0 ? `<span class="location-fullpath">(${esc(loc.path)})</span>` : ""}
                         <span class="location-count-pill">${loc.copy_count} ${loc.copy_count === 1 ? "copy" : "copies"}</span>
                       </div>
                       <div class="location-actions">
-                        <button type="button" class="btn btn-xs btn-ghost btn-loc-edit" data-id="${loc.id}" data-name="${esc(loc.name)}" data-parent="${loc.parent_id || ""}" title="Rename">✏️ Rename</button>
-                        <button type="button" class="btn btn-xs btn-ghost btn-loc-delete" data-id="${loc.id}" data-name="${esc(loc.name)}" data-copies="${loc.copy_count}" title="Delete" style="color:var(--danger)">🗑️</button>
+                        <button type="button" class="btn btn-xs btn-ghost btn-loc-edit" data-id="${loc.id}" data-name="${esc(loc.name)}" data-parent="${loc.parent_id || ""}" title="Rename" aria-label="Rename ${esc(loc.name)}">✏️ Rename</button>
+                        <button type="button" class="btn btn-xs btn-ghost btn-loc-delete" data-id="${loc.id}" data-name="${esc(loc.name)}" data-copies="${loc.copy_count}" title="Delete" aria-label="Delete ${esc(loc.name)}" style="color:var(--danger)">🗑️</button>
                       </div>
                     </div>
                   `
