@@ -140,3 +140,46 @@ def test_every_owned_poster_gets_a_medium_badge():
     assert 'class="badge-medium"' in JS
     assert 't.has_disc ? icon("disc")' in JS and 't.has_digital ? icon("cloud")' in JS
     assert "badge-both" not in JS + CSS
+
+
+# --- Movie Night mode grid, rating cap, certification override --------------
+
+def test_movie_night_has_six_modes_in_order():
+    modes = re.findall(r'class="movie-night-tab[^"]*"[^>]*data-mode="(\w+)"', JS)
+    assert modes == ["forgotten_gems", "quick_picks", "never_watched",
+                     "next_in_franchise", "start_franchise", "genre_mood"]
+    assert 'role="tablist"' in JS and 'role="tab"' in JS and "aria-selected" in JS
+    for label in ("Forgotten Gems", "Quick Picks", "Never Watched",
+                  "Next in Series", "Start a Series", "Surprise Me"):
+        assert f">{label}</button>" in JS
+
+
+def test_movie_night_cap_markup():
+    assert 'role="radiogroup"' in JS
+    assert 'aria-label="Rating cap"' in JS
+    assert "matinee.movieNight.maxCert" in JS
+    assert "max_cert=" in JS
+    assert "aria-checked" in JS
+    for cert in ("G", "PG", "PG-13"):
+        assert f'data-cert="{cert}"' in JS
+
+
+def test_movie_night_cap_storage_guarded():
+    # Every localStorage use must sit inside a try { ... } block.
+    for m in re.finditer(r"localStorage", JS):
+        preceding = JS[max(0, m.start() - 200):m.start()]
+        assert re.search(r"try\s*\{[^}]*$", preceding), \
+            f"localStorage at offset {m.start()} is not inside try {{"
+
+
+def test_new_controls_have_tap_targets():
+    assert "min-height: 44px" in _rule(".movie-night-cap-option")
+    assert "min-height: 44px" in _rule(".cert-override")
+
+
+def test_mobile_tabs_three_columns():
+    m = re.search(r"@media \(max-width: 600px\)\s*\{(.*?)\n\}", CSS, re.S)
+    assert m, "no max-width: 600px block"
+    block = m.group(1)
+    t = re.search(r"\.movie-night-tabs\s*\{([^}]*)\}", block)
+    assert t and "grid-template-columns: repeat(3, 1fr)" in t.group(1)

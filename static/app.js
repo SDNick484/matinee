@@ -81,6 +81,23 @@
     }, duration);
   }
 
+  const CERT_CHOICES = ["G", "PG", "PG-13", "R", "NC-17", "NR"];
+
+  function certBadgeHtml(title) {
+    if (!title.certification) return "";
+    const edited = title.certification_override
+      ? ` <span class="cert-edited" title="Overrides TMDB (${esc(title.certification_tmdb || "none")})">edited</span>`
+      : "";
+    return `<span class="cert-badge">${esc(title.certification)}</span>${edited}`;
+  }
+
+  function certSlotHtml(title) {
+    if (!isAdmin) return certBadgeHtml(title);
+    const opts = [`<option value="">TMDB (${esc(title.certification_tmdb || "none")})</option>`]
+      .concat(CERT_CHOICES.map(c => `<option value="${c}"${title.certification_override === c ? " selected" : ""}>${c}</option>`));
+    return `${certBadgeHtml(title)} <select class="cert-override" id="cert-override" aria-label="Certification">${opts.join("")}</select>`;
+  }
+
   async function api(path, opts = {}) {
     const headers = { Accept: "application/json", ...(opts.headers || {}) };
     if (opts.body && typeof opts.body === "object" && !(opts.body instanceof FormData)) {
@@ -1040,8 +1057,8 @@
     const metaParts = [];
     if (title.year) metaParts.push(esc(title.year));
     if (runtimeStr) metaParts.push(esc(runtimeStr));
-    if (title.certification) {
-      metaParts.push(`<span class="cert-badge">${esc(title.certification)}</span>`);
+    if (title.certification || isAdmin) {
+      metaParts.push(`<span id="cert-slot">${certSlotHtml(title)}</span>`);
     }
     if (title.tmdb_vote && title.tmdb_vote > 0) {
       metaParts.push(`<span class="score">★ ${title.tmdb_vote.toFixed(1)}</span>`);
@@ -1372,6 +1389,29 @@
 
     // Editor controls (7.4)
     if (isAdmin) {
+      const bindCertOverride = () => {
+        document.getElementById("cert-override")?.addEventListener("change", async (e) => {
+          const sel = e.target;
+          try {
+            const res = await api(`/admin/api/titles/${title.id}/certification`, {
+              method: "PUT",
+              body: { certification: sel.value === "" ? null : sel.value },
+            });
+            title.certification = res.certification;
+            title.certification_tmdb = res.certification_tmdb;
+            title.certification_override = res.certification_override;
+            const slot = document.getElementById("cert-slot");
+            if (slot) slot.innerHTML = certSlotHtml(title);
+            bindCertOverride();
+            toast("Certification updated");
+          } catch (err) {
+            sel.value = title.certification_override || "";
+            toast(err.message || "Failed to update certification");
+          }
+        });
+      };
+      bindCertOverride();
+
       document.getElementById("btn-add-copy")?.addEventListener("click", () => {
         openCopyModal({ tmdb_id: title.tmdb_id, title_id: title.id, title: title.title });
       });
@@ -3073,6 +3113,12 @@
 
     let currentMode = "forgotten_gems";
     let currentPick = null;
+    const CAP_KEY = "matinee.movieNight.maxCert";
+    let currentCap = "";
+    try {
+      const saved = localStorage.getItem(CAP_KEY);
+      if (["G", "PG", "PG-13"].includes(saved)) currentCap = saved;
+    } catch (e) { /* storage unavailable: default to Any */ }
 
     function renderModalSkeleton() {
       modalRoot.innerHTML = `
@@ -3082,11 +3128,20 @@
               <h2>${icon("dice")} Movie Night Picker</h2>
               <button class="btn-close" id="btn-movie-night-close" aria-label="Close">&times;</button>
             </div>
-            <div class="movie-night-tabs">
-              <button type="button" class="movie-night-tab ${currentMode === "forgotten_gems" ? "active" : ""}" data-mode="forgotten_gems">Forgotten Gems</button>
-              <button type="button" class="movie-night-tab ${currentMode === "quick_picks" ? "active" : ""}" data-mode="quick_picks">Quick Picks</button>
-              <button type="button" class="movie-night-tab ${currentMode === "never_watched" ? "active" : ""}" data-mode="never_watched">Never Watched</button>
-              <button type="button" class="movie-night-tab ${currentMode === "genre_mood" ? "active" : ""}" data-mode="genre_mood">Surprise Me</button>
+            <div class="movie-night-tabs" role="tablist" aria-label="Pick mode">
+              <button type="button" role="tab" aria-selected="${currentMode === "forgotten_gems"}" class="movie-night-tab ${currentMode === "forgotten_gems" ? "active" : ""}" data-mode="forgotten_gems">Forgotten Gems</button>
+              <button type="button" role="tab" aria-selected="${currentMode === "quick_picks"}" class="movie-night-tab ${currentMode === "quick_picks" ? "active" : ""}" data-mode="quick_picks">Quick Picks</button>
+              <button type="button" role="tab" aria-selected="${currentMode === "never_watched"}" class="movie-night-tab ${currentMode === "never_watched" ? "active" : ""}" data-mode="never_watched">Never Watched</button>
+              <button type="button" role="tab" aria-selected="${currentMode === "next_in_franchise"}" class="movie-night-tab ${currentMode === "next_in_franchise" ? "active" : ""}" data-mode="next_in_franchise">Next in Series</button>
+              <button type="button" role="tab" aria-selected="${currentMode === "start_franchise"}" class="movie-night-tab ${currentMode === "start_franchise" ? "active" : ""}" data-mode="start_franchise">Start a Series</button>
+              <button type="button" role="tab" aria-selected="${currentMode === "genre_mood"}" class="movie-night-tab ${currentMode === "genre_mood" ? "active" : ""}" data-mode="genre_mood">Surprise Me</button>
+            </div>
+            <div class="movie-night-cap-label" id="movie-night-cap-label">Rating cap</div>
+            <div class="movie-night-cap" role="radiogroup" aria-label="Rating cap">
+              <button type="button" role="radio" aria-checked="${currentCap === ""}" class="movie-night-cap-option" data-cert="">Any</button>
+              <button type="button" role="radio" aria-checked="${currentCap === "G"}" class="movie-night-cap-option" data-cert="G">G</button>
+              <button type="button" role="radio" aria-checked="${currentCap === "PG"}" class="movie-night-cap-option" data-cert="PG">PG</button>
+              <button type="button" role="radio" aria-checked="${currentCap === "PG-13"}" class="movie-night-cap-option" data-cert="PG-13">PG-13</button>
             </div>
             <div class="movie-night-content" id="movie-night-content">
               <div class="movie-night-loading">Picking a movie…</div>
@@ -3102,9 +3157,26 @@
 
       modalRoot.querySelectorAll(".movie-night-tab").forEach(tab => {
         tab.addEventListener("click", () => {
-          modalRoot.querySelectorAll(".movie-night-tab").forEach(t => t.classList.remove("active"));
+          modalRoot.querySelectorAll(".movie-night-tab").forEach(t => {
+            t.classList.remove("active");
+            t.setAttribute("aria-selected", "false");
+          });
           tab.classList.add("active");
+          tab.setAttribute("aria-selected", "true");
           currentMode = tab.dataset.mode;
+          fetchPick();
+        });
+      });
+
+      modalRoot.querySelectorAll(".movie-night-cap-option").forEach(opt => {
+        opt.addEventListener("click", () => {
+          currentCap = opt.dataset.cert;
+          modalRoot.querySelectorAll(".movie-night-cap-option").forEach(o => {
+            o.setAttribute("aria-checked", String(o === opt));
+          });
+          try {
+            localStorage.setItem(CAP_KEY, currentCap);
+          } catch (e) { /* remembered per device when storage allows */ }
           fetchPick();
         });
       });
@@ -3132,7 +3204,7 @@
 
       const apiPrefix = isAdmin ? "/admin/api" : "/api";
       try {
-        const res = await api(`${apiPrefix}/recommendations?mode=${encodeURIComponent(currentMode)}&limit=1&random=1`);
+        const res = await api(`${apiPrefix}/recommendations?mode=${encodeURIComponent(currentMode)}&limit=1&random=1${currentCap ? `&max_cert=${encodeURIComponent(currentCap)}` : ""}`);
         if (res && res.results && res.results.length > 0) {
           currentPick = res.results[0];
           const runtimeStr = currentPick.runtime ? `${currentPick.runtime}m` : "";
@@ -3149,8 +3221,10 @@
                   ${ratingBadge}
                 </div>
                 <div class="movie-night-meta">${esc(metaParts)}</div>
+                ${currentPick.certification ? `<div><span class="cert-badge">${esc(currentPick.certification)}</span></div>` : ""}
                 ${currentPick.genres && currentPick.genres.length > 0 ? `<div class="movie-night-genres">${currentPick.genres.map(g => `<span class="genre-tag">${esc(g)}</span>`).join(" ")}</div>` : ""}
-                <div class="movie-night-reason">${esc(currentPick.recommendation_reason || "Curated pick")}</div>
+                ${currentPick.collection_name ? `<div class="movie-night-collection">${esc(currentPick.collection_name)}</div>` : ""}
+                <div class="movie-night-reason">${esc(currentPick.reason || currentPick.recommendation_reason || "Curated pick")}</div>
               </div>
             </div>
           `;
@@ -3161,7 +3235,8 @@
             <div class="movie-night-empty movie-night-animated">
               <div style="font-size:2rem;margin-bottom:8px;color:var(--amber)">${icon("popcorn")}</div>
               <p style="font-weight:600;color:var(--ink);margin-bottom:4px">No matching movies found</p>
-              <p style="font-size:var(--fs-xs);color:var(--ink-2)">Try rolling in another category like "Quick Picks" or "Surprise Me"!</p>
+              <p class="movie-night-hint">${esc((res && res.hint) || 'Try rolling in another category like "Quick Picks" or "Surprise Me"!')}</p>
+              ${currentCap ? `<p class="movie-night-hint">Unrated films are hidden while a rating cap is on.</p>` : ""}
             </div>
           `;
           if (viewBtn) viewBtn.disabled = true;
