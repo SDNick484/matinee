@@ -303,3 +303,17 @@ def test_mcp_get_movie_effective_certification_direct_sqlite(test_env):
     assert movie["certification"] == "G"
     assert movie["certification_tmdb"] == "PG-13"
     assert movie["certification_override"] == "G"
+
+
+def test_readonly_kwargs_guarded_on_tool_signature():
+    class NoAnnotations:
+        def tool(self, name=None, description=None):
+            pass
+
+    class WithAnnotations:
+        def tool(self, name=None, description=None, annotations=None):
+            pass
+
+    assert mcp_server._readonly_kwargs(None) == {}
+    assert mcp_server._readonly_kwargs(NoAnnotations) == {}
+    assert "annotations" in mcp_server._readonly_kwargs(WithAnnotations)

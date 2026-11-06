@@ -6,6 +6,7 @@ Can operate in:
 1. REST Mode: Connects to a running Matinee instance via MATINEE_URL and MATINEE_API_KEY.
 2. Direct SQLite Mode: Accelerates read operations directly against MATINEE_DB_PATH.
 """
+import inspect
 import json
 import os
 import sqlite3
@@ -24,11 +25,20 @@ except ImportError:
     except ImportError:
         FastMCP = None
 
-try:
-    from mcp.types import ToolAnnotations
-    _READONLY = {"annotations": ToolAnnotations(readOnlyHint=True, openWorldHint=False)}
-except ImportError:  # older mcp releases: no annotations support
-    _READONLY = {}
+def _readonly_kwargs(server_cls) -> Dict[str, Any]:
+    """Read-only tool annotations, only when this mcp release supports them on tool()."""
+    if server_cls is None:
+        return {}
+    try:
+        from mcp.types import ToolAnnotations
+        if "annotations" not in inspect.signature(server_cls.tool).parameters:
+            return {}
+    except (ImportError, TypeError, ValueError):
+        return {}
+    return {"annotations": ToolAnnotations(readOnlyHint=True, openWorldHint=False)}
+
+
+_READONLY = _readonly_kwargs(FastMCP)
 
 MATINEE_URL = os.environ.get("MATINEE_URL", "http://127.0.0.1:8769").rstrip("/")
 MATINEE_API_KEY = os.environ.get("MATINEE_API_KEY", "").strip()
