@@ -1,3 +1,5 @@
+import asyncio
+import urllib.parse
 import pytest
 mcp = pytest.importorskip("mcp")
 
@@ -225,3 +227,79 @@ def test_mcp_direct_sqlite_matches_api(test_env, mode, genre, max_cert):
         return [(r["id"], r["reason"], r["formats"]) for r in res["results"]]
     assert api["results"], "seed should yield results for every mode"
     assert key(direct) == key(api)
+
+
+def test_rest_recommendations_forwards_params(monkeypatch):
+    client = mcp_server.MatineeClient(api_url="http://fake-host", db_path="")
+    seen = []
+    monkeypatch.setattr(client, "_api_request", lambda m, p, d=None: seen.append(p) or {"results": []})
+    client.get_recommendations(mode="next_in_franchise", medium="physical", max_cert="PG-13", random=True)
+    qs = urllib.parse.parse_qs(urllib.parse.urlparse(seen[0]).query)
+    assert qs["mode"] == ["next_in_franchise"]
+    assert qs["medium"] == ["physical"]
+    assert qs["max_cert"] == ["PG-13"]
+    assert qs["random"] == ["1"]
+
+
+def _tool(name):
+    tools = asyncio.run(mcp_server.mcp.list_tools())
+    return next(t for t in tools if t.name == name)
+
+
+def _schema_values(prop):
+    """Allowed literal values from a property schema (enum, const or anyOf of those)."""
+    vals = set(prop.get("enum", []))
+    if "const" in prop:
+        vals.add(prop["const"])
+    for sub in prop.get("anyOf", []):
+        vals |= _schema_values(sub)
+    return vals
+
+
+def test_tool_schema_enumerates_modes_and_certs():
+    import recommend
+    tool = _tool("get_recommendations")
+    props = (getattr(tool, "inputSchema", None) or tool.input_schema)["properties"]
+    assert _schema_values(props["mode"]) == set(recommend.MODES)
+    assert _schema_values(props["max_cert"]) == set(recommend.CERT_ORDER)
+    assert _schema_values(props["medium"]) == {"physical", "digital"}
+    assert "random" in props
+
+
+def test_tool_read_only_annotation():
+    try:
+        from mcp.types import ToolAnnotations  # noqa: F401
+    except ImportError:
+        pytest.skip("ToolAnnotations not available in this mcp version")
+    ann = _tool("get_recommendations").annotations
+    assert ann is not None
+    assert (getattr(ann, "readOnlyHint", None) or getattr(ann, "read_only_hint", None)) is True
+
+
+def test_server_instructions_present():
+    text = mcp_server.SERVER_INSTRUCTIONS
+    assert "next_in_franchise" in text and "start_franchise" in text
+    assert 'max_cert="PG-13"' in text
+
+
+def test_what_to_watch_kids_uses_pg13():
+    kids = mcp_server.prompt_what_to_watch(kids=True)
+    assert 'max_cert="PG-13"' in kids
+    assert "unrated" in kids
+    assert "max_cert" not in mcp_server.prompt_what_to_watch(kids=False)
+
+
+def test_direct_sqlite_bad_max_cert_raises(test_env):
+    client = mcp_server.MatineeClient(db_path=str(test_env))
+    with pytest.raises(ValueError, match="max_cert must be one of"):
+        client.get_recommendations(max_cert="PG13")
+
+
+def test_mcp_get_movie_effective_certification_direct_sqlite(test_env):
+    con = db()
+    con.execute("UPDATE titles SET certification='PG-13', certification_override='G' WHERE id=1")
+    con.commit()
+    movie = mcp_server.MatineeClient(db_path=str(test_env)).get_movie(1)
+    assert movie["certification"] == "G"
+    assert movie["certification_tmdb"] == "PG-13"
+    assert movie["certification_override"] == "G"

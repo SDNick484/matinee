@@ -14,7 +14,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 try:
     from mcp.server.mcpserver import MCPServer as FastMCP
@@ -23,6 +23,12 @@ except ImportError:
         from mcp.server.fastmcp import FastMCP
     except ImportError:
         FastMCP = None
+
+try:
+    from mcp.types import ToolAnnotations
+    _READONLY = {"annotations": ToolAnnotations(readOnlyHint=True, openWorldHint=False)}
+except ImportError:  # older mcp releases: no annotations support
+    _READONLY = {}
 
 MATINEE_URL = os.environ.get("MATINEE_URL", "http://127.0.0.1:8769").rstrip("/")
 MATINEE_API_KEY = os.environ.get("MATINEE_API_KEY", "").strip()
@@ -223,6 +229,10 @@ class MatineeClient:
                 d["watch_count"] = len(watches)
                 d["genres"] = genres
                 d["custom_poster"] = bool(d.get("custom_poster_file"))  # same key as GET /api/titles/<id>
+                # effective certification, same shape as GET /api/titles/<id>
+                d["certification_tmdb"] = t["certification"]
+                d["certification_override"] = t["certification_override"]
+                d["certification"] = t["certification_override"] or t["certification"]
                 return d
             finally:
                 con.close()
@@ -361,7 +371,7 @@ class MatineeClient:
         random: bool = False,
         max_cert: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Query recommendation heuristics (forgotten_gems, never_watched, quick_picks, genre_mood)."""
+        """Query recommendation heuristics (see the get_recommendations tool for modes and filters)."""
         con = self._get_db()
         if con is not None:
             try:
@@ -387,6 +397,8 @@ class MatineeClient:
             params["max_runtime"] = max_runtime
         if min_rating is not None:
             params["min_rating"] = min_rating
+        if max_cert:
+            params["max_cert"] = max_cert
         if random:
             params["random"] = "1"
 
@@ -475,8 +487,27 @@ class MatineeClient:
         return self._api_request("POST", "/admin/api/copies", payload)
 
 
+SERVER_INSTRUCTIONS = """\
+Matinee is the family's own collection of physical discs and digital copies.
+- Recommend only what get_recommendations or search_collection return. Use search_tmdb only when the user asks about movies they do not own.
+- "Kids' night" or "something the kids can watch": call get_recommendations(max_cert="PG-13") unless the user names a rating. Unrated films are left out whenever max_cert is set.
+- "What's next in the series we're watching": mode="next_in_franchise". "Let's start a new series": mode="start_franchise".
+- After a pick, "where is it?": call where_is(title). After watching: call log_watch, then rate_movie if the user gives a rating.
+"""
+
+
+def _make_server():
+    """Build the FastMCP server; older mcp releases may not accept instructions=."""
+    if not FastMCP:
+        return None
+    try:
+        return FastMCP("matinee", instructions=SERVER_INSTRUCTIONS)
+    except TypeError:
+        return FastMCP("matinee")
+
+
 # FastMCP Server Instance
-mcp = FastMCP("matinee") if FastMCP else None
+mcp = _make_server()
 
 _default_client = MatineeClient()
 
@@ -512,21 +543,44 @@ if mcp:
         """Find where physical copies of a movie are stored (shelf/cabinet/room) or which digital services host it."""
         return _default_client.where_is(title)
 
-    @mcp.tool()
+    @mcp.tool(**_READONLY)
     def get_recommendations(
-        mode: str = "forgotten_gems",
+        mode: Literal["forgotten_gems", "never_watched", "quick_picks", "genre_mood",
+                      "next_in_franchise", "start_franchise"] = "forgotten_gems",
         genre: Optional[str] = None,
+        medium: Optional[Literal["physical", "digital"]] = None,
         max_runtime: Optional[int] = None,
         min_rating: Optional[float] = None,
+        max_cert: Optional[Literal["G", "PG", "PG-13", "R", "NC-17"]] = None,
         limit: int = 5,
+        random: bool = False,
     ) -> Dict[str, Any]:
-        """Get movie recommendations using heuristics: 'forgotten_gems', 'never_watched', 'quick_picks', or 'genre_mood'."""
+        """Pick movies to watch from the family's own collection (movie night, "what should we watch",
+        kids' night, family-friendly, sequel, next in the series, start a franchise, quick short movie).
+        <use_case>
+        - mode=next_in_franchise: next unwatched owned film in each series someone has started (one per series)
+        - mode=start_franchise: first film of an owned series (2+ films) nobody has started
+        - max_cert=G|PG|PG-13|R|NC-17: rating cap; works with any mode. For "kids" with no rating named, use PG-13.
+        - forgotten_gems, never_watched, quick_picks (≤95 min default), genre_mood as before
+        </use_case>
+        <important_notes>
+        - Films with no US rating (NR/unrated/unknown) are EXCLUDED whenever max_cert is set.
+        - Franchise modes choose the next film first, then apply filters: if the next Harry Potter is
+          PG-13 and max_cert=PG, that series yields nothing rather than skipping ahead.
+        - An empty result includes a `hint` with what to try next; follow it instead of telling the
+          user nothing matched.
+        - Each result has `id`; pass it to get_movie or where_is for the shelf location.
+        </important_notes>
+        """
         return _default_client.get_recommendations(
             mode=mode,
             genre=genre,
+            medium=medium,
             max_runtime=max_runtime,
             min_rating=min_rating,
+            max_cert=max_cert,
             limit=limit,
+            random=random,
         )
 
     @mcp.tool()
@@ -577,7 +631,7 @@ if mcp:
         return json.dumps(recs, indent=2)
 
     @mcp.prompt("what_to_watch")
-    def prompt_what_to_watch(mood: str = "", max_runtime: int = 0) -> str:
+    def prompt_what_to_watch(mood: str = "", max_runtime: int = 0, kids: bool = False) -> str:
         """Suggest a curated movie night lineup based on mood, genre, or time constraints."""
         instructions = [
             "You are helping the family choose a movie to watch tonight from their personal collection.",
@@ -588,6 +642,11 @@ if mcp:
         if max_runtime > 0:
             instructions.append(f"3. Ensure suggested movies do not exceed {max_runtime} minutes.")
         instructions.append("4. Present 2-3 distinct choices with format (e.g. 4K UHD vs Blu-ray) and reason why they fit.")
+        if kids:
+            instructions.append(
+                '5. This is a kids\' night: call `get_recommendations` with max_cert="PG-13" and tell the '
+                "family that unrated films were left out."
+            )
         return "\n".join(instructions)
 
     @mcp.prompt("log_movie_night")
