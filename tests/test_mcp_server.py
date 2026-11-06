@@ -62,6 +62,11 @@ def test_mcp_get_recommendations_direct_sqlite(test_env):
     assert len(recs["results"]) == 1
     assert recs["results"][0]["id"] == 1
 
+def test_mcp_forgotten_gems_reason_uses_date_direct_sqlite(test_env):
+    client = mcp_server.MatineeClient(db_path=str(test_env))
+    r = client.get_recommendations(mode="forgotten_gems")["results"][0]
+    assert "Not watched in" in r["reason"]
+
 def test_mcp_write_tools_dispatch_http(monkeypatch):
     calls = []
     def fake_request(method, path, data=None):

@@ -6,6 +6,7 @@ Can operate in:
 1. REST Mode: Connects to a running Matinee instance via MATINEE_URL and MATINEE_API_KEY.
 2. Direct SQLite Mode: Accelerates read operations directly against MATINEE_DB_PATH.
 """
+import datetime as dt
 import json
 import os
 import sqlite3
