@@ -2205,7 +2205,7 @@
 
             <div class="form-group" id="location-group" style="${initialKind === "physical" ? "display:flex;flex-direction:column;gap:var(--s1)" : "display:none"}">
               <label class="form-label">Storage Location</label>
-              <select id="select-copy-location" class="form-select" style="width:100%;padding:var(--s2);background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--ink)">
+              <select id="select-copy-location" class="form-select">
                 <option value="">(Unassigned / No shelf)</option>
                 ${locationsList.map((l) => `<option value="${l.id}">${esc(l.path)}</option>`).join("")}
               </select>
@@ -2472,7 +2472,7 @@
 
             <div class="form-group" id="edit-location-group" style="${copy.kind === "physical" ? "display:flex;flex-direction:column;gap:var(--s1)" : "display:none"}">
               <label class="form-label">Storage Location</label>
-              <select id="edit-select-copy-location" class="form-select" style="width:100%;padding:var(--s2);background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--ink)">
+              <select id="edit-select-copy-location" class="form-select">
                 <option value="">(Unassigned / No shelf)</option>
                 ${locationsList.map((l) => `<option value="${l.id}" ${copy.location_id === l.id ? "selected" : ""}>${esc(l.path)}</option>`).join("")}
               </select>
@@ -3037,11 +3037,11 @@
               <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--s2)">
                 <div class="form-group">
                   <label class="form-label" style="font-size:var(--fs-xs)">Name</label>
-                  <input type="text" id="loc-add-name" class="form-input" placeholder="e.g. Media Cabinet, Shelf 2" required style="padding:var(--s2);font-size:var(--fs-sm)">
+                  <input type="text" id="loc-add-name" class="form-input" placeholder="e.g. Media Cabinet, Shelf 2" required autocapitalize="words" enterkeyhint="done" autocomplete="off" autocorrect="off" spellcheck="false">
                 </div>
                 <div class="form-group">
                   <label class="form-label" style="font-size:var(--fs-xs)">Parent Location (Optional)</label>
-                  <select id="loc-add-parent" class="form-select" style="padding:var(--s2);font-size:var(--fs-sm)">
+                  <select id="loc-add-parent" class="form-select">
                     <option value="">(None - Top Level)</option>
                     ${locations.map(l => `<option value="${l.id}">${esc(l.path)}</option>`).join("")}
                   </select>
