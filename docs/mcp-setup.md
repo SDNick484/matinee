@@ -109,7 +109,7 @@ In Antigravity, add the Matinee MCP configuration to your workspace or global se
 
 ### 4.1 Read Tools
 - **`search_collection`**: Search movies by title text, genre, physical/digital medium, format (e.g. `4K UHD`, `Blu-ray`), watch status (`watched`/`unwatched`), or minimum user rating.
-- **`get_movie`**: Retrieve complete metadata for a title, including physical copies, digital storefronts, family user rating, and full watch log history.
+- **`get_movie`**: Retrieve complete metadata for a title, including physical copies, digital storefronts, family user rating, full watch log history, and `custom_poster` (true when an editor uploaded their own cover in place of the TMDB poster).
 - **`get_recommendations`**: Run heuristic discovery modes:
   - `forgotten_gems`: Rated $\ge 8.0$ and unviewed for $> 12$ months.
   - `never_watched`: Unwatched movies ranked by TMDB rating.

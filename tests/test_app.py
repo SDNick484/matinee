@@ -525,6 +525,17 @@ def test_filter_medium_disc_and_streaming():
     assert {x["title"] for x in grid(medium="disc,streaming")} == {"Amélie", "WALL·E"}
 
 
+def test_grid_reports_disc_and_digital_flags():
+    add(194, "physical", "Blu-ray")                         # Amélie: disc only
+    add(10681, "digital", "Digital HD", "Movies Anywhere")  # WALL·E: digital only
+    add(129, "physical", "4K UHD")                          # Spirited Away: both
+    add(129, "digital", "Digital 4K", "Apple TV")
+    flags = {x["title"]: (x["has_disc"], x["has_digital"], x["has_both"]) for x in grid()}
+    assert flags == {"Amélie": (True, False, False),
+                     "WALL·E": (False, True, False),
+                     "Spirited Away": (True, True, True)}
+
+
 def test_filter_medium_both():
     add(194, "physical", "Blu-ray")
     add(194, "digital", "Digital HD", "Apple TV")

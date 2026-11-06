@@ -84,6 +84,7 @@ CREATE TABLE IF NOT EXISTS titles (
   tmdb_vote REAL, tmdb_votes INTEGER,
   poster_path TEXT, backdrop_path TEXT,
   poster_file TEXT, backdrop_file TEXT,
+  custom_poster_file TEXT,
   fetched_at TEXT NOT NULL,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
@@ -154,7 +155,7 @@ CREATE TABLE IF NOT EXISTS omdb_ratings (
 );
 CREATE INDEX IF NOT EXISTS omdb_ratings_fetched ON omdb_ratings(fetched_at);
 """
-SCHEMA_VERSION = "5"
+SCHEMA_VERSION = "6"
 
 # Checked in the app (not the schema) so a new format or service needs no table rebuild.
 FORMATS = {"physical": ["4K UHD", "Blu-ray", "3D Blu-ray", "DVD", "VHS"],
@@ -305,6 +306,11 @@ def migrate(con):
             CREATE INDEX IF NOT EXISTS watches_date ON watches(watched_date DESC);
             """)
             con.execute("PRAGMA foreign_keys=ON")
+
+    # v6: an editor-uploaded cover that overrides the TMDB poster
+    title_cols = [r[1] for r in con.execute("PRAGMA table_info(titles)").fetchall()]
+    if "custom_poster_file" not in title_cols:
+        con.execute("ALTER TABLE titles ADD COLUMN custom_poster_file TEXT")
 
 
 def init_db():
@@ -719,6 +725,31 @@ def image_url(name, fetched_at):
     return f"/images/{name}?v={urllib.parse.quote(fetched_at or '')}" if name else None
 
 
+# Custom covers: stored flat in IMAGE_DIR as <tmdb_id>-custom-<sha1[:10]>.<ext>, so a new upload
+# gets a new URL and the TMDB files beside it are untouched. Sniffed by magic bytes, not extension.
+MAX_POSTER_BYTES = 8 * 1024 * 1024
+POSTER_TYPES = ((b"\xff\xd8\xff", ".jpg"), (b"\x89PNG\r\n\x1a\n", ".png"))
+
+
+def sniff_image(data):
+    for magic, ext in POSTER_TYPES:
+        if data.startswith(magic):
+            return ext
+    if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return ".webp"
+    return None
+
+
+def poster_file_of(t):
+    """The poster to show: an uploaded cover wins over the cached TMDB one."""
+    return t["custom_poster_file"] or t["poster_file"]
+
+
+def delete_custom_poster(name):
+    if name and "-custom-" in name and "/" not in name:
+        (IMAGE_DIR / name).unlink(missing_ok=True)
+
+
 # ============================================================================== omdb
 def omdb_get(imdb_id):
     """Fetch ratings from OMDb API for a given IMDb ID (e.g. 'tt0137523').
@@ -947,8 +978,12 @@ def title_detail(title_id, private):
     d["added_on"] = min((c["created_at"] for c in d["copies"]), default=None)
     d["added_on"] = d["added_on"][:10] if d["added_on"] else None
     p780 = image_name(t["tmdb_id"], "p780")
-    d["poster_url"] = image_url(t["poster_file"], t["fetched_at"])
-    d["poster_large_url"] = image_url(p780, t["fetched_at"]) if (IMAGE_DIR / p780).exists() else d["poster_url"]
+    d["custom_poster"] = bool(t["custom_poster_file"])
+    d["poster_url"] = image_url(poster_file_of(t), t["fetched_at"])
+    if d["custom_poster"]:
+        d["poster_large_url"] = d["poster_url"]
+    else:
+        d["poster_large_url"] = image_url(p780, t["fetched_at"]) if (IMAGE_DIR / p780).exists() else d["poster_url"]
     d["backdrop_url"] = image_url(t["backdrop_file"], t["fetched_at"])
     d["tmdb_url"] = f"https://www.themoviedb.org/movie/{t['tmdb_id']}"
     rating_row = con.execute("SELECT rating FROM user_ratings WHERE title_id=?", (title_id,)).fetchone()
@@ -1094,11 +1129,11 @@ def list_titles(private):
 
     sort = a.get("sort") if a.get("sort") in SORTS else "title"
     rows = db().execute(
-        f"""SELECT t.id, t.title, t.year, t.poster_file, t.fetched_at,
+        f"""SELECT t.id, t.title, t.year, COALESCE(t.custom_poster_file, t.poster_file) AS poster_file, t.fetched_at,
               (SELECT MIN(c.created_at) FROM copies c WHERE c.title_id=t.id) AS added,
               (SELECT group_concat(DISTINCT c.format) FROM copies c WHERE c.title_id=t.id) AS formats,
-              (EXISTS (SELECT 1 FROM copies c WHERE c.title_id=t.id AND c.kind='physical')
-               AND EXISTS (SELECT 1 FROM copies c WHERE c.title_id=t.id AND c.kind='digital')) AS has_both,
+              EXISTS (SELECT 1 FROM copies c WHERE c.title_id=t.id AND c.kind='physical') AS has_disc,
+              EXISTS (SELECT 1 FROM copies c WHERE c.title_id=t.id AND c.kind='digital') AS has_digital,
               (SELECT rating FROM user_ratings r WHERE r.title_id=t.id) AS user_rating,
               (SELECT MAX(watched_date) FROM watches w WHERE w.title_id=t.id) AS last_watched,
               (SELECT count(*) FROM watches w WHERE w.title_id=t.id) AS watch_count
@@ -1107,7 +1142,9 @@ def list_titles(private):
                "poster_url": image_url(r["poster_file"], r["fetched_at"]),
                "poster_file": r["poster_file"],
                "formats": sorted_formats((r["formats"] or "").split(",")) if r["formats"] else [],
-               "has_both": bool(r["has_both"]),
+               "has_disc": bool(r["has_disc"]),
+               "has_digital": bool(r["has_digital"]),
+               "has_both": bool(r["has_disc"] and r["has_digital"]),
                "added_on": (r["added"] or "")[:10] or None,
                "user_rating": r["user_rating"],
                "last_watched": r["last_watched"],
@@ -1309,7 +1346,8 @@ def recommendations(private=False):
 
     args.append(limit)
     rows = db().execute(f"""
-        SELECT t.id, t.title, t.year, t.runtime, t.poster_file, t.fetched_at, t.tmdb_vote,
+        SELECT t.id, t.title, t.year, t.runtime, COALESCE(t.custom_poster_file, t.poster_file) AS poster_file,
+               t.fetched_at, t.tmdb_vote,
                (SELECT rating FROM user_ratings r WHERE r.title_id=t.id) AS user_rating,
                (SELECT MAX(watched_date) FROM watches w WHERE w.title_id=t.id) AS last_watched,
                (SELECT count(*) FROM watches w WHERE w.title_id=t.id) AS watch_count,
@@ -1900,16 +1938,71 @@ def batch_refresh_ratings():
     return jsonify(ok=True, refreshed=refreshed, errors=errors, skipped=skipped)
 
 
+def poster_response(con, title_id):
+    t = con.execute("SELECT * FROM titles WHERE id=?", (title_id,)).fetchone()
+    url = image_url(poster_file_of(t), t["fetched_at"])
+    p780 = image_name(t["tmdb_id"], "p780")
+    large = url if t["custom_poster_file"] or not (IMAGE_DIR / p780).exists() else image_url(p780, t["fetched_at"])
+    return jsonify(ok=True, custom_poster=bool(t["custom_poster_file"]), poster_url=url, poster_large_url=large)
+
+
+@app.post("/admin/api/titles/<int:title_id>/poster")
+@editor_required
+def upload_poster(title_id):
+    """Replace the TMDB poster with an uploaded cover (JPEG, PNG or WebP, up to 8 MB).
+    The browser downscales big phone photos before sending, so no image library is needed here."""
+    con = db()
+    row = con.execute("SELECT tmdb_id, custom_poster_file FROM titles WHERE id=?", (title_id,)).fetchone()
+    if not row:
+        abort(make_err(404, "No such title"))
+    if request.content_length and request.content_length > MAX_POSTER_BYTES + 64 * 1024:
+        abort(make_err(413, "That image is over 8 MB."))
+    f = request.files.get("poster")
+    if f is None:
+        abort(make_err(400, "Choose a JPEG, PNG or WebP image."))
+    data = f.read(MAX_POSTER_BYTES + 1)
+    if len(data) > MAX_POSTER_BYTES:
+        abort(make_err(413, "That image is over 8 MB."))
+    ext = sniff_image(data)
+    if not ext:
+        abort(make_err(400, "Choose a JPEG, PNG or WebP image."))
+    IMAGE_DIR.mkdir(parents=True, exist_ok=True)
+    name = f"{row['tmdb_id']}-custom-{hashlib.sha1(data).hexdigest()[:10]}{ext}"
+    tmp = IMAGE_DIR / (name + ".part")
+    tmp.write_bytes(data)
+    os.replace(tmp, IMAGE_DIR / name)
+    con.execute("UPDATE titles SET custom_poster_file=?, updated_at=CURRENT_TIMESTAMP WHERE id=?", (name, title_id))
+    con.commit()
+    if row["custom_poster_file"] != name:
+        delete_custom_poster(row["custom_poster_file"])
+    return poster_response(con, title_id)
+
+
+@app.delete("/admin/api/titles/<int:title_id>/poster")
+@editor_required
+def revert_poster(title_id):
+    """Drop the uploaded cover and go back to the TMDB poster."""
+    con = db()
+    row = con.execute("SELECT custom_poster_file FROM titles WHERE id=?", (title_id,)).fetchone()
+    if not row:
+        abort(make_err(404, "No such title"))
+    con.execute("UPDATE titles SET custom_poster_file=NULL, updated_at=CURRENT_TIMESTAMP WHERE id=?", (title_id,))
+    con.commit()
+    delete_custom_poster(row["custom_poster_file"])
+    return poster_response(con, title_id)
+
+
 @app.delete("/admin/api/titles/<int:title_id>")
 @editor_required
 def delete_title(title_id):
     con = db()
-    row = con.execute("SELECT tmdb_id FROM titles WHERE id=?", (title_id,)).fetchone()
+    row = con.execute("SELECT tmdb_id, custom_poster_file FROM titles WHERE id=?", (title_id,)).fetchone()
     if not row:
         abort(make_err(404, "No such title"))
     con.execute("DELETE FROM titles WHERE id=?", (title_id,))
     con.commit()
     delete_images(row["tmdb_id"])
+    delete_custom_poster(row["custom_poster_file"])
     return jsonify(ok=True)
 
 

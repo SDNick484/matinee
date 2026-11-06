@@ -2,7 +2,9 @@
 # Nightly backup of Matinee, the movie collection (installed by setup-matinee.sh). Runs from /etc/periodic/daily:
 #   $LOCAL_DIR/<date>/matinee-matinee.db.gz          (kept KEEP_DAYS days)
 #   $BACKUP_TARGET/db/<date>/...  + $BACKUP_TARGET/files/matinee/images/   (if BACKUP_TARGET is set)
-# The images are TMDB art and can be re-fetched; copying them just makes a restore instant.
+# TMDB art in images/ can be re-fetched; copying it just makes a restore instant.
+# Uploaded covers (images/<tmdb_id>-custom-*) cannot be re-fetched, so they are also kept
+#   locally as $LOCAL_DIR/<date>/matinee-custom-covers.tar.gz next to the database copy.
 # Config: /etc/conf.d/ops     Log: /var/log/ops.log
 # (MATINEE_DATA and LOG may be overridden for a local test run.)
 set -u
@@ -27,6 +29,15 @@ if [ -f "$DB" ]; then
     log "ok matinee/matinee.db ($(du -h "$out.gz" | cut -f1))"
   else
     log "FAILED matinee/matinee.db"; fail=1
+  fi
+fi
+covers=$(ls "$DATA/images" 2>/dev/null | grep -E -- '-custom-[0-9a-f]{10}\.(jpg|png|webp)$')
+if [ -n "$covers" ]; then
+  # shellcheck disable=SC2086  # names are <tmdb_id>-custom-<hex>.<ext>: no spaces
+  if (cd "$DATA/images" && tar -czf "$LOCAL_DIR/$STAMP/matinee-custom-covers.tar.gz" $covers); then
+    log "ok matinee custom covers ($(echo "$covers" | wc -l | tr -d ' ') files)"
+  else
+    log "FAILED matinee custom covers"; fail=1
   fi
 fi
 find "$LOCAL_DIR" -mindepth 1 -maxdepth 1 -type d -mtime +"$KEEP_DAYS" -exec rm -rf {} + 2>/dev/null

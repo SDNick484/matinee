@@ -386,6 +386,7 @@ main#view {
 .chip {
   display: inline-flex;
   align-items: center;
+  gap: 4px;
   height: 22px;
   padding: 0 var(--s2);
   border-radius: var(--r-chip);
@@ -1475,7 +1476,7 @@ main#view {
   width: fit-content;
   margin-top: var(--s1);
 }
-.badge-both {
+.badge-medium {
   position: absolute;
   top: 6px;
   left: 6px;
@@ -2228,5 +2229,89 @@ main#view {
   .btn-xs {
     height: 44px;
     min-width: 44px;
+  }
+}
+
+.badge-medium {
+  color: var(--ink);
+}
+.badge-medium .ico {
+  width: 14px;
+  height: 14px;
+}
+
+/* Inline SVG icons (see ICONS in app.js): sized to the text, colored by it */
+.ico {
+  width: 1.15em;
+  height: 1.15em;
+  flex: none;
+  display: inline-block;
+  vertical-align: -0.2em;
+}
+.chip .ico {
+  width: 13px;
+  height: 13px;
+}
+.btn .ico,
+.filter-btn .ico,
+.scanner-tab-btn .ico {
+  width: 16px;
+  height: 16px;
+}
+.modal-title .ico,
+.movie-night-dialog h2 .ico {
+  color: var(--amber);
+}
+.stat-card .stat-icon {
+  display: inline-flex;
+  gap: 4px;
+  color: var(--amber);
+}
+.stat-card .stat-icon .ico {
+  width: 28px;
+  height: 28px;
+}
+.ico-pair {
+  display: inline-flex;
+  gap: 2px;
+  margin-left: 6px;
+}
+.ico-rt-fresh { color: #fa320a; }
+.ico-rt-rotten { color: #66cc33; }
+.location-icon {
+  display: inline-flex;
+  color: var(--ink-2);
+}
+.copy-location .ico,
+.watch-row-date .ico {
+  width: 14px;
+  height: 14px;
+  color: var(--ink-2);
+}
+.duplicate-banner .ico {
+  color: var(--amber);
+}
+
+/* Custom cover preview */
+.cover-preview-img {
+  display: block;
+  width: auto;
+  max-width: 100%;
+  max-height: min(55vh, 520px);
+  margin: 0 auto;
+  border-radius: var(--r-card);
+  box-shadow: var(--shadow);
+  object-fit: contain;
+}
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: var(--s2);
+}
+@media (max-width: 480px) {
+  .cover-preview-dialog .modal-actions .btn {
+    flex: 1 1 0;
+    min-height: 44px;
   }
 }

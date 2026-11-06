@@ -48,7 +48,7 @@ def test_migration_v4_to_v5(tmp_path, monkeypatch):
 
     con = sqlite3.connect(db_path)
     schema_ver = con.execute("SELECT v FROM meta WHERE k='schema'").fetchone()[0]
-    assert schema_ver == "5"
+    assert schema_ver == matinee_app.SCHEMA_VERSION  # migrates straight to current
     cols = [r[1] for r in con.execute("PRAGMA table_info(omdb_ratings)").fetchall()]
     assert "imdb_rating" in cols
     assert "rotten_tomatoes_score" in cols
