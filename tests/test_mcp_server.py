@@ -41,6 +41,14 @@ def test_mcp_get_movie_direct_sqlite(test_env):
     assert len(movie["watches"]) == 1
     assert movie["watches"][0]["notes"] == "Mind bending!"
 
+def test_mcp_get_movie_reports_custom_poster_direct_sqlite(test_env):
+    client = mcp_server.MatineeClient(db_path=str(test_env))
+    assert client.get_movie(1)["custom_poster"] is False
+    con = db()
+    con.execute("UPDATE titles SET custom_poster_file='101-custom-3f9a1c2b7e.jpg' WHERE id=1")
+    con.commit()
+    assert client.get_movie(1)["custom_poster"] is True
+
 def test_mcp_get_collection_stats_direct_sqlite(test_env):
     client = mcp_server.MatineeClient(db_path=str(test_env))
     stats = client.get_collection_stats()

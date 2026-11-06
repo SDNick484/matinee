@@ -2291,3 +2291,27 @@ main#view {
 .duplicate-banner .ico {
   color: var(--amber);
 }
+
+/* Custom cover preview */
+.cover-preview-img {
+  display: block;
+  width: auto;
+  max-width: 100%;
+  max-height: min(55vh, 520px);
+  margin: 0 auto;
+  border-radius: var(--r-card);
+  box-shadow: var(--shadow);
+  object-fit: contain;
+}
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: var(--s2);
+}
+@media (max-width: 480px) {
+  .cover-preview-dialog .modal-actions .btn {
+    flex: 1 1 0;
+    min-height: 44px;
+  }
+}

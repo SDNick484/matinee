@@ -1348,6 +1348,11 @@
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
                 Refresh from TMDB
               </button>
+              <button type="button" class="btn btn-sm btn-ghost" id="btn-change-cover">${icon("image")} Change cover</button>
+              <input type="file" id="input-cover" accept="image/jpeg,image/png,image/webp,image/*" hidden>
+              ${title.custom_poster
+                ? `<button type="button" class="btn btn-sm btn-ghost" id="btn-revert-cover">${icon("undo")} Use TMDB poster</button>`
+                : ""}
               <button class="btn btn-sm btn-danger" id="btn-delete-title" style="margin-left:auto">
                 Delete title
               </button>
@@ -1403,6 +1408,37 @@
           toast(err.message || "Failed to refresh");
         } finally {
           if (btn) btn.disabled = false;
+        }
+      });
+
+      const coverInput = document.getElementById("input-cover");
+      document.getElementById("btn-change-cover")?.addEventListener("click", () => coverInput?.click());
+      coverInput?.addEventListener("change", async () => {
+        const file = coverInput.files && coverInput.files[0];
+        coverInput.value = "";
+        if (!file) return;
+        const blob = await downscaleImage(file);
+        if (blob.size > MAX_COVER_BYTES) {
+          toast("That image is over 8 MB. Try a smaller photo.");
+          return;
+        }
+        openCoverPreviewModal(title, blob, async () => {
+          const form = new FormData();
+          form.append("poster", blob, blob.type === "image/jpeg" ? "cover.jpg" : file.name);
+          await api(`/admin/api/titles/${titleId}/poster`, { method: "POST", body: form });
+          toast("Cover updated");
+          await renderDetail(container, titleId);
+        });
+      });
+
+      document.getElementById("btn-revert-cover")?.addEventListener("click", async () => {
+        if (!confirm(`Remove your cover for "${title.title}" and use the TMDB poster again?`)) return;
+        try {
+          await api(`/admin/api/titles/${titleId}/poster`, { method: "DELETE" });
+          toast("Using the TMDB poster");
+          await renderDetail(container, titleId);
+        } catch (err) {
+          toast(err.message || "Failed to remove cover");
         }
       });
 
@@ -2653,6 +2689,80 @@
         if (view) renderDetail(view, title.id);
       } catch (err) {
         toast(err.message || "Failed to update copy");
+      }
+    });
+  }
+
+  // ================================================================= Custom covers
+  const MAX_COVER_BYTES = 8 * 1024 * 1024;
+
+  // Phone photos are 3–12 MB; scale the longest side to 1170px (TMDB's w780 poster height)
+  // and re-encode as JPEG in the browser so the server needs no image library.
+  // Falls back to the original file if the browser can't decode it (e.g. HEIC).
+  async function downscaleImage(file, maxSide = 1170, quality = 0.88) {
+    try {
+      const bmp = await createImageBitmap(file, { imageOrientation: "from-image" });
+      const scale = Math.min(1, maxSide / Math.max(bmp.width, bmp.height));
+      const w = Math.round(bmp.width * scale);
+      const h = Math.round(bmp.height * scale);
+      const canvas = document.createElement("canvas");
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext("2d");
+      ctx.fillStyle = "#16161c"; // transparent PNG areas become the card surface, not black
+      ctx.fillRect(0, 0, w, h);
+      ctx.drawImage(bmp, 0, 0, w, h);
+      if (bmp.close) bmp.close();
+      const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", quality));
+      return blob && blob.size ? blob : file;
+    } catch {
+      return file;
+    }
+  }
+
+  function openCoverPreviewModal(title, blob, onUpload) {
+    const modalRoot = document.getElementById("modal-root");
+    if (!modalRoot) return;
+    const url = URL.createObjectURL(blob);
+    const sizeKb = Math.max(1, Math.round(blob.size / 1024));
+    modalRoot.innerHTML = `
+      <div class="modal-overlay" id="modal-overlay">
+        <div class="modal-dialog cover-preview-dialog" role="dialog" aria-modal="true" aria-labelledby="cover-preview-title">
+          <div class="modal-header">
+            <div>
+              <div class="modal-title" id="cover-preview-title">${icon("image")} New cover</div>
+              <div style="font-size:var(--fs-xs);color:var(--ink-3)">${esc(title.title)} · ${sizeKb} KB</div>
+            </div>
+            <button type="button" class="btn-close" id="btn-modal-close" aria-label="Close">✕</button>
+          </div>
+          <img class="cover-preview-img" src="${url}" alt="New cover for ${esc(title.title)}">
+          <div class="modal-actions">
+            <button type="button" class="btn btn-ghost" id="btn-cover-cancel">Cancel</button>
+            <button type="button" class="btn" id="btn-cover-upload">Use this cover</button>
+          </div>
+        </div>
+      </div>
+    `;
+    const done = () => {
+      URL.revokeObjectURL(url);
+      closeModal();
+    };
+    document.getElementById("btn-modal-close")?.addEventListener("click", done);
+    document.getElementById("btn-cover-cancel")?.addEventListener("click", done);
+    document.getElementById("modal-overlay")?.addEventListener("click", (e) => {
+      if (e.target.id === "modal-overlay") done();
+    });
+    document.getElementById("btn-cover-upload")?.addEventListener("click", async (e) => {
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      btn.textContent = "Uploading…";
+      try {
+        await onUpload();
+        done();
+      } catch (err) {
+        toast(err.message || "Upload failed");
+        btn.disabled = false;
+        btn.textContent = "Use this cover";
       }
     });
   }

@@ -142,7 +142,7 @@ class MatineeClient:
                     args.append(min_rating)
 
                 sql = f"""
-                    SELECT t.id, t.title, t.year, t.runtime, t.poster_file, t.tmdb_vote,
+                    SELECT t.id, t.title, t.year, t.runtime, COALESCE(t.custom_poster_file, t.poster_file) AS poster_file, t.tmdb_vote,
                            (SELECT rating FROM user_ratings r WHERE r.title_id=t.id) AS user_rating,
                            (SELECT MAX(watched_date) FROM watches w WHERE w.title_id=t.id) AS last_watched,
                            (SELECT count(*) FROM watches w WHERE w.title_id=t.id) AS watch_count,
@@ -222,6 +222,7 @@ class MatineeClient:
                 d["last_watched"] = watches[0]["watched_date"] if watches else None
                 d["watch_count"] = len(watches)
                 d["genres"] = genres
+                d["custom_poster"] = bool(d.get("custom_poster_file"))  # same key as GET /api/titles/<id>
                 return d
             finally:
                 con.close()
@@ -403,7 +404,7 @@ class MatineeClient:
                     order_by = "RANDOM()"
 
                 sql = f"""
-                    SELECT t.id, t.title, t.year, t.runtime, t.poster_file, t.tmdb_vote,
+                    SELECT t.id, t.title, t.year, t.runtime, COALESCE(t.custom_poster_file, t.poster_file) AS poster_file, t.tmdb_vote,
                            (SELECT rating FROM user_ratings r WHERE r.title_id=t.id) AS user_rating,
                            (SELECT MAX(watched_date) FROM watches w WHERE w.title_id=t.id) AS last_watched,
                            (SELECT count(*) FROM watches w WHERE w.title_id=t.id) AS watch_count,

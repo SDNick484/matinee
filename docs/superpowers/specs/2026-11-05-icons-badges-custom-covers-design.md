@@ -89,7 +89,9 @@ Pillow is not needed. The browser downscales before upload. `app.js` draws the c
 `get_movie` passes through `custom_poster` (in REST mode it's in the detail JSON). The direct-SQLite queries in `mcp_server.py` use `COALESCE(t.custom_poster_file, t.poster_file)`. No new tool.
 
 ### Ops
-`ops/matinee-backup` already copies `$DATA/images/` recursively. Its comment changes to note that custom covers **can't** be re-fetched from TMDB, so that copy now matters. The installer preserves `/var/lib/matinee`, so nothing else changes.
+`ops/matinee-backup` copies `$DATA/images/` to `BACKUP_TARGET` only when that's set. TMDB art there can be re-fetched, but custom covers can't, so the nightly run also writes `$LOCAL_DIR/<date>/matinee-custom-covers.tar.gz` (only files matching `<tmdb_id>-custom-<hex10>.{jpg,png,webp}`) next to the gzipped DB. It's pruned on the same `KEEP_DAYS` schedule. The installer already preserves `/var/lib/matinee`.
+
+Also found while wiring the preview dialog: `.modal-actions` was used by two modals but never styled. It now lays its buttons out right-aligned with a gap.
 
 ## 5. Scenarios
 - **Steelbook cover.** Given *300* (2007) has 4K UHD and Digital 4K copies, an editor taps Change cover on the phone and takes a photo of the Steelbook. The upload is about 300 KB. The title page and grid show the photo, `GET /api/titles/<id>` returns `custom_poster: true`, and "Refresh from TMDB" leaves the photo in place.
