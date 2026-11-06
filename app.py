@@ -87,6 +87,7 @@ CREATE TABLE IF NOT EXISTS titles (
   poster_path TEXT, backdrop_path TEXT,
   poster_file TEXT, backdrop_file TEXT,
   custom_poster_file TEXT,
+  certification_override TEXT,
   fetched_at TEXT NOT NULL,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
@@ -157,7 +158,9 @@ CREATE TABLE IF NOT EXISTS omdb_ratings (
 );
 CREATE INDEX IF NOT EXISTS omdb_ratings_fetched ON omdb_ratings(fetched_at);
 """
-SCHEMA_VERSION = "6"
+SCHEMA_VERSION = "7"
+# Allowed editor overrides for a title's US certification (Task 4 swaps in recommend.CERT_VALUES).
+CERT_OVERRIDE_VALUES = ("G", "PG", "PG-13", "R", "NC-17", "NR")
 
 # Checked in the app (not the schema) so a new format or service needs no table rebuild.
 FORMATS = {"physical": ["4K UHD", "Blu-ray", "3D Blu-ray", "DVD", "VHS"],
@@ -312,6 +315,10 @@ def migrate(con):
     title_cols = [r[1] for r in con.execute("PRAGMA table_info(titles)").fetchall()]
     if "custom_poster_file" not in title_cols:
         con.execute("ALTER TABLE titles ADD COLUMN custom_poster_file TEXT")
+
+    # v7: editor override for the US certification (survives TMDB refresh; not in TITLE_COLS)
+    if "certification_override" not in title_cols:
+        con.execute("ALTER TABLE titles ADD COLUMN certification_override TEXT")
 
 
 def init_db():
@@ -975,6 +982,9 @@ def title_detail(title_id, private):
     d["added_on"] = min((c["created_at"] for c in d["copies"]), default=None)
     d["added_on"] = d["added_on"][:10] if d["added_on"] else None
     p780 = image_name(t["tmdb_id"], "p780")
+    d["certification_tmdb"] = t["certification"]
+    d["certification_override"] = t["certification_override"]
+    d["certification"] = t["certification_override"] or t["certification"]
     d["custom_poster"] = bool(t["custom_poster_file"])
     d["poster_url"] = image_url(poster_file_of(t), t["fetched_at"])
     if d["custom_poster"]:
@@ -1674,6 +1684,26 @@ def set_title_rating(title_id):
         )
     con.commit()
     return jsonify(ok=True, title_id=title_id, user_rating=rating)
+
+
+@app.put("/admin/api/titles/<int:title_id>/certification")
+@editor_required
+def set_title_certification(title_id):
+    con = db()
+    row = con.execute("SELECT certification FROM titles WHERE id=?", (title_id,)).fetchone()
+    if not row:
+        abort(make_err(404, "No such title"))
+    data = request.get_json(silent=True) or {}
+    value = data.get("certification")
+    if value is not None:
+        value = str(value).strip().upper() or None
+    if value is not None and value not in CERT_OVERRIDE_VALUES:
+        abort(make_err(400, "certification must be one of " + ", ".join(CERT_OVERRIDE_VALUES)))
+    con.execute("UPDATE titles SET certification_override=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                (value, title_id))
+    con.commit()
+    return jsonify(ok=True, certification=value or row["certification"],
+                   certification_tmdb=row["certification"], certification_override=value)
 
 
 @app.post("/admin/api/titles/<int:title_id>/watches")

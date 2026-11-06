@@ -901,3 +901,73 @@ def test_static_app_js_no_undefined_escapeHtml():
 
 
 
+
+
+# ------------------------------------------------------------------- certification override (v7)
+def test_migration_v7_idempotent(tmp_path, monkeypatch):
+    import sqlite3
+    con = sqlite3.connect(tmp_path / "v6.db")
+    con.row_factory = sqlite3.Row
+    con.executescript(matinee.SCHEMA)
+    con.executescript("""
+      DROP TABLE titles;
+      CREATE TABLE titles (id INTEGER PRIMARY KEY, tmdb_id INTEGER NOT NULL UNIQUE, title TEXT NOT NULL,
+        sort_title TEXT NOT NULL, search_text TEXT NOT NULL, certification TEXT, custom_poster_file TEXT,
+        fetched_at TEXT NOT NULL);
+      INSERT INTO titles (tmdb_id, title, sort_title, search_text, certification, fetched_at)
+        VALUES (129, 'Spirited Away', 'spirited away', 'spirited away', 'PG', '2026-11-01');
+    """)
+    matinee.migrate(con)
+    matinee.migrate(con)  # second run is a no-op
+    cols = [r[1] for r in con.execute("PRAGMA table_info(titles)")]
+    assert cols.count("certification_override") == 1
+    row = con.execute("SELECT certification, certification_override FROM titles").fetchone()
+    assert (row[0], row[1]) == ("PG", None)
+    con.close()
+    # fresh DB: column present once, schema stamped 7
+    monkeypatch.setattr(matinee, "DB_PATH", tmp_path / "fresh.db")
+    matinee.init_db()
+    con = matinee.connect()
+    cols = [r[1] for r in con.execute("PRAGMA table_info(titles)")]
+    assert cols.count("certification_override") == 1
+    assert con.execute("SELECT v FROM meta WHERE k='schema'").fetchone()[0] == "7"
+    con.close()
+
+
+def test_certification_override_roundtrip():
+    t = add(848326)  # Kantara: no US certification in TMDB
+    url = f"/admin/api/titles/{t['id']}/certification"
+    r = c.put(url, json={"certification": " pg-13 "})
+    assert r.status_code == 200
+    body = r.get_json()
+    assert body["ok"] is True
+    assert (body["certification"], body["certification_tmdb"], body["certification_override"]) == ("PG-13", None, "PG-13")
+    det = c.get(f"/api/titles/{t['id']}").get_json()
+    assert (det["certification"], det["certification_tmdb"], det["certification_override"]) == ("PG-13", None, "PG-13")
+    r = c.put(url, json={"certification": None})
+    assert r.status_code == 200
+    body = r.get_json()
+    assert body["certification"] is None and body["certification_override"] is None
+    det = c.get(f"/api/titles/{t['id']}").get_json()
+    assert det["certification"] is None and det["certification_override"] is None
+
+
+def test_certification_override_survives_refresh():
+    t = add(129)  # Spirited Away, TMDB "PG"
+    assert c.put(f"/admin/api/titles/{t['id']}/certification", json={"certification": "G"}).status_code == 200
+    r = c.post(f"/admin/api/titles/{t['id']}/refresh")
+    assert r.status_code == 200
+    d = r.get_json()
+    assert (d["certification"], d["certification_tmdb"], d["certification_override"]) == ("G", "PG", "G")
+
+
+def test_certification_override_validation(monkeypatch):
+    t = add(129)
+    url = f"/admin/api/titles/{t['id']}/certification"
+    r = c.put(url, json={"certification": "PG13"})
+    assert r.status_code == 400
+    assert r.get_json()["error"] == "certification must be one of G, PG, PG-13, R, NC-17, NR"
+    assert c.put("/admin/api/titles/999999/certification", json={"certification": "G"}).status_code == 404
+    monkeypatch.setattr(matinee, "LAN_EDIT", False)
+    # the app's editor_required answers 401 (not 403) with no identity
+    assert c.put(url, json={"certification": "G"}).status_code == 401
