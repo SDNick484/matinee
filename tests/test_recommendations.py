@@ -138,3 +138,16 @@ def test_never_watched_excludes_dateless_watch(client):
     ids = [r["id"] for r in res.get_json()["results"]]
     assert 5 not in ids
 
+
+
+def test_api_bad_max_cert_400(client):
+    r = client.get("/api/recommendations?max_cert=PG13")
+    assert r.status_code == 400
+    assert r.get_json() == {"error": "max_cert must be one of G, PG, PG-13, R, NC-17"}
+
+
+def test_api_results_have_poster_and_cert(client):
+    from conftest import seed_title
+    seed_title(db(), 862)
+    res = client.get("/api/recommendations?mode=genre_mood").get_json()["results"][0]
+    assert "poster_url" in res and res["certification"] == "G"

@@ -1,0 +1,60 @@
+{
+ "adult": false,
+ "id": 863,
+ "imdb_id": "tt0120363",
+ "title": "Toy Story 2",
+ "original_title": "Toy Story 2",
+ "original_language": "en",
+ "release_date": "1999-10-30",
+ "runtime": 92,
+ "status": "Released",
+ "overview": "Toy Story 2 (1999).",
+ "tagline": "",
+ "vote_average": 7.6,
+ "vote_count": 10000,
+ "poster_path": "/poster863.jpg",
+ "backdrop_path": "/backdrop863.jpg",
+ "belongs_to_collection": {
+  "id": 10194,
+  "name": "Toy Story Collection",
+  "poster_path": null,
+  "backdrop_path": null
+ },
+ "genres": [
+  {
+   "id": 16,
+   "name": "Animation"
+  },
+  {
+   "id": 35,
+   "name": "Comedy"
+  },
+  {
+   "id": 10751,
+   "name": "Family"
+  }
+ ],
+ "release_dates": {
+  "results": [
+   {
+    "iso_3166_1": "US",
+    "release_dates": [
+     {
+      "certification": "G",
+      "iso_639_1": "",
+      "note": "",
+      "release_date": "2000-01-01T00:00:00.000Z",
+      "type": 3
+     },
+     {
+      "certification": "",
+      "iso_639_1": "",
+      "note": "",
+      "release_date": "2001-01-01T00:00:00.000Z",
+      "type": 4
+     }
+    ]
+   }
+  ]
+ }
+}
