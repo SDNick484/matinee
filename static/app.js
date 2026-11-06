@@ -275,6 +275,12 @@
     document.getElementById("btn-header-movie-night")?.addEventListener("click", () => openMovieNightModal());
     document.getElementById("btn-header-locations")?.addEventListener("click", () => openLocationsManagerModal());
 
+    // Header admin bar is a swipeable row on phones; mark and reveal the current page's button.
+    const activeId = { "/stats": "btn-header-stats", "/add": "btn-header-add" }[state.route?.path];
+    const activeBtn = activeId ? document.getElementById(activeId) : null;
+    if (activeBtn) activeBtn.setAttribute("aria-current", "page");
+    bindScrollRow(nav, activeBtn);
+
     const footerLinks = document.getElementById("footer-links");
     if (footerLinks) {
       if (isAdmin) {
@@ -293,6 +299,27 @@
         `;
       }
     }
+  }
+
+  // Horizontal scroll row: toggles .has-more / .has-less so CSS can fade the
+  // edge that hides more buttons. Binds listeners once per element.
+  function bindScrollRow(el, activeEl) {
+    if (!el) return;
+    const update = () => {
+      const max = el.scrollWidth - el.clientWidth;
+      el.classList.toggle("has-more", max > 4 && el.scrollLeft < max - 4);
+      el.classList.toggle("has-less", el.scrollLeft > 4);
+    };
+    if (!el.dataset.scrollRow) {
+      el.dataset.scrollRow = "1";
+      el.addEventListener("scroll", update, { passive: true });
+      window.addEventListener("resize", update);
+      if (document.fonts && document.fonts.ready) document.fonts.ready.then(update);
+    }
+    if (activeEl && el.scrollWidth > el.clientWidth) {
+      activeEl.scrollIntoView({ inline: "center", block: "nearest" });
+    }
+    update();
   }
 
   function navigate(hash) {
@@ -2205,7 +2232,7 @@
 
             <div class="form-group" id="location-group" style="${initialKind === "physical" ? "display:flex;flex-direction:column;gap:var(--s1)" : "display:none"}">
               <label class="form-label">Storage Location</label>
-              <select id="select-copy-location" class="form-select" style="width:100%;padding:var(--s2);background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--ink)">
+              <select id="select-copy-location" class="form-select">
                 <option value="">(Unassigned / No shelf)</option>
                 ${locationsList.map((l) => `<option value="${l.id}">${esc(l.path)}</option>`).join("")}
               </select>
@@ -2472,7 +2499,7 @@
 
             <div class="form-group" id="edit-location-group" style="${copy.kind === "physical" ? "display:flex;flex-direction:column;gap:var(--s1)" : "display:none"}">
               <label class="form-label">Storage Location</label>
-              <select id="edit-select-copy-location" class="form-select" style="width:100%;padding:var(--s2);background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--ink)">
+              <select id="edit-select-copy-location" class="form-select">
                 <option value="">(Unassigned / No shelf)</option>
                 ${locationsList.map((l) => `<option value="${l.id}" ${copy.location_id === l.id ? "selected" : ""}>${esc(l.path)}</option>`).join("")}
               </select>
@@ -3034,21 +3061,21 @@
             <!-- Add New Location Form -->
             <form id="add-location-form" style="display:flex;flex-direction:column;gap:var(--s3);padding:var(--s3);background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--radius-sm)">
               <div style="font-weight:600;font-size:var(--fs-sm)">Add New Shelf / Location</div>
-              <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--s2)">
+              <div class="loc-form-grid">
                 <div class="form-group">
                   <label class="form-label" style="font-size:var(--fs-xs)">Name</label>
-                  <input type="text" id="loc-add-name" class="form-input" placeholder="e.g. Media Cabinet, Shelf 2" required style="padding:var(--s2);font-size:var(--fs-sm)">
+                  <input type="text" id="loc-add-name" class="form-input" placeholder="e.g. Media Cabinet, Shelf 2" required autocapitalize="words" enterkeyhint="done" autocomplete="off" autocorrect="off" spellcheck="false">
                 </div>
                 <div class="form-group">
                   <label class="form-label" style="font-size:var(--fs-xs)">Parent Location (Optional)</label>
-                  <select id="loc-add-parent" class="form-select" style="padding:var(--s2);font-size:var(--fs-sm)">
+                  <select id="loc-add-parent" class="form-select">
                     <option value="">(None - Top Level)</option>
                     ${locations.map(l => `<option value="${l.id}">${esc(l.path)}</option>`).join("")}
                   </select>
                 </div>
               </div>
-              <div style="display:flex;justify-content:flex-end">
-                <button type="submit" class="btn btn-sm" id="btn-loc-submit">＋ Add Location</button>
+              <div class="loc-form-submit">
+                <button type="submit" class="btn" id="btn-loc-submit">＋ Add Location</button>
               </div>
             </form>
 
@@ -3067,12 +3094,12 @@
                       <div class="location-row-main" style="padding-left:calc(var(--s1) + ${loc.depth * 16}px)">
                         <span>${loc.depth === 0 ? "🏠" : "📁"}</span>
                         <span class="location-path">${esc(loc.name)}</span>
-                        ${loc.depth > 0 ? `<span style="font-size:var(--fs-xs);color:var(--ink-3)">(${esc(loc.path)})</span>` : ""}
+                        ${loc.depth > 0 ? `<span class="location-fullpath">(${esc(loc.path)})</span>` : ""}
                         <span class="location-count-pill">${loc.copy_count} ${loc.copy_count === 1 ? "copy" : "copies"}</span>
                       </div>
                       <div class="location-actions">
-                        <button type="button" class="btn btn-xs btn-ghost btn-loc-edit" data-id="${loc.id}" data-name="${esc(loc.name)}" data-parent="${loc.parent_id || ""}" title="Rename">✏️ Rename</button>
-                        <button type="button" class="btn btn-xs btn-ghost btn-loc-delete" data-id="${loc.id}" data-name="${esc(loc.name)}" data-copies="${loc.copy_count}" title="Delete" style="color:var(--danger)">🗑️</button>
+                        <button type="button" class="btn btn-xs btn-ghost btn-loc-edit" data-id="${loc.id}" data-name="${esc(loc.name)}" data-parent="${loc.parent_id || ""}" title="Rename" aria-label="Rename ${esc(loc.name)}">✏️ Rename</button>
+                        <button type="button" class="btn btn-xs btn-ghost btn-loc-delete" data-id="${loc.id}" data-name="${esc(loc.name)}" data-copies="${loc.copy_count}" title="Delete" aria-label="Delete ${esc(loc.name)}" style="color:var(--danger)">🗑️</button>
                       </div>
                     </div>
                   `
