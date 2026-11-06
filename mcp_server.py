@@ -413,7 +413,17 @@ class MatineeClient:
             params["random"] = "1"
 
         qs = urllib.parse.urlencode(params)
-        return self._api_request("GET", f"{self._read_prefix}/recommendations?{qs}")
+        out = self._api_request("GET", f"{self._read_prefix}/recommendations?{qs}")
+        if max_cert and isinstance(out, dict) and isinstance(out.get("results"), list):
+            # Older Matinee servers ignore max_cert; never trust them with a kids-safety filter.
+            # Written out locally: this REST path must not import recommend.py.
+            order = ("G", "PG", "PG-13", "R", "NC-17")
+            allowed = order[:order.index(max_cert) + 1] if max_cert in order else ()
+            kept = [r for r in out["results"] if r.get("certification") in allowed]
+            if len(kept) != len(out["results"]):
+                out = {**out, "results": kept, "count": len(kept),
+                       "hint": "Server did not apply max_cert; update Matinee."}
+        return out
 
     def get_collection_stats(self) -> Dict[str, Any]:
         """Fetch overall collection metrics, formats, ratings, and watch statistics."""
@@ -648,13 +658,13 @@ if mcp:
             "1. Use `get_recommendations` or `search_collection` to check available movies.",
         ]
         if mood:
-            instructions.append(f"2. Prioritize movies matching the mood or genre '{mood}'.")
+            instructions.append(f"{len(instructions)}. Prioritize movies matching the mood or genre '{mood}'.")
         if max_runtime > 0:
-            instructions.append(f"3. Ensure suggested movies do not exceed {max_runtime} minutes.")
-        instructions.append("4. Present 2-3 distinct choices with format (e.g. 4K UHD vs Blu-ray) and reason why they fit.")
+            instructions.append(f"{len(instructions)}. Ensure suggested movies do not exceed {max_runtime} minutes.")
+        instructions.append(f"{len(instructions)}. Present 2-3 distinct choices with format (e.g. 4K UHD vs Blu-ray) and reason why they fit.")
         if kids:
             instructions.append(
-                '5. This is a kids\' night: call `get_recommendations` with max_cert="PG-13" and tell the '
+                f'{len(instructions)}. This is a kids\' night: call `get_recommendations` with max_cert="PG-13" and tell the '
                 "family that unrated films were left out."
             )
         return "\n".join(instructions)

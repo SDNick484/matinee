@@ -121,6 +121,20 @@ _EMPTY_HINTS = {
 }
 
 
+_FILTERED_HINTS = {
+    "next_in_franchise": "Nothing in progress passes these filters. Try removing a filter.",
+    "start_franchise": "No unstarted series passes these filters. Try removing a filter.",
+}
+
+
+def _franchise_candidates(con, mode) -> bool:
+    """True when the mode had something to offer before the user filters (so an empty result
+    means the filters emptied it): any started collection, or any unstarted one with 2+ owned."""
+    if mode == "next_in_franchise":
+        return con.execute(_STARTED_CTE + " SELECT 1 FROM started LIMIT 1").fetchone() is not None
+    return con.execute(_FRANCHISE_CTE[mode] + " SELECT 1 FROM ranked WHERE rn = 1 AND owned_n >= 2 LIMIT 1").fetchone() is not None
+
+
 def _next_reason(con, r) -> str:
     """'Next after <latest earlier watched>' or, failing that, 'Before <earliest later watched> (watched)'.
     Neighbours are found by the same (release_date, sort_title) order that chose the pick."""
@@ -135,6 +149,8 @@ def _next_reason(con, r) -> str:
     if prev:
         return f"{r['collection_name']} · Next after {prev['title']}"
     nxt = con.execute(base.format(op=">", dir="ASC"), args).fetchone()
+    # The final fallback is unreachable from next_in_franchise (a started collection always has a
+    # watched title, so one of the two neighbour queries finds it); kept as a safe default.
     return f"{r['collection_name']} · Before {nxt['title']} (watched)" if nxt else f"{r['collection_name']} · Next in the series"
 
 
@@ -177,7 +193,8 @@ def recommend(con, p: dict, today: "dt.date | None" = None) -> dict:
     mode = p["mode"]
     genre = p.get("genre")
 
-    where = ["EXISTS (SELECT 1 FROM copies c WHERE c.title_id=t.id)"]
+    owned = "EXISTS (SELECT 1 FROM copies c WHERE c.title_id=t.id)"  # plain modes only; the franchise CTEs apply it themselves
+    where = []
     args = []
 
     franchise = mode in FRANCHISE_MODES
@@ -209,8 +226,9 @@ def recommend(con, p: dict, today: "dt.date | None" = None) -> dict:
     if franchise:
         # Filters go in the OUTER query, after rn = 1: a pick that fails a filter yields nothing
         # for its collection instead of falling through to a later entry.
-        outer = ["t.rn = 1"] + (["t.owned_n >= 2"] if mode == "start_franchise" else []) + where[1:]
-        where = outer
+        where = ["t.rn = 1"] + (["t.owned_n >= 2"] if mode == "start_franchise" else []) + where
+    else:
+        where = [owned] + where
     rows = con.execute(f"""{_FRANCHISE_CTE[mode] if franchise else ""}
         SELECT t.id, t.title, t.year, t.runtime, COALESCE(t.custom_poster_file, t.poster_file) AS poster_file,
                t.fetched_at, t.tmdb_vote,
@@ -287,6 +305,8 @@ def recommend(con, p: dict, today: "dt.date | None" = None) -> dict:
     out = {"mode": mode, "count": len(results), "results": results}
     if not results:
         hint = _EMPTY_HINTS.get(mode, "Nothing matched these filters. Try removing a filter or mode=genre_mood.")
+        if franchise and _franchise_candidates(con, mode):
+            hint = _FILTERED_HINTS[mode]
         if p.get("max_cert"):
             hint += " Unrated films are hidden while max_cert is set."
         out["hint"] = hint

@@ -241,6 +241,32 @@ def test_rest_recommendations_forwards_params(monkeypatch):
     assert qs["random"] == ["1"]
 
 
+def _rest_client(monkeypatch, payload):
+    client = mcp_server.MatineeClient(api_url="http://fake-host", db_path="")
+    monkeypatch.setattr(client, "_api_request", lambda m, p, d=None: payload)
+    return client
+
+
+def test_rest_enforces_max_cert_against_old_server(monkeypatch):
+    # An older Matinee server ignores max_cert and returns uncapped rows.
+    payload = {"mode": "genre_mood", "count": 3, "results": [
+        {"title": "Paddington 2", "certification": "PG"},
+        {"title": "Deadpool", "certification": "R"},
+        {"title": "Kantara", "certification": None},
+    ]}
+    out = _rest_client(monkeypatch, payload).get_recommendations(max_cert="PG-13")
+    assert [r["title"] for r in out["results"]] == ["Paddington 2"]
+    assert out["count"] == 1
+    assert out["hint"] == "Server did not apply max_cert; update Matinee."
+
+
+def test_rest_max_cert_passes_capped_response_unchanged(monkeypatch):
+    payload = {"mode": "genre_mood", "count": 1, "results": [
+        {"title": "Paddington 2", "certification": "PG"}]}
+    out = _rest_client(monkeypatch, dict(payload)).get_recommendations(max_cert="PG-13")
+    assert out == payload
+
+
 def _tool(name):
     tools = asyncio.run(mcp_server.mcp.list_tools())
     return next(t for t in tools if t.name == name)
@@ -317,3 +343,8 @@ def test_readonly_kwargs_guarded_on_tool_signature():
     assert mcp_server._readonly_kwargs(None) == {}
     assert mcp_server._readonly_kwargs(NoAnnotations) == {}
     assert "annotations" in mcp_server._readonly_kwargs(WithAnnotations)
+
+
+def test_what_to_watch_steps_are_contiguous():
+    text = mcp_server.prompt_what_to_watch(mood="cozy", max_runtime=0, kids=True)
+    assert [l.split(".")[0] for l in text.splitlines()[1:]] == ["1", "2", "3", "4"]
