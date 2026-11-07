@@ -599,8 +599,11 @@ def test_run_tool_missing_required_args_is_clean(client, monkeypatch):
     import ask
     seeded(client)
     calls = []
+    warnings = []
     monkeypatch.setattr(core.app.logger, "exception", lambda *a, **k: calls.append(a))
+    monkeypatch.setattr(core.app.logger, "warning", lambda *a, **k: warnings.append((a, k)))
     lc = ask.LocalClient()
     for name in ("get_movie", "where_is"):
         assert ask.run_tool(lc, name, {}) == (None, f"{name}: missing or invalid arguments")
     assert calls == []
+    assert len(warnings) == 2 and all(k.get("exc_info") for _, k in warnings)

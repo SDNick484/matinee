@@ -236,7 +236,9 @@ def run_tool(client, name, args):
     except AskUnavailable:
         raise
     except TypeError:
-        # a missing required argument (the model sent {}); not an internal fault
+        # usually a missing required argument (the model sent {}); log at warning
+        # with the traceback so a TypeError from inside a tool is still visible
+        app.logger.warning("ask tool %s: bad arguments %r", name, sorted(args), exc_info=True)
         return None, f"{name}: missing or invalid arguments"
     except (RuntimeError, recommend.ParamError) as e:
         return None, str(e)
