@@ -14,7 +14,8 @@ Editors: /admin            same UI with editing; put this path behind Cloudflare
 Health:  /healthz          {ok, titles, copies}
 
 Environment (see /etc/conf.d/matinee and .env.example):
-  PORT, DATA_DIR, CF_TEAM_DOMAIN, CF_AUD, ADMIN_EMAILS, LAN_EDIT, PUBLIC_VIEW, TMDB_READ_TOKEN, MATINEE_API_KEY
+  PORT, DATA_DIR, CF_TEAM_DOMAIN, CF_AUD, ADMIN_EMAILS, LAN_EDIT, PUBLIC_VIEW, TMDB_READ_TOKEN, MATINEE_API_KEY,
+  ANTHROPIC_SEARCH_KEY, ANTHROPIC_SEARCH_MODEL, ASK_DAILY_LIMIT
 """
 import datetime as dt, hashlib, hmac, json, os, re, sqlite3, sys, time, unicodedata
 import urllib.error, urllib.parse, urllib.request
@@ -1361,7 +1362,8 @@ def me_public():
 @app.get("/admin/api/me")
 @editor_required
 def me():
-    return jsonify(editor=True, email=g.editor, tmdb=bool(TMDB_READ_TOKEN))
+    import ask
+    return jsonify(editor=True, email=g.editor, tmdb=bool(TMDB_READ_TOKEN), ask=ask.enabled())
 
 
 # ============================================================================ writes
@@ -1953,6 +1955,8 @@ def delete_title(title_id):
 
 
 init_db()
+
+import ask  # noqa: E402,F401
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8769)), debug=False)
