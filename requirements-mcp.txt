@@ -1,0 +1,4 @@
+# Pins for the matinee-mcp service venv (/opt/matinee-mcp/venv); the Flask app does not need these.
+mcp>=2.3,<3
+uvicorn>=0.31
+pyjwt[crypto]>=2.10

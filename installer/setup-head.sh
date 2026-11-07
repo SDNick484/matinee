@@ -12,16 +12,20 @@ DATA_DIR=/var/lib/matinee
 CONF=/etc/conf.d/matinee
 OPS_CONF="${OPS_CONF:-/etc/conf.d/ops}"
 SVC_USER=matinee
+MCP_USER=matinee-mcp
+MCP_VENV=/opt/matinee-mcp/venv
 PORT="${MATINEE_PORT:-8769}"
 
 if [ "$(id -u)" != 0 ]; then echo "Run as root"; exit 1; fi
 command -v apk >/dev/null || { echo "This installer is for Alpine (apk)."; exit 1; }
 
 if [ "${1:-}" = "--uninstall" ]; then
+  rc-service matinee-mcp stop 2>/dev/null || true
+  rc-update del matinee-mcp default 2>/dev/null || true
   rc-service matinee stop 2>/dev/null || true
   rc-update del matinee default 2>/dev/null || true
-  rm -f /etc/init.d/matinee /etc/periodic/daily/matinee-backup /etc/periodic/daily/matinee-refresh
-  rm -rf "$APP_DIR"
+  rm -f /etc/init.d/matinee /etc/init.d/matinee-mcp /etc/periodic/daily/matinee-backup /etc/periodic/daily/matinee-refresh
+  rm -rf "$APP_DIR" /opt/matinee-mcp
   echo "Removed app, service and backup job. Data kept in $DATA_DIR, config in $CONF, backups in /var/backups/matinee."
   exit 0
 fi
@@ -32,7 +36,10 @@ fi
 echo "==> Installing packages"
 apk add --no-cache python3 py3-flask py3-gunicorn py3-jwt py3-cryptography sqlite >/dev/null
 
+[ -x /etc/init.d/matinee-mcp ] && rc-service matinee-mcp stop >/dev/null 2>&1 || true
 [ -x /etc/init.d/matinee ] && rc-service matinee stop >/dev/null 2>&1 || true
+IP=$(ip -4 -o addr show scope global | awk '{print $4}' | cut -d/ -f1 | head -n1)
+IP=${IP:-127.0.0.1}
 if netstat -ltn 2>/dev/null | awk '{print $4}' | grep -q ":$PORT\$"; then
   echo "Port $PORT is already in use by something else. Re-run with MATINEE_PORT=<free port>."; exit 1
 fi
@@ -45,6 +52,9 @@ if ! id "$SVC_USER" >/dev/null 2>&1; then
 elif ! id -nG "$SVC_USER" | tr ' ' '\n' | grep -qx "$SVC_USER"; then
   addgroup "$SVC_USER" "$SVC_USER"   # user from an older install: add it to its group
 fi
+# The MCP HTTP service gets its own user: no database access, no home.
+grep -q "^$MCP_USER:" /etc/group || addgroup -S "$MCP_USER"
+id "$MCP_USER" >/dev/null 2>&1 || adduser -S -D -H -h /nonexistent -s /sbin/nologin -G "$MCP_USER" "$MCP_USER"
 mkdir -p "$APP_DIR" "$DATA_DIR/images" /var/backups/matinee
 
 echo "==> Unpacking app"
@@ -80,30 +90,49 @@ add_setting "$CONF" PUBLIC_VIEW 1 "1 = anyone can browse the collection at /; 0 
 add_setting "$CONF" TMDB_READ_TOKEN "" "TMDB API Read Access Token (themoviedb.org -> Settings -> API); adding movies needs it"
 add_setting "$CONF" OMDB_API_KEY "" "Optional OMDb API key (omdbapi.com/apikey.aspx) for IMDb, Rotten Tomatoes & Metacritic scores"
 add_setting "$CONF" MATINEE_API_KEY "" "Optional API key for headless automation and MCP server (Authorization: Bearer <key>)"
-chmod 640 "$CONF"; chown root:"$SVC_USER" "$CONF"
+# Remote MCP (matinee-mcp). MCP_HTTP_BIND must be this host's LAN address because cloudflared runs in Docker.
+add_setting "$CONF" MATINEE_MCP_READONLY 1 "1 = the Claude app can only read; 0 = it may also rate, log watches and add titles"
+add_setting "$CONF" MCP_HTTP_BIND "$IP" "Address matinee-mcp listens on (cloudflared reaches it here)"
+add_setting "$CONF" MCP_HTTP_PORT 8719 "Port matinee-mcp listens on"
+add_setting "$CONF" MCP_HTTP_PATH /matinee/mcp "URL path of the MCP endpoint (the tunnel route is ^/matinee/)"
+add_setting "$CONF" MCP_PUBLIC_HOSTS "" "Public hostname(s) of the tunnel, e.g. mcp.nickandrade.com (required)"
+add_setting "$CONF" CF_ACCESS_TEAM_DOMAIN "" "Access team domain for matinee-mcp, e.g. yourteam.cloudflareaccess.com (empty = CF_TEAM_DOMAIN)"
+add_setting "$CONF" CF_ACCESS_AUD "" "AUD tag of the Access application that fronts mcp.<your-domain> (required)"
+add_setting "$CONF" MCP_ALLOWED_EMAILS "" "Only these Access emails may use the MCP tools (comma separated); empty = anyone Access lets in"
+# Holds API keys, so root only: OpenRC and the cron jobs run as root; services get what they need from the environment.
+chmod 600 "$CONF"; chown root:root "$CONF"
 
-# health checks: add Matinee to HEALTH_CHECKS if ops config exists
-HC_LINE="Matinee|http://127.0.0.1:$PORT/healthz|matinee"
-if [ -f "$OPS_CONF" ] && ! grep -q '^HEALTH_CHECKS=' "$OPS_CONF"; then
-  cat >> "$OPS_CONF" <<EOF
+# health checks: add Matinee and Matinee MCP to HEALTH_CHECKS if the ops config exists
+add_health_check() {  # add_health_check "Name|url|service" service  (sets HC_ADDED / HC_MANUAL)
+  [ -f "$OPS_CONF" ] || return 0
+  # already there; a longer service name that merely starts with this one (matinee-mcp) doesn't count
+  grep -Eq "\|$2([^-A-Za-z0-9_]|\$)" "$OPS_CONF" && return 0
+  if ! grep -q '^HEALTH_CHECKS=' "$OPS_CONF"; then
+    cat >> "$OPS_CONF" <<EOF
 
 # Apps checked every 15 min (name|url|service); added by setup-matinee.sh
-HEALTH_CHECKS="$HC_LINE"
+HEALTH_CHECKS="$1"
 EOF
-  HC=added
-elif [ -f "$OPS_CONF" ] && ! grep -q '|matinee' "$OPS_CONF"; then
+    HC_ADDED="${HC_ADDED:-} $2"
+    return 0
+  fi
   # append inside the existing (usually multi-line) HEALTH_CHECKS="..." value, before its closing quote
-  awk -v add="$HC_LINE" '
+  awk -v add="$1" '
     !done && /^HEALTH_CHECKS="/ { inb = 1; if ($0 == "HEALTH_CHECKS=\"") { print; next } }
     inb && /"[ \t]*$/ { sub(/"[ \t]*$/, ""); print; print add "\""; inb = 0; done = 1; next }
     { print }' "$OPS_CONF" > "$OPS_CONF.new"
-  if grep -q '|matinee' "$OPS_CONF.new" && sh -n "$OPS_CONF.new" 2>/dev/null; then
-    cat "$OPS_CONF.new" > "$OPS_CONF"; HC=added
+  if grep -Eq "\|$2([^-A-Za-z0-9_]|\$)" "$OPS_CONF.new" && sh -n "$OPS_CONF.new" 2>/dev/null; then
+    cat "$OPS_CONF.new" > "$OPS_CONF"; HC_ADDED="${HC_ADDED:-} $2"
   else
-    HC=manual
+    HC_MANUAL="${HC_MANUAL:-}
+      $1"
   fi
   rm -f "$OPS_CONF.new"
-fi
+}
+HC_LINE="Matinee|http://127.0.0.1:$PORT/healthz|matinee"
+HC_MCP_LINE="Matinee MCP|http://$IP:8719/healthz|matinee-mcp"
+add_health_check "$HC_LINE" matinee
+add_health_check "$HC_MCP_LINE" matinee-mcp
 
 # ---------------------------------------------------------------- service
 cat > /etc/init.d/matinee <<'EOF'
@@ -126,6 +155,36 @@ start_pre() { checkpath -f -o matinee /var/log/matinee.log; }
 EOF
 chmod +x /etc/init.d/matinee
 
+cat > /etc/init.d/matinee-mcp <<'EOF'
+#!/sbin/openrc-run
+name="matinee-mcp"
+description="Matinee MCP server (Streamable HTTP, behind Cloudflare Access)"
+# OpenRC runs this as root, so it can read the root-only config; the service user never reads it.
+[ -r /etc/conf.d/matinee ] && . /etc/conf.d/matinee
+: ${PORT:=8769}
+: ${MATINEE_URL:=http://127.0.0.1:${PORT}}
+# Only what this service needs: TMDB_READ_TOKEN and OMDB_API_KEY deliberately stay out of its environment.
+export MATINEE_URL MATINEE_API_KEY MATINEE_MCP_READONLY MCP_HTTP_BIND MCP_HTTP_PORT MCP_HTTP_PATH MCP_PUBLIC_HOSTS CF_ACCESS_TEAM_DOMAIN CF_ACCESS_AUD MCP_ALLOWED_EMAILS CF_TEAM_DOMAIN
+supervisor="supervise-daemon"
+respawn_delay=5
+respawn_max=10
+respawn_period=600
+command="/opt/matinee-mcp/venv/bin/python"
+command_args="/opt/matinee/mcp_http.py"
+command_user="matinee-mcp:matinee-mcp"
+directory="/opt/matinee"
+output_log="/var/log/matinee-mcp.log"
+error_log="/var/log/matinee-mcp.log"
+depend() { need net matinee; after firewall; }
+start_pre() { checkpath -f -m 0640 -o matinee-mcp:matinee-mcp /var/log/matinee-mcp.log; }
+EOF
+chmod +x /etc/init.d/matinee-mcp
+
+# The MCP stack is not packaged for Alpine (no py3-mcp), so this one service gets a pip venv.
+# A pip or network failure only skips matinee-mcp; the main app still installs and starts.
+echo "==> Installing MCP HTTP service (pip venv)"
+apk add --no-cache py3-pip >/dev/null 2>&1 && python3 -m venv "$MCP_VENV" && "$MCP_VENV/bin/pip" install --no-cache-dir -q -r "$APP_DIR/requirements-mcp.txt" && MCP_OK=1 || { MCP_OK=0; echo "    WARNING: could not set up the MCP venv (needs PyPI access); matinee-mcp will not start. Re-run this installer to retry."; }
+
 # ---------------------------------------------------------------- backups & maintenance
 echo "==> Installing nightly backup and maintenance jobs"
 mkdir -p /etc/periodic/daily
@@ -146,16 +205,43 @@ done
 echo "==> Taking a first backup"
 /etc/periodic/daily/matinee-backup || echo "    (backup reported a problem; see /var/log/ops.log)"
 
-IP=$(ip -4 -o addr show scope global | awk '{print $4}' | cut -d/ -f1 | head -n1)
+conf_val() { sed -n "s/^$1=//p" "$CONF" | head -n1 | tr -d "\"'"; }
+MCP_STATE=off
+rc-update add matinee-mcp default >/dev/null 2>&1 || true
+if [ "${MCP_OK:-0}" = 1 ] && [ -n "$(conf_val CF_ACCESS_AUD)" ] && [ -n "$(conf_val MCP_PUBLIC_HOSTS)" ] && [ -n "$(conf_val MATINEE_API_KEY)" ]; then
+  echo "==> Starting matinee-mcp"
+  rc-service matinee-mcp start || true
+  MCP_STATE=failed
+  i=0
+  while [ $i -lt 20 ]; do
+    wget -qO- "http://$(conf_val MCP_HTTP_BIND):$(conf_val MCP_HTTP_PORT)/healthz" >/dev/null 2>&1 && { MCP_STATE=up; break; }
+    i=$((i+1)); sleep 1
+  done
+  [ "$MCP_STATE" = up ] || { echo "    matinee-mcp didn't answer; see /var/log/matinee-mcp.log"; tail -n 10 /var/log/matinee-mcp.log 2>/dev/null || true; }
+fi
+
 echo
 echo "Matinee is running:  http://$IP:$PORT/        (editing on the LAN: http://$IP:$PORT/admin)"
 echo "Health: $(wget -qO- http://127.0.0.1:$PORT/healthz)"
 [ -n "${ADDED:-}" ] && echo "New settings added:${ADDED}"
 grep -q '^TMDB_READ_TOKEN=$' "$CONF" && echo "  - TMDB is off until you set TMDB_READ_TOKEN in $CONF (then: rc-service matinee restart)"
 grep -q '^CF_AUD=$' "$CONF" && echo "  - Set CF_AUD in $CONF after creating the Access app for <your-domain>/admin"
-[ "${HC:-}" = added ] && echo "  - Added Matinee to HEALTH_CHECKS in $OPS_CONF"
-[ "${HC:-}" = manual ] && echo "  - Couldn't edit HEALTH_CHECKS in $OPS_CONF: add  $HC_LINE"
+[ -n "${HC_ADDED:-}" ] && echo "  - Added to HEALTH_CHECKS in $OPS_CONF:${HC_ADDED}"
+[ -n "${HC_MANUAL:-}" ] && echo "  - Couldn't edit HEALTH_CHECKS in $OPS_CONF: add these lines:${HC_MANUAL}"
 [ -f "$OPS_CONF" ] || echo "  - No $OPS_CONF: backups still run nightly into /var/backups/matinee"
 echo "  - Tunnel: <your-domain> -> http://$IP:$PORT"
-echo "Config: $CONF   Data: $DATA_DIR   Logs: /var/log/matinee.log, /var/log/ops.log"
+case "$MCP_STATE" in
+  up) echo "Matinee MCP is running (read-only unless MATINEE_MCP_READONLY=0): http://$(conf_val MCP_HTTP_BIND):$(conf_val MCP_HTTP_PORT)/healthz" ;;
+  failed) echo "Matinee MCP did not come up: see /var/log/matinee-mcp.log" ;;
+  *)
+    echo "Matinee MCP (remote access from the Claude app) was NOT started:"
+    [ "${MCP_OK:-0}" = 1 ] || echo "  - The MCP venv could not be built (see the warning above); re-run when PyPI is reachable"
+    for k in MCP_PUBLIC_HOSTS CF_ACCESS_AUD MATINEE_API_KEY; do
+      [ -n "$(conf_val $k)" ] || echo "  - Set $k in $CONF"
+    done
+    echo "  - Then start it:  rc-service matinee-mcp start"
+    ;;
+esac
+echo "  - MCP tunnel route: mcp.<your-domain>, path ^/matinee/ -> http://$IP:8719 (leave the Host header override unset)"
+echo "Config: $CONF   Data: $DATA_DIR   Logs: /var/log/matinee.log, /var/log/matinee-mcp.log, /var/log/ops.log"
 exit 0
