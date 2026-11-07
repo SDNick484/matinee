@@ -71,7 +71,7 @@ def test_service_start_only_when_configured():
 
 
 def test_health_check_and_uninstall():
-    assert "Matinee MCP|http://$IP:8719/healthz|matinee-mcp" in HEAD
+    assert "Matinee MCP|http://$(conf_val MCP_HTTP_BIND):$(conf_val MCP_HTTP_PORT)/healthz|matinee-mcp" in HEAD
     block = HEAD[HEAD.index('"--uninstall"'):HEAD.index("exit 0")]
     assert "matinee-mcp" in block and "/opt/matinee-mcp" in block
 
@@ -145,3 +145,20 @@ def test_mcp_setup_mentions_remote():
 
 def test_readme_points_to_remote_setup():
     assert "Remote access from the Claude app" in (ROOT / "README.md").read_text(encoding="utf-8")
+
+
+def _nearest_if(lines, idx):
+    return next(lines[j] for j in range(idx, -1, -1) if lines[j].lstrip().startswith("if "))
+
+
+def test_runlevel_and_health_check_only_once_the_service_is_up():
+    lines = HEAD.splitlines()
+    for prefix in ("rc-update add matinee-mcp", 'add_health_check "$HC_MCP_LINE"'):
+        idx = [i for i, l in enumerate(lines) if l.strip().startswith(prefix)]
+        assert len(idx) == 1, prefix
+        assert "MCP_STATE" in _nearest_if(lines, idx[0]), prefix
+
+
+def test_tunnel_hint_uses_the_configured_address():
+    line = next(l for l in HEAD.splitlines() if "MCP tunnel route" in l)
+    assert "8719" not in line and "conf_val MCP_HTTP_BIND" in line

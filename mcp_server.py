@@ -365,7 +365,10 @@ class MatineeClient:
                 con.close()
 
         # REST mode
-        results = self.search_collection(query=title, limit=50)
+        # Matinee ignores `limit` and returns every match in title order; take them all so a short
+        # exact title that sorts late is not cut off.
+        qs = urllib.parse.urlencode({"q": title})
+        results = self._api_request("GET", f"{self._read_prefix}/titles?{qs}").get("titles", [])
         if not results:
             return {
                 "found": False,

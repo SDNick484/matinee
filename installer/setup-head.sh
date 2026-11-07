@@ -130,9 +130,7 @@ EOF
   rm -f "$OPS_CONF.new"
 }
 HC_LINE="Matinee|http://127.0.0.1:$PORT/healthz|matinee"
-HC_MCP_LINE="Matinee MCP|http://$IP:8719/healthz|matinee-mcp"
 add_health_check "$HC_LINE" matinee
-add_health_check "$HC_MCP_LINE" matinee-mcp
 
 # ---------------------------------------------------------------- service
 cat > /etc/init.d/matinee <<'EOF'
@@ -207,7 +205,6 @@ echo "==> Taking a first backup"
 
 conf_val() { sed -n "s/^$1=//p" "$CONF" | head -n1 | tr -d "\"'"; }
 MCP_STATE=off
-rc-update add matinee-mcp default >/dev/null 2>&1 || true
 if [ "${MCP_OK:-0}" = 1 ] && [ -n "$(conf_val CF_ACCESS_AUD)" ] && [ -n "$(conf_val MCP_PUBLIC_HOSTS)" ] && [ -n "$(conf_val MATINEE_API_KEY)" ]; then
   echo "==> Starting matinee-mcp"
   rc-service matinee-mcp start || true
@@ -218,6 +215,13 @@ if [ "${MCP_OK:-0}" = 1 ] && [ -n "$(conf_val CF_ACCESS_AUD)" ] && [ -n "$(conf_
     i=$((i+1)); sleep 1
   done
   [ "$MCP_STATE" = up ] || { echo "    matinee-mcp didn't answer; see /var/log/matinee-mcp.log"; tail -n 10 /var/log/matinee-mcp.log 2>/dev/null || true; }
+fi
+# Only a service that is actually answering goes into the runlevel and the 15-minute health checks;
+# an unconfigured one would otherwise be flagged (and respawned at boot) for nothing.
+if [ "$MCP_STATE" = up ]; then
+  rc-update add matinee-mcp default >/dev/null 2>&1 || true
+  HC_MCP_LINE="Matinee MCP|http://$(conf_val MCP_HTTP_BIND):$(conf_val MCP_HTTP_PORT)/healthz|matinee-mcp"
+  add_health_check "$HC_MCP_LINE" matinee-mcp
 fi
 
 echo
@@ -239,9 +243,10 @@ case "$MCP_STATE" in
     for k in MCP_PUBLIC_HOSTS CF_ACCESS_AUD MATINEE_API_KEY; do
       [ -n "$(conf_val $k)" ] || echo "  - Set $k in $CONF"
     done
-    echo "  - Then start it:  rc-service matinee-mcp start"
+    echo "  - Then start it:  rc-service matinee-mcp start && rc-update add matinee-mcp default"
+    echo "  - (re-run this installer afterwards to add it to HEALTH_CHECKS)"
     ;;
 esac
-echo "  - MCP tunnel route: mcp.<your-domain>, path ^/matinee/ -> http://$IP:8719 (leave the Host header override unset)"
+echo "  - MCP tunnel route: mcp.<your-domain>, path ^/matinee/ -> http://$(conf_val MCP_HTTP_BIND):$(conf_val MCP_HTTP_PORT) (leave the Host header override unset)"
 echo "Config: $CONF   Data: $DATA_DIR   Logs: /var/log/matinee.log, /var/log/matinee-mcp.log, /var/log/ops.log"
 exit 0

@@ -486,10 +486,13 @@ def test_rest_where_is_falls_back_to_shortest_title(monkeypatch):
     assert c.where_is("Paddington")["title"] == "Paddington 2"
 
 
-def test_rest_where_is_requests_limit_50(monkeypatch):
-    c, seen = _where_client(monkeypatch, [{"id": 9, "title": "Up"}])
-    c.where_is("Up")
-    assert "limit=50" in seen[0]
+def test_rest_where_is_sees_every_match_not_just_the_first_50(monkeypatch):
+    # The server ignores `limit` and returns every substring match in title order, so an exact
+    # title that sorts after 50+ longer matches must still be found.
+    many = [{"id": i, "title": f"Super {i:02d}"} for i in range(1, 56)] + [{"id": 900, "title": "Up"}]
+    c, seen = _where_client(monkeypatch, many)
+    assert c.where_is("Up")["title"] == "Up"
+    assert seen[-1].endswith("/titles/900")
 
 
 @pytest.mark.parametrize("title,enc", [("WALL·E", "WALL%C2%B7E"), ("Amélie", "Am%C3%A9lie")])
