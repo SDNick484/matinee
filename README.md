@@ -72,7 +72,7 @@ Settings are stored in `/etc/conf.d/matinee`:
 ```sh
 PORT=8769
 DATA_DIR=/var/lib/matinee
-CF_TEAM_DOMAIN=https://<your-team>.cloudflareaccess.com
+CF_TEAM_DOMAIN=<your-team>.cloudflareaccess.com
 CF_AUD=<cloudflare-access-application-audience-tag>
 ADMIN_EMAILS=admin@example.com,editor@example.com
 LAN_EDIT=1
