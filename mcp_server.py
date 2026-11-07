@@ -9,8 +9,10 @@ Can operate in:
 import inspect
 import json
 import os
+import re
 import sqlite3
 import sys
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -24,6 +26,42 @@ except ImportError:
         from mcp.server.fastmcp import FastMCP
     except ImportError:
         FastMCP = None
+
+
+def _fold(s: str) -> str:
+    """Copy of app.fold: strip accents, lower-case, trim."""
+    return "".join(c for c in unicodedata.normalize("NFKD", s or "") if not unicodedata.combining(c)).lower().strip()
+
+
+def _words(s: str) -> List[str]:
+    """Copy of app.words ('WALL·E' -> ['wall', 'e']); kept local so this module never imports app."""
+    return re.sub(r"[^\w]+", " ", _fold(s)).split()
+
+
+def _like_escape(s: str) -> str:
+    """Copy of app.like_escape; use with ESCAPE '\\'."""
+    return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _location_paths(con) -> Dict[int, str]:
+    """Map location id -> 'Parent › Child' breadcrumb (cycle-safe)."""
+    by_id = {r["id"]: dict(r) for r in con.execute("SELECT id, parent_id, name FROM locations").fetchall()}
+
+    def build_path(loc_id, visited=None):
+        if visited is None:
+            visited = set()
+        if loc_id in visited or loc_id not in by_id:
+            return by_id.get(loc_id, {}).get("name", "")
+        visited.add(loc_id)
+        loc = by_id[loc_id]
+        pid = loc["parent_id"]
+        if pid and pid in by_id and pid not in visited:
+            parent_path = build_path(pid, visited)
+            return f"{parent_path} › {loc['name']}" if parent_path else loc["name"]
+        return loc["name"]
+
+    return {i: build_path(i) for i in by_id}
+
 
 def _readonly_kwargs(server_cls) -> Dict[str, Any]:
     """Read-only tool annotations, only when this mcp release supports them on tool()."""
@@ -128,10 +166,9 @@ class MatineeClient:
                 where = ["EXISTS (SELECT 1 FROM copies c WHERE c.title_id=t.id)"]
                 args = []
 
-                if query:
-                    clean_q = f"%{query.strip().lower()}%"
-                    where.append("(lower(t.title) LIKE ? OR lower(t.search_text) LIKE ?)")
-                    args.extend([clean_q, clean_q])
+                for w in _words(query or ""):
+                    where.append("t.search_text LIKE ? ESCAPE '\\'")
+                    args.append(f"%{_like_escape(w)}%")
 
                 if genre:
                     where.append(
@@ -215,7 +252,7 @@ class MatineeClient:
                 if not t:
                     raise RuntimeError(f"Movie with id {title_id} not found.")
                 copies = con.execute(
-                    "SELECT id, kind, format, service, created_at FROM copies WHERE title_id=? ORDER BY created_at, id",
+                    "SELECT id, kind, format, service, location_id, created_at FROM copies WHERE title_id=? ORDER BY created_at, id",
                     (title_id,),
                 ).fetchall()
                 rating_row = con.execute("SELECT rating FROM user_ratings WHERE title_id=?", (title_id,)).fetchone()
@@ -232,7 +269,11 @@ class MatineeClient:
                 ]
 
                 d = dict(t)
-                d["copies"] = [dict(c) for c in copies]
+                paths = _location_paths(con)
+                d["copies"] = [
+                    {**dict(c), "location_path": paths.get(c["location_id"]) if c["location_id"] else None}
+                    for c in copies
+                ]
                 d["user_rating"] = rating_row["rating"] if rating_row else None
                 d["watches"] = [dict(w) for w in watches]
                 d["last_watched"] = watches[0]["watched_date"] if watches else None
@@ -277,21 +318,7 @@ class MatineeClient:
                 title_name = row["title"]
                 year = row["year"]
 
-                loc_rows = con.execute("SELECT id, parent_id, name, sort_order FROM locations").fetchall()
-                by_id = {r["id"]: dict(r) for r in loc_rows}
-
-                def build_path(loc_id, visited=None):
-                    if visited is None:
-                        visited = set()
-                    if loc_id in visited or loc_id not in by_id:
-                        return by_id.get(loc_id, {}).get("name", "")
-                    visited.add(loc_id)
-                    loc = by_id[loc_id]
-                    pid = loc["parent_id"]
-                    if pid and pid in by_id and pid not in visited:
-                        parent_path = build_path(pid, visited)
-                        return f"{parent_path} › {loc['name']}" if parent_path else loc["name"]
-                    return loc["name"]
+                paths = _location_paths(con)
 
                 copies_rows = con.execute(
                     "SELECT id, kind, format, service, location_id FROM copies WHERE title_id=? ORDER BY created_at, id",
@@ -301,7 +328,7 @@ class MatineeClient:
                 copies_list = []
                 summary_parts = []
                 for c in copies_rows:
-                    loc_path = build_path(c["location_id"]) if c["location_id"] else None
+                    loc_path = paths.get(c["location_id"]) if c["location_id"] else None
                     cp_dict = {
                         "id": c["id"],
                         "kind": c["kind"],
@@ -321,6 +348,7 @@ class MatineeClient:
                 summary_str = f"{title_name} ({year}): " + "; ".join(summary_parts) if summary_parts else f"{title_name}: No copies recorded."
                 return {
                     "found": True,
+                    "id": title_id,
                     "title": title_name,
                     "year": year,
                     "copies": copies_list,
@@ -364,6 +392,7 @@ class MatineeClient:
         summary_str = f"{movie.get('title')}{year_str}: " + "; ".join(summary_parts) if summary_parts else f"{movie.get('title')}: No copies recorded."
         return {
             "found": True,
+            "id": movie.get("id"),
             "title": movie.get("title"),
             "year": movie.get("year"),
             "copies": copies_list,

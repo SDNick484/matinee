@@ -348,3 +348,45 @@ def test_readonly_kwargs_guarded_on_tool_signature():
 def test_what_to_watch_steps_are_contiguous():
     text = mcp_server.prompt_what_to_watch(mood="cozy", max_runtime=0, kids=True)
     assert [l.split(".")[0] for l in text.splitlines()[1:]] == ["1", "2", "3", "4"]
+
+
+@pytest.mark.parametrize("s", ["WALL·E", "Amélie", "Bug's Life", "knight dark", "  "])
+def test_words_matches_app(s):
+    import app as matinee
+    assert mcp_server._words(s) == matinee.words(s)
+
+
+def test_db_search_matches_each_word_and_folds(test_env):
+    from conftest import seed_title
+    con = db()
+    seed_title(con, 155)
+    seed_title(con, 194)
+    con.commit()
+    client = mcp_server.MatineeClient(db_path=str(test_env))
+    assert [r["title"] for r in client.search_collection("knight dark")] == ["The Dark Knight"]
+    assert [r["title"] for r in client.search_collection("amelie")] == ["Amélie"]
+    assert client.search_collection("100%") == []  # LIKE wildcards are escaped
+
+
+def test_db_get_movie_copies_have_location_path(test_env):
+    con = db()
+    con.execute("INSERT INTO locations (id, parent_id, name) VALUES (1, NULL, 'Family Room'), (2, 1, 'Shelf 1')")
+    con.execute("UPDATE copies SET location_id=2 WHERE title_id=1")
+    con.commit()
+    c = mcp_server.MatineeClient(db_path=str(test_env)).get_movie(1)["copies"][0]
+    assert c["location_id"] == 2 and c["location_path"] == "Family Room › Shelf 1"
+
+
+def test_where_is_returns_title_id_db_and_rest(test_env, monkeypatch):
+    assert mcp_server.MatineeClient(db_path=str(test_env)).where_is("Inception")["id"] == 1
+
+    client = mcp_server.MatineeClient(api_url="http://fake-host", db_path="/nonexistent/db.db")
+
+    def fake_request(method, path, data=None):
+        if "/api/titles/7" in path:
+            return {"id": 7, "title": "Paddington 2", "year": 2017,
+                    "copies": [{"id": 1, "kind": "physical", "format": "Blu-ray", "location_path": "Shelf 2"}]}
+        return {"titles": [{"id": 7, "title": "Paddington 2"}]}
+
+    monkeypatch.setattr(client, "_api_request", fake_request)
+    assert client.where_is("Paddington 2")["id"] == 7
