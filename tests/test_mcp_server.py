@@ -348,3 +348,24 @@ def test_readonly_kwargs_guarded_on_tool_signature():
 def test_what_to_watch_steps_are_contiguous():
     text = mcp_server.prompt_what_to_watch(mood="cozy", max_runtime=0, kids=True)
     assert [l.split(".")[0] for l in text.splitlines()[1:]] == ["1", "2", "3", "4"]
+
+
+ALL_TOOLS = {"search_collection", "get_movie", "where_is", "get_recommendations",
+             "get_collection_stats", "rate_movie", "log_watch", "search_tmdb", "add_movie"}
+
+
+def _names(server):
+    return {t.name for t in asyncio.run(server.list_tools())}
+
+
+def test_build_server_writes_true_lists_nine_tools():
+    assert _names(mcp_server.build_server(writes=True)) == ALL_TOOLS
+
+
+def test_build_server_writes_false_lists_six_tools():
+    assert _names(mcp_server.build_server(writes=False)) == ALL_TOOLS - set(mcp_server.WRITE_TOOLS)
+
+
+def test_build_server_is_independent():
+    mcp_server.build_server(writes=False)
+    assert _names(mcp_server.mcp) == ALL_TOOLS
