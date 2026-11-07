@@ -57,7 +57,8 @@ _load_env()
 DATA_DIR = Path(os.environ.get("DATA_DIR", APP_DIR / "data"))
 IMAGE_DIR = DATA_DIR / "images"
 DB_PATH = DATA_DIR / "matinee.db"
-CF_TEAM_DOMAIN = os.environ.get("CF_TEAM_DOMAIN", "").strip().rstrip("/")
+# bare host: tolerate a pasted "https://team.cloudflareaccess.com/" (same as Cookbook)
+CF_TEAM_DOMAIN = re.sub(r"^https?://", "", os.environ.get("CF_TEAM_DOMAIN", "").strip().strip("'\"")).split("/")[0]
 CF_AUD = os.environ.get("CF_AUD", "").strip()
 ADMIN_EMAILS = {e.strip().lower() for e in os.environ.get("ADMIN_EMAILS", "").split(",") if e.strip()}
 LAN_EDIT = os.environ.get("LAN_EDIT", "1") == "1"

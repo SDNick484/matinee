@@ -44,11 +44,17 @@ def test_init_script_contents():
 
 @pytest.mark.parametrize("key,value", [
     ("MATINEE_MCP_READONLY", "1"), ("MCP_HTTP_PORT", "8719"), ("MCP_HTTP_PATH", "/matinee/mcp"),
-    ("MCP_HTTP_BIND", '"$IP"'), ("MCP_PUBLIC_HOSTS", '""'), ("CF_ACCESS_TEAM_DOMAIN", '""'),
+    ("MCP_HTTP_BIND", '"$IP"'), ("MCP_PUBLIC_HOSTS", '""'),
     ("CF_ACCESS_AUD", '""'), ("MCP_ALLOWED_EMAILS", '""'),
 ])
 def test_new_settings_are_added_with_defaults(key, value):
     assert re.search(rf'^add_setting "\$CONF" {key} {re.escape(value)} ".+"$', HEAD, re.M), key
+
+
+def test_team_domain_is_one_setting():
+    # matinee-mcp reuses CF_TEAM_DOMAIN; the installer must not write a second team-domain key
+    assert "add_setting \"$CONF\" CF_ACCESS_TEAM_DOMAIN" not in HEAD
+    assert "CF_ACCESS_TEAM_DOMAIN=" not in (ROOT / ".env.example").read_text(encoding="utf-8")
 
 
 def test_conf_is_root_only():
@@ -124,7 +130,7 @@ def test_health_checks_added_once_and_matinee_does_not_hide_matinee_mcp(tmp_path
 
 # ------------------------------------------------------------------ docs
 NEW_KEYS = ["MATINEE_MCP_READONLY", "MCP_HTTP_PORT", "MCP_HTTP_BIND", "MCP_HTTP_PATH", "MCP_PUBLIC_HOSTS",
-            "CF_ACCESS_TEAM_DOMAIN", "CF_ACCESS_AUD", "MCP_ALLOWED_EMAILS"]
+            "CF_ACCESS_AUD", "MCP_ALLOWED_EMAILS"]
 
 
 @pytest.mark.parametrize("key", NEW_KEYS)

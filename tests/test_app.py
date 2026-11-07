@@ -153,6 +153,17 @@ def test_access_cloudflare_without_jwt_and_lan(monkeypatch):
     assert c.get("/api/me").get_json() == {"editor": False, "public": True}
 
 
+@pytest.mark.parametrize("raw", ["family.cloudflareaccess.com", "https://family.cloudflareaccess.com",
+                                 "https://family.cloudflareaccess.com/", " 'http://family.cloudflareaccess.com/x' "])
+def test_cf_team_domain_is_normalised_to_a_bare_host(raw):
+    # README once showed an https:// value; app.py builds https://{CF_TEAM_DOMAIN}/cdn-cgi/access/certs
+    src = (Path(matinee.__file__)).read_text(encoding="utf-8")
+    line = next(l for l in src.splitlines() if l.startswith("CF_TEAM_DOMAIN ="))
+    ns = {"os": type("O", (), {"environ": {"CF_TEAM_DOMAIN": raw}})(), "re": re}
+    exec(line, ns)
+    assert ns["CF_TEAM_DOMAIN"] == "family.cloudflareaccess.com"
+
+
 def test_access_jwt_audience_and_allow_list(monkeypatch):
     jwt = pytest.importorskip("jwt")
     from cryptography.hazmat.primitives.asymmetric import rsa
