@@ -235,6 +235,9 @@ def run_tool(client, name, args):
         return getattr(client, method)(**args), None
     except AskUnavailable:
         raise
+    except TypeError:
+        # a missing required argument (the model sent {}); not an internal fault
+        return None, f"{name}: missing or invalid arguments"
     except (RuntimeError, recommend.ParamError) as e:
         return None, str(e)
     except Exception:

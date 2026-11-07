@@ -146,13 +146,13 @@ See [docs/mcp-setup.md](docs/mcp-setup.md) for full configuration blocks and pro
 | `ANTHROPIC_SEARCH_MODEL` | `claude-haiku-5-5` | Model used to answer |
 | `ASK_DAILY_LIMIT` | `200` | Questions per day across all editors; a non-integer value logs a warning and uses 200 |
 
-**Limits**: a thread holds at most 5 questions. The daily cap counts questions since local midnight in the server's timezone; once it is reached Ask answers "Daily AI search limit reached" until the next day.
+**Limits**: a thread holds at most 5 questions. The daily cap counts questions since local midnight in the server's timezone; once it is reached Ask answers "Daily AI search limit reached" until the next day. `ASK_DAILY_LIMIT=0` (or a negative number) makes every question answer "daily limit reached", so the key alone turns Ask on or off. Requests refused by the cap (429) are logged but do not count toward the limit. gunicorn has 8 request threads (2 workers x 4), so many simultaneous Asks (up to 60 s each) can slow the rest of the app; that is fine for a family install.
 
 **Cost** (Haiku 5.5 at $0.10 / $0.50 per MTok input/output for prompts under 100k tokens, checked 2026-11-06 at platform.claude.com/docs/en/about-claude/pricing):
 
 - Typical question: about $0.0013.
-- Worst case: about $0.011.
-- At the default cap of 200 a day: at most about $2.20 a day.
+- Worst case: one question can reach roughly 100-150k input tokens (several tool calls per round, each result up to 12k characters), about $0.02-0.04. It is still bounded by 5 rounds, the daily cap and an Anthropic Console spend limit.
+- At the default cap of 200 a day: about $0.26 a day typically, and at most about $8 a day if every question hit the worst case.
 
 **Data sent to Anthropic**: each question and the results of the collection lookups the model makes, which can include personal ratings and watch notes. No images are sent. Question text is not stored locally; token counts are logged per question in the `ask_log` table.
 

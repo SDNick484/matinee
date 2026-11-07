@@ -593,3 +593,14 @@ def test_kids_follow_up_thread(lib):
     assert msgs == [{"role": "user", "content": "something for kids' night"},
                     {"role": "assistant", "content": "Toy Story 3 and Inside Out."},
                     {"role": "user", "content": "only PG"}]
+
+
+def test_run_tool_missing_required_args_is_clean(client, monkeypatch):
+    import ask
+    seeded(client)
+    calls = []
+    monkeypatch.setattr(core.app.logger, "exception", lambda *a, **k: calls.append(a))
+    lc = ask.LocalClient()
+    for name in ("get_movie", "where_is"):
+        assert ask.run_tool(lc, name, {}) == (None, f"{name}: missing or invalid arguments")
+    assert calls == []
