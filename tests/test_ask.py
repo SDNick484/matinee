@@ -1,4 +1,4 @@
-import io, json, logging, time, urllib.error
+import io, json, logging, time, urllib.error, urllib.request
 
 import pytest
 
@@ -178,3 +178,98 @@ def test_answer_raising_still_logs_error_row(client, monkeypatch):
     assert r.status_code == 500
     rows = log_rows()
     assert len(rows) == 1 and rows[0]["status"] == "error" and rows[0]["editor"] == "lan"
+
+
+# ---- Task 4: read tools ----
+import inspect, sqlite3
+
+from conftest import seed_title
+
+EXCLUDED = ("rate_movie", "log_watch", "add_movie", "search_tmdb")
+
+
+def seeded(client):
+    with app.app_context():
+        con = db()
+        tid = seed_title(con, 155)
+        con.commit()
+    return tid
+
+
+def test_tool_defs_read_only():
+    import ask
+    names = [d["name"] for d in ask.tool_defs()]
+    assert names == ["search_collection", "get_movie", "where_is", "get_recommendations",
+                     "get_collection_stats", "show_results"]
+    blob = json.dumps(ask.tool_defs()) + ask.SYSTEM
+    assert not any(x in blob for x in EXCLUDED)
+    desc = dict((n, d) for n, _, d, _ in ask.TOOLS)["get_recommendations"]
+    assert "max_cert" in desc and "next_in_franchise" in desc and "unrated" in desc.lower()
+
+
+def test_schemas_match_client_signatures():
+    import ask, mcp_server
+    for name, method, desc, schema in ask.TOOLS:
+        params = set(inspect.signature(getattr(mcp_server.MatineeClient, method)).parameters) - {"self"}
+        assert set(schema["properties"]) == params, name
+
+
+def test_run_tool_coerces_and_clamps(client, monkeypatch):
+    import ask
+    tid = seeded(client)
+    lc = ask.LocalClient()
+    base, err = ask.run_tool(lc, "get_movie", {"title_id": tid})
+    assert err is None and base["id"] == tid
+    for v in (str(tid), f" {tid} ", float(tid)):
+        assert ask.run_tool(lc, "get_movie", {"title_id": v}) == (base, None)
+    for v in (True, "abc", 1.5, [1], None):
+        assert ask.run_tool(lc, "get_movie", {"title_id": v}) == (None, "get_movie: title_id must be an integer")
+    seen = {}
+    monkeypatch.setattr(lc, "search_collection", lambda **kw: seen.update(kw) or [])
+    ask.run_tool(lc, "search_collection", {"limit": 500})
+    assert seen["limit"] == 25
+    ask.run_tool(lc, "search_collection", {"limit": "0"})
+    assert seen["limit"] == 1
+    assert ask.run_tool(lc, "search_collection", {"limit": "many"}) == (None, "search_collection: limit must be an integer")
+    assert ask.run_tool(lc, "search_collection", None) == ([], None)
+    assert ask.run_tool(lc, "search_collection", [1]) == (None, "search_collection: arguments must be an object")
+
+
+def test_run_tool_errors(client, monkeypatch):
+    import ask
+    seeded(client)
+    lc = ask.LocalClient()
+    assert ask.run_tool(lc, "get_movie", {"title_id": 99999}) == (None, "Movie with id 99999 not found.")
+    result, err = ask.run_tool(lc, "get_recommendations", {"max_cert": "XX"})
+    assert result is None and "max_cert must be one of" in err
+    assert ask.run_tool(lc, "nope", {}) == (None, "Unknown tool: nope")
+    assert ask.run_tool(lc, "show_results", {"answer": "x"}) == (None, "Unknown tool: show_results")
+    assert ask.run_tool(lc, "where_is", {"title": "x", "bogus": 1}) == (None, "where_is: unknown argument 'bogus'")
+
+    def boom(**kw):
+        raise sqlite3.OperationalError("SELECT secret")
+    monkeypatch.setattr(lc, "get_collection_stats", boom)
+    result, err = ask.run_tool(lc, "get_collection_stats", {})
+    assert result is None and "internal error (ref " in err and "secret" not in err
+
+
+def test_local_client_fails_closed(client, monkeypatch, tmp_path):
+    import ask
+    monkeypatch.setattr("app.DB_PATH", tmp_path / "missing.db")
+    calls = []
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **kw: calls.append(a))
+    lc = ask.LocalClient()
+    with pytest.raises(ask.AskUnavailable):
+        ask.run_tool(lc, "get_collection_stats", {})
+    assert calls == []
+
+
+def test_tool_result_truncated():
+    import ask
+    note = " …truncated; narrow the search (e.g. a genre, format or limit)"
+    blk = ask.tool_result_block("toolu_1", {"x": "y" * 20000}, None)
+    assert blk["type"] == "tool_result" and blk["tool_use_id"] == "toolu_1" and "is_error" not in blk
+    assert blk["content"].endswith(note) and len(blk["content"]) <= 12000 + len(note)
+    blk = ask.tool_result_block("t2", None, "boom")
+    assert blk["is_error"] is True and blk["content"] == "boom"
+    assert ask.tool_result_block("t3", {"é": 1}, None)["content"] == '{"é": 1}'
