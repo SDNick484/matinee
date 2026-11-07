@@ -8,6 +8,7 @@ Can operate in:
 """
 import inspect
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -78,6 +79,25 @@ def _readonly_kwargs(server_cls) -> Dict[str, Any]:
 
 _READONLY = _readonly_kwargs(FastMCP)
 
+try:
+    from mcp.server.mcpserver.exceptions import ToolError
+except ImportError:
+    try:
+        from mcp.server.fastmcp.exceptions import ToolError
+    except ImportError:
+        ToolError = Exception
+
+log = logging.getLogger("matinee.mcp")
+
+
+class MatineeError(RuntimeError, ToolError):
+    """Every Matinee failure. ToolError text reaches the model; RuntimeError keeps old callers working."""
+
+    def __init__(self, message: str, status: Optional[int] = None):
+        super().__init__(message)
+        self.status = status
+
+
 MATINEE_URL = os.environ.get("MATINEE_URL", "http://127.0.0.1:8769").rstrip("/")
 MATINEE_API_KEY = os.environ.get("MATINEE_API_KEY", "").strip()
 MATINEE_DB_PATH = os.environ.get("MATINEE_DB_PATH", "").strip()
@@ -138,15 +158,25 @@ class MatineeClient:
                 raw = resp.read()
                 return json.loads(raw) if raw else {"ok": True}
         except urllib.error.HTTPError as e:
-            err_body = e.read().decode("utf-8", errors="replace")
+            err_body = e.read().decode("utf-8", errors="replace")[:2000]
+            log.warning("Matinee %s %s -> HTTP %s", method, path.split("?")[0], e.code)
+            if e.code in (401, 403):
+                raise MatineeError(
+                    f"Matinee rejected the service's API key (HTTP {e.code}). Check MATINEE_API_KEY on CT 210."
+                ) from None
+            detail = ""
             try:
                 err_json = json.loads(err_body)
-                msg = err_json.get("error") or err_json.get("message") or err_body
-            except Exception:
-                msg = err_body
-            raise RuntimeError(f"Matinee API error ({e.code}): {msg}") from e
+                if isinstance(err_json, dict):
+                    detail = str(err_json.get("error") or err_json.get("message") or "")[:200]
+            except ValueError:
+                pass
+            raise MatineeError(
+                f"Matinee API error ({e.code})" + (f": {detail}" if detail else ""), status=e.code
+            ) from None
         except Exception as e:
-            raise RuntimeError(f"Failed to connect to Matinee at {self.api_url}: {e}") from e
+            log.warning("Matinee %s %s failed: %s", method, path.split("?")[0], type(e).__name__)
+            raise MatineeError("Matinee is unreachable right now. Try again in a minute.") from None
 
     # ------------------------------------------------------------------------ Reads
     def search_collection(
@@ -250,7 +280,7 @@ class MatineeClient:
             try:
                 t = con.execute("SELECT * FROM titles WHERE id=?", (title_id,)).fetchone()
                 if not t:
-                    raise RuntimeError(f"Movie with id {title_id} not found.")
+                    raise MatineeError(f"Movie with id {title_id} not found.")
                 copies = con.execute(
                     "SELECT id, kind, format, service, location_id, created_at FROM copies WHERE title_id=? ORDER BY created_at, id",
                     (title_id,),
@@ -288,7 +318,12 @@ class MatineeClient:
             finally:
                 con.close()
 
-        return self._api_request("GET", f"{self._read_prefix}/titles/{title_id}")
+        try:
+            return self._api_request("GET", f"{self._read_prefix}/titles/{title_id}")
+        except MatineeError as e:
+            if e.status == 404:
+                raise MatineeError(f"Movie with id {title_id} not found.") from None
+            raise
 
     def where_is(self, title: str) -> Dict[str, Any]:
         """Find where physical copies of a movie are stored or which digital services host it."""
@@ -358,7 +393,10 @@ class MatineeClient:
                 con.close()
 
         # REST mode
-        results = self.search_collection(query=title, limit=5)
+        # Matinee ignores `limit` and returns every match in title order; take them all so a short
+        # exact title that sorts late is not cut off.
+        qs = urllib.parse.urlencode({"q": title})
+        results = self._api_request("GET", f"{self._read_prefix}/titles?{qs}").get("titles", [])
         if not results:
             return {
                 "found": False,
@@ -367,7 +405,12 @@ class MatineeClient:
                 "copies": [],
                 "summary": f"'{title}' is not currently in the collection.",
             }
-        movie = self.get_movie(results[0]["id"])
+        # Mirror the SQLite branch: exact title first, else the shortest title.
+        wanted = title.strip().lower()
+        pick = next((r for r in results if (r.get("title") or "").strip().lower() == wanted), None)
+        if pick is None:
+            pick = min(results, key=lambda r: len(r.get("title") or ""))
+        movie = self.get_movie(pick["id"])
         copies = movie.get("copies", [])
         copies_list = []
         summary_parts = []
@@ -555,158 +598,184 @@ def _make_server():
         return FastMCP("matinee")
 
 
-# FastMCP Server Instance
-mcp = _make_server()
-
 _default_client = MatineeClient()
 
-if mcp:
-    @mcp.tool()
-    def search_collection(
-        query: str = "",
-        genre: Optional[str] = None,
-        medium: Optional[str] = None,
-        format: Optional[str] = None,
-        watched: Optional[str] = None,
-        min_rating: Optional[float] = None,
-        limit: int = 20,
-    ) -> List[Dict[str, Any]]:
-        """Search the movie collection by title, genre, medium (physical/digital), format, watched status, or rating."""
-        return _default_client.search_collection(
-            query=query,
-            genre=genre,
-            medium=medium,
-            format=format,
-            watched=watched,
-            min_rating=min_rating,
-            limit=limit,
+WRITE_TOOLS = ("rate_movie", "log_watch", "add_movie")
+
+
+def search_collection(
+    query: str = "",
+    genre: Optional[str] = None,
+    medium: Optional[str] = None,
+    format: Optional[str] = None,
+    watched: Optional[str] = None,
+    min_rating: Optional[float] = None,
+    limit: int = 20,
+) -> List[Dict[str, Any]]:
+    """Search the movie collection by title, genre, medium (physical/digital), format, watched status, or rating."""
+    return _default_client.search_collection(
+        query=query,
+        genre=genre,
+        medium=medium,
+        format=format,
+        watched=watched,
+        min_rating=min_rating,
+        limit=limit,
+    )
+
+
+def get_movie(title_id: int) -> Dict[str, Any]:
+    """Get full details for a movie in the collection including physical/digital copies, user rating, and watch history."""
+    return _default_client.get_movie(title_id)
+
+
+def where_is(title: str) -> Dict[str, Any]:
+    """Find where physical copies of a movie are stored (shelf/cabinet/room) or which digital services host it."""
+    return _default_client.where_is(title)
+
+
+def get_recommendations(
+    mode: Literal["forgotten_gems", "never_watched", "quick_picks", "genre_mood",
+                  "next_in_franchise", "start_franchise"] = "forgotten_gems",
+    genre: Optional[str] = None,
+    medium: Optional[Literal["physical", "digital"]] = None,
+    max_runtime: Optional[int] = None,
+    min_rating: Optional[float] = None,
+    max_cert: Optional[Literal["G", "PG", "PG-13", "R", "NC-17"]] = None,
+    limit: int = 5,
+    random: bool = False,
+) -> Dict[str, Any]:
+    """Pick movies to watch from the family's own collection (movie night, "what should we watch",
+    kids' night, family-friendly, sequel, next in the series, start a franchise, quick short movie).
+    <use_case>
+    - mode=next_in_franchise: next unwatched owned film in each series someone has started (one per series)
+    - mode=start_franchise: first film of an owned series (2+ films) nobody has started
+    - max_cert=G|PG|PG-13|R|NC-17: rating cap; works with any mode. For "kids" with no rating named, use PG-13.
+    - forgotten_gems, never_watched, quick_picks (≤95 min default), genre_mood as before
+    </use_case>
+    <important_notes>
+    - Films with no US rating (NR/unrated/unknown) are EXCLUDED whenever max_cert is set.
+    - Franchise modes choose the next film first, then apply filters: if the next Harry Potter is
+      PG-13 and max_cert=PG, that series yields nothing rather than skipping ahead.
+    - An empty result includes a `hint` with what to try next; follow it instead of telling the
+      user nothing matched.
+    - Each result has `id`; pass it to get_movie or where_is for the shelf location.
+    </important_notes>
+    """
+    return _default_client.get_recommendations(
+        mode=mode,
+        genre=genre,
+        medium=medium,
+        max_runtime=max_runtime,
+        min_rating=min_rating,
+        max_cert=max_cert,
+        limit=limit,
+        random=random,
+    )
+
+
+def get_collection_stats() -> Dict[str, Any]:
+    """Get summary statistics for the collection: total movies, formats, watch coverage, and ratings."""
+    return _default_client.get_collection_stats()
+
+
+def rate_movie(title_id: int, rating: Optional[float]) -> Dict[str, Any]:
+    """Set, update, or clear a movie's personal rating (0.0 to 10.0 in 0.5 steps, or null/None to clear)."""
+    return _default_client.rate_movie(title_id, rating)
+
+
+def log_watch(
+    title_id: int,
+    watched_date: Optional[str] = None,
+    notes: Optional[str] = None,
+    watched_at: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Record a watch event with an optional ISO date (YYYY-MM-DD; omit or pass null for dateless/historical watch) and optional notes."""
+    return _default_client.log_watch(title_id, watched_date=watched_date, notes=notes, watched_at=watched_at)
+
+
+def search_tmdb(query: str) -> List[Dict[str, Any]]:
+    """Search TMDB for movies not yet in the collection (or to add additional copies)."""
+    return _default_client.search_tmdb(query)
+
+
+def add_movie(
+    tmdb_id: int,
+    kind: str = "physical",
+    format: str = "Blu-ray",
+    service: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Import a movie from TMDB into the collection with copy details (kind='physical'|'digital')."""
+    return _default_client.add_movie(tmdb_id, kind=kind, format=format, service=service)
+
+
+def resource_stats() -> str:
+    """Collection statistics summary."""
+    stats = _default_client.get_collection_stats()
+    return json.dumps(stats, indent=2)
+
+
+def resource_recommendations() -> str:
+    """Current top recommended movies from the collection."""
+    recs = _default_client.get_recommendations(mode="forgotten_gems", limit=5)
+    return json.dumps(recs, indent=2)
+
+
+def prompt_what_to_watch(mood: str = "", max_runtime: int = 0, kids: bool = False) -> str:
+    """Suggest a curated movie night lineup based on mood, genre, or time constraints."""
+    instructions = [
+        "You are helping the family choose a movie to watch tonight from their personal collection.",
+        "1. Use `get_recommendations` or `search_collection` to check available movies.",
+    ]
+    if mood:
+        instructions.append(f"{len(instructions)}. Prioritize movies matching the mood or genre '{mood}'.")
+    if max_runtime > 0:
+        instructions.append(f"{len(instructions)}. Ensure suggested movies do not exceed {max_runtime} minutes.")
+    instructions.append(f"{len(instructions)}. Present 2-3 distinct choices with format (e.g. 4K UHD vs Blu-ray) and reason why they fit.")
+    if kids:
+        instructions.append(
+            f'{len(instructions)}. This is a kids\' night: call `get_recommendations` with max_cert="PG-13" and tell the '
+            "family that unrated films were left out."
         )
+    return "\n".join(instructions)
 
-    @mcp.tool()
-    def get_movie(title_id: int) -> Dict[str, Any]:
-        """Get full details for a movie in the collection including physical/digital copies, user rating, and watch history."""
-        return _default_client.get_movie(title_id)
 
-    @mcp.tool()
-    def where_is(title: str) -> Dict[str, Any]:
-        """Find where physical copies of a movie are stored (shelf/cabinet/room) or which digital services host it."""
-        return _default_client.where_is(title)
+def prompt_log_movie_night(movie_title: str = "") -> str:
+    """Prompt to help log and rate a movie that was just watched."""
+    return (
+        f"Let's log the movie that was just watched: '{movie_title or 'movie'}'.\n"
+        "1. Use `search_collection` to find the exact movie ID.\n"
+        "2. Ask the user for their rating (0.0 to 10.0 in 0.5 steps) and any notes/impressions.\n"
+        "3. Use `rate_movie` and `log_watch` to update Matinee."
+    )
 
-    @mcp.tool(**_READONLY)
-    def get_recommendations(
-        mode: Literal["forgotten_gems", "never_watched", "quick_picks", "genre_mood",
-                      "next_in_franchise", "start_franchise"] = "forgotten_gems",
-        genre: Optional[str] = None,
-        medium: Optional[Literal["physical", "digital"]] = None,
-        max_runtime: Optional[int] = None,
-        min_rating: Optional[float] = None,
-        max_cert: Optional[Literal["G", "PG", "PG-13", "R", "NC-17"]] = None,
-        limit: int = 5,
-        random: bool = False,
-    ) -> Dict[str, Any]:
-        """Pick movies to watch from the family's own collection (movie night, "what should we watch",
-        kids' night, family-friendly, sequel, next in the series, start a franchise, quick short movie).
-        <use_case>
-        - mode=next_in_franchise: next unwatched owned film in each series someone has started (one per series)
-        - mode=start_franchise: first film of an owned series (2+ films) nobody has started
-        - max_cert=G|PG|PG-13|R|NC-17: rating cap; works with any mode. For "kids" with no rating named, use PG-13.
-        - forgotten_gems, never_watched, quick_picks (≤95 min default), genre_mood as before
-        </use_case>
-        <important_notes>
-        - Films with no US rating (NR/unrated/unknown) are EXCLUDED whenever max_cert is set.
-        - Franchise modes choose the next film first, then apply filters: if the next Harry Potter is
-          PG-13 and max_cert=PG, that series yields nothing rather than skipping ahead.
-        - An empty result includes a `hint` with what to try next; follow it instead of telling the
-          user nothing matched.
-        - Each result has `id`; pass it to get_movie or where_is for the shelf location.
-        </important_notes>
-        """
-        return _default_client.get_recommendations(
-            mode=mode,
-            genre=genre,
-            medium=medium,
-            max_runtime=max_runtime,
-            min_rating=min_rating,
-            max_cert=max_cert,
-            limit=limit,
-            random=random,
-        )
 
-    @mcp.tool()
-    def get_collection_stats() -> Dict[str, Any]:
-        """Get summary statistics for the collection: total movies, formats, watch coverage, and ratings."""
-        return _default_client.get_collection_stats()
+def build_server(*, writes: bool = True):
+    """Build a MCP server with every tool; writes=False leaves out WRITE_TOOLS.
 
-    @mcp.tool()
-    def rate_movie(title_id: int, rating: Optional[float]) -> Dict[str, Any]:
-        """Set, update, or clear a movie's personal rating (0.0 to 10.0 in 0.5 steps, or null/None to clear)."""
-        return _default_client.rate_movie(title_id, rating)
+    Tool functions are module-level and read _default_client at call time.
+    """
+    server = _make_server()
+    if not server:
+        return None
+    server.tool()(search_collection)
+    server.tool()(get_movie)
+    server.tool()(where_is)
+    server.tool(**_READONLY)(get_recommendations)
+    server.tool()(get_collection_stats)
+    server.tool()(search_tmdb)
+    if writes:
+        for fn in (rate_movie, log_watch, add_movie):
+            server.tool()(fn)
+    server.resource("matinee://stats")(resource_stats)
+    server.resource("matinee://recommendations")(resource_recommendations)
+    server.prompt("what_to_watch")(prompt_what_to_watch)
+    server.prompt("log_movie_night")(prompt_log_movie_night)
+    return server
 
-    @mcp.tool()
-    def log_watch(
-        title_id: int,
-        watched_date: Optional[str] = None,
-        notes: Optional[str] = None,
-        watched_at: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """Record a watch event with an optional ISO date (YYYY-MM-DD; omit or pass null for dateless/historical watch) and optional notes."""
-        return _default_client.log_watch(title_id, watched_date=watched_date, notes=notes, watched_at=watched_at)
 
-    @mcp.tool()
-    def search_tmdb(query: str) -> List[Dict[str, Any]]:
-        """Search TMDB for movies not yet in the collection (or to add additional copies)."""
-        return _default_client.search_tmdb(query)
-
-    @mcp.tool()
-    def add_movie(
-        tmdb_id: int,
-        kind: str = "physical",
-        format: str = "Blu-ray",
-        service: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """Import a movie from TMDB into the collection with copy details (kind='physical'|'digital')."""
-        return _default_client.add_movie(tmdb_id, kind=kind, format=format, service=service)
-
-    @mcp.resource("matinee://stats")
-    def resource_stats() -> str:
-        """Collection statistics summary."""
-        stats = _default_client.get_collection_stats()
-        return json.dumps(stats, indent=2)
-
-    @mcp.resource("matinee://recommendations")
-    def resource_recommendations() -> str:
-        """Current top recommended movies from the collection."""
-        recs = _default_client.get_recommendations(mode="forgotten_gems", limit=5)
-        return json.dumps(recs, indent=2)
-
-    @mcp.prompt("what_to_watch")
-    def prompt_what_to_watch(mood: str = "", max_runtime: int = 0, kids: bool = False) -> str:
-        """Suggest a curated movie night lineup based on mood, genre, or time constraints."""
-        instructions = [
-            "You are helping the family choose a movie to watch tonight from their personal collection.",
-            "1. Use `get_recommendations` or `search_collection` to check available movies.",
-        ]
-        if mood:
-            instructions.append(f"{len(instructions)}. Prioritize movies matching the mood or genre '{mood}'.")
-        if max_runtime > 0:
-            instructions.append(f"{len(instructions)}. Ensure suggested movies do not exceed {max_runtime} minutes.")
-        instructions.append(f"{len(instructions)}. Present 2-3 distinct choices with format (e.g. 4K UHD vs Blu-ray) and reason why they fit.")
-        if kids:
-            instructions.append(
-                f'{len(instructions)}. This is a kids\' night: call `get_recommendations` with max_cert="PG-13" and tell the '
-                "family that unrated films were left out."
-            )
-        return "\n".join(instructions)
-
-    @mcp.prompt("log_movie_night")
-    def prompt_log_movie_night(movie_title: str = "") -> str:
-        """Prompt to help log and rate a movie that was just watched."""
-        return (
-            f"Let's log the movie that was just watched: '{movie_title or 'movie'}'.\n"
-            "1. Use `search_collection` to find the exact movie ID.\n"
-            "2. Ask the user for their rating (0.0 to 10.0 in 0.5 steps) and any notes/impressions.\n"
-            "3. Use `rate_movie` and `log_watch` to update Matinee."
-        )
+# FastMCP Server Instance
+mcp = build_server()
 
 
 def main():
