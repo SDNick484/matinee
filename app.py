@@ -1954,9 +1954,9 @@ def delete_title(title_id):
     return jsonify(ok=True)
 
 
-init_db()
-
-import ask  # noqa: E402,F401
-
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8769)), debug=False)
+    import app as _real  # import as a module so ask.py registers onto the same app
+    _real.app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8769)), debug=False)
+else:
+    import ask  # noqa: E402,F401 -- AI search
+    init_db()
