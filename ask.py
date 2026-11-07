@@ -3,7 +3,7 @@
 The thread comes from the browser and is untrusted; only plain question/answer text is ever turned into model
 messages. This module is imported at the bottom of app.py, once everything it needs is defined.
 """
-import json, os, secrets, time, urllib.error, urllib.parse, urllib.request
+import http.client, json, os, secrets, time, urllib.error, urllib.parse, urllib.request
 
 from flask import g, jsonify, request
 
@@ -36,6 +36,8 @@ MAX_A = 1000
 MAX_ANSWER = 600
 MAX_TITLES = 12
 UNAVAILABLE = "AI search is unavailable right now, try again"
+FOUND = "Here's what I found."
+NOTHING = "I couldn't find anything for that."
 INVALID = "That conversation isn't valid; start a new question."
 
 
@@ -251,10 +253,132 @@ def tool_result_block(tool_use_id, result, err):
     return block
 
 
+def collect_title_ids(obj, seen):
+    """Add every title id in a tool result to `seen`: a dict with an integer id and a title key.
+    Copy dicts (id, kind, format, ...) carry no title and are skipped."""
+    if isinstance(obj, list):
+        for x in obj:
+            collect_title_ids(x, seen)
+    elif isinstance(obj, dict):
+        i = obj.get("id")
+        if isinstance(i, int) and not isinstance(i, bool) and "title" in obj:
+            seen.add(i)
+        for v in obj.values():
+            if isinstance(v, (dict, list)):
+                collect_title_ids(v, seen)
+
+
+def pick_ids(ids, seen):
+    """show_results ids -> (ids a tool returned in this request, coerced, deduplicated in order and capped at
+    MAX_TITLES; how many were dropped as invalid or unseen)."""
+    out, dropped = [], 0
+    for v in ids if isinstance(ids, list) else []:
+        i = _to_int(v)
+        if i is None or i not in seen:
+            dropped += 1
+        elif i not in out:
+            out.append(i)
+    return out[:MAX_TITLES], dropped
+
+
+class AskTimeout(Exception):
+    """The question's time budget ran out before a model call could start."""
+
+
+def call_model(body, deadline):
+    """One Messages API call within the time left; a 429 or 529 is retried once after 2 s."""
+    for attempt in (1, 2):
+        left = deadline - time.monotonic()
+        if left <= 0:
+            raise AskTimeout()
+        try:
+            return messages_api(body, SEARCH_KEY, min(CALL_TIMEOUT_S, left))
+        except ClaudeAPIError as e:
+            if attempt == 2 or e.status not in (429, 529):
+                raise
+            app.logger.warning("Ask: Claude API %s, retrying: %s", e.status, e.detail)
+            time.sleep(2)
+
+
+def run_tools(client, calls, seen):
+    """tool_use blocks -> one user message of tool_result blocks, in the same order. Title ids in successful
+    results are added to `seen`. AskUnavailable propagates."""
+    out = []
+    for b in calls:
+        result, err = run_tool(client, b.get("name"), b.get("input"))
+        if err is None:
+            collect_title_ids(result, seen)
+        out.append(tool_result_block(b.get("id"), result, err))
+    return {"role": "user", "content": out}
+
+
 def answer(messages):
-    """Stub until the tool loop lands (Task 5): (http_status, json_body)."""
-    g.ask_stats = {"rounds": 0, "input_tokens": 0, "output_tokens": 0, "status": "ok"}
-    return 200, {"answer": "", "items": [], "turns_left": 0}
+    """Run the tool loop (spec 5.7) for a validated thread: (http_status, json_body). Rounds, tokens and status
+    go to g.ask_stats for the route's log row. Items are only titles a tool returned in this request, read
+    back from the DB."""
+    st = g.ask_stats = {"rounds": 0, "input_tokens": 0, "output_tokens": 0, "status": "error"}
+    turns_left = MAX_QUESTIONS - sum(m["role"] == "user" for m in messages)
+    messages, tools, seen = list(messages), tool_defs(), set()
+    deadline = time.monotonic() + BUDGET_S
+
+    def done(text, items=(), dropped=0):
+        text = text.strip() or (FOUND if items else NOTHING)  # an empty answer would leave the thread stuck
+        st["status"] = "ok"
+        app.logger.info("Ask: %d rounds, %d/%d tokens, %d items, %d ids dropped", st["rounds"],
+                        st["input_tokens"], st["output_tokens"], len(items), dropped)
+        return 200, {"answer": text[:MAX_ANSWER], "items": list(items), "turns_left": turns_left}
+
+    def fail(status, msg, *args, exc=False):
+        st["status"] = status
+        (app.logger.exception if exc else app.logger.warning)("Ask failed (%s): " + msg, status, *args)
+        return 502, {"error": UNAVAILABLE}
+
+    def rounds():
+        client = LocalClient()
+        for rnd in range(1, MAX_ROUNDS + 1):
+            last = rnd == MAX_ROUNDS or st["input_tokens"] > INPUT_TOKEN_CEILING
+            body = {"model": SEARCH_MODEL, "max_tokens": MAX_TOKENS, "system": SYSTEM, "tools": tools,
+                    "tool_choice": {"type": "tool", "name": SHOW_RESULTS["name"]} if last else {"type": "auto"},
+                    "messages": messages}
+            data = call_model(body, deadline)
+            if not isinstance(data, dict) or not isinstance(data.get("content"), list):
+                return fail("api_error", "unexpected response shape (round %d): %s", rnd, type(data).__name__)
+            st["rounds"] = rnd
+            usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
+            for k in ("input_tokens", "output_tokens"):
+                n = usage.get(k)
+                st[k] += n if isinstance(n, int) and not isinstance(n, bool) and n > 0 else 0
+            blocks = [b for b in data["content"] if isinstance(b, dict)]
+            text = "".join(b["text"] for b in blocks if b.get("type") == "text" and isinstance(b.get("text"), str))
+            calls = [b for b in blocks if b.get("type") == "tool_use"]
+            shown = next((b for b in calls if b.get("name") == SHOW_RESULTS["name"]), None)
+            if shown is not None:  # other calls in this response are not run: their ids were never seen
+                args = shown.get("input") if isinstance(shown.get("input"), dict) else {}
+                ans = args.get("answer") if isinstance(args.get("answer"), str) else ""
+                ids, dropped = pick_ids(args.get("title_ids"), seen)
+                return done(ans.strip() or text, app_module.title_cards(db(), ids), dropped)
+            if not calls or last:
+                return done(text)
+            messages.append({"role": "assistant", "content": data["content"]})
+            messages.append(run_tools(client, calls, seen))
+        return done("")  # not reached: the last round always returns
+
+    try:
+        return rounds()
+    except AskUnavailable as e:
+        return fail("api_error", "%s", e)
+    except (AskTimeout, TimeoutError):
+        return fail("timeout", "no answer within the time limit")
+    except ClaudeAPIError as e:
+        return fail("api_error", "Claude API %s: %s", e.status, e.detail)
+    except urllib.error.URLError as e:
+        if isinstance(e.reason, TimeoutError):
+            return fail("timeout", "%s", e.reason)
+        return fail("api_error", "%s", e.reason)
+    except (OSError, ValueError, http.client.HTTPException):  # dropped, truncated or not JSON
+        return fail("api_error", "bad response", exc=True)
+    except Exception:  # a bug, or a shape nobody expected: a JSON 502 and a log row, not an HTML 500
+        return fail("error", "unexpected error", exc=True)
 
 
 def cross_site():
