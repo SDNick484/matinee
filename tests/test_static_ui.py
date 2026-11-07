@@ -238,7 +238,22 @@ def test_ask_header_button_gated_on_flag():
 
 def test_ask_fetches_me_once():
     assert JS.count('"/admin/api/me"') == 1
-    assert re.search(r"const meReady = isAdmin \? loadMe\(\)", JS)
+    assert re.search(r"const mePromise = isAdmin \? loadMe\(\)", JS)
+
+
+def test_me_does_not_block_first_paint_and_updates_header_late():
+    assert re.search(r"Promise\.race\(\[mePromise,[^\]]*setTimeout\(r, 2500\)", JS)
+    assert re.search(r"mePromise\.then\(.{0,60}updateHeader\(\)", JS, re.S)
+
+
+def test_ask_no_refocus_after_answer_and_retry_gated():
+    body = _fn_body("sendAsk")
+    assert "focus(" not in body
+    assert "[400, 403, 429].includes(st.errorStatus)" in _fn_body("askThreadHTML")
+
+
+def test_ask_q_has_scroll_margin():
+    assert "scroll-margin-top" in _rule(".ask-q")
 
 
 def test_ask_code_has_no_browser_storage():

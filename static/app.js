@@ -397,7 +397,15 @@
       state.me = null;
     }
   }
-  const meReady = isAdmin ? loadMe() : Promise.resolve();
+  // Do not let a slow /admin/api/me hold first paint: wait at most 2.5 s, then
+  // refresh the header once it lands so the Ask button still appears.
+  const mePromise = isAdmin ? loadMe() : Promise.resolve();
+  const meReady = isAdmin
+    ? Promise.race([mePromise, new Promise((r) => setTimeout(r, 2500))])
+    : mePromise;
+  mePromise.then(() => {
+    if (isAdmin) updateHeader();
+  });
 
   async function handleRoute() {
     closeModal();
@@ -3198,7 +3206,7 @@
     const err = st.error
       ? `<div class="ask-error" role="alert">
            <span>${icon("warn")} ${esc(st.error)}</span>
-           <button type="button" class="btn btn-sm btn-ghost" id="ask-retry">Retry</button>
+           ${[400, 403, 429].includes(st.errorStatus) ? "" : `<button type="button" class="btn btn-sm btn-ghost" id="ask-retry">Retry</button>`}
          </div>`
       : "";
     const empty = !st.thread.length && !busy
@@ -3246,6 +3254,7 @@
       return;
     }
     st.error = null;
+    st.errorStatus = null;
     st.busy = true;
     renderAskThread();
     try {
@@ -3257,13 +3266,13 @@
     } catch (err) {
       if (state.ask !== st) return;
       st.error = err.message || "AI search is unavailable right now, try again";
+      st.errorStatus = err.status || null;
     } finally {
       st.busy = false;
       if (state.ask === st && state.route.path === "/ask") {
         renderAskThread();
         const qs = document.querySelectorAll("#ask-thread .ask-q");
         qs[qs.length - 1]?.scrollIntoView({ block: "start", behavior: "smooth" });
-        if (!st.error) document.getElementById("ask-q")?.focus({ preventScroll: true });
       }
     }
   }

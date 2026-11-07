@@ -132,3 +132,17 @@ def test_ask_retry_resends_thread_and_public_404(server, browser):
     page.goto(f"{server}/#/ask")
     page.wait_for_selector("text=Page not found")
     assert page.locator("#btn-header-ask").count() == 0
+
+
+def test_ask_no_retry_on_429(server, browser):
+    page = browser.new_page(viewport={"width": 360, "height": 800})
+    page.route("**/admin/api/me", _fulfil(ME))
+    page.route("**/admin/api/ask", lambda r: r.fulfill(
+        status=429, content_type="application/json",
+        body=json.dumps({"error": "daily limit reached"})))
+    page.goto(f"{server}/admin#/ask")
+    page.fill("#ask-q", "anything")
+    page.press("#ask-q", "Enter")
+    page.wait_for_selector(".ask-error")
+    assert "limit" in page.inner_text(".ask-error")
+    assert page.locator("#ask-retry").count() == 0

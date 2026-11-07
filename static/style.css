@@ -2419,6 +2419,7 @@ main#view {
   padding: var(--s2) 0;
 }
 .ask-q {
+  scroll-margin-top: calc(var(--s3) * 2 + 40px);
   align-self: flex-end;
   max-width: 85%;
   padding: var(--s2) var(--s3);
