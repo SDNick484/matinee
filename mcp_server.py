@@ -8,6 +8,7 @@ Can operate in:
 """
 import inspect
 import json
+import logging
 import os
 import sqlite3
 import sys
@@ -39,6 +40,25 @@ def _readonly_kwargs(server_cls) -> Dict[str, Any]:
 
 
 _READONLY = _readonly_kwargs(FastMCP)
+
+try:
+    from mcp.server.mcpserver.exceptions import ToolError
+except ImportError:
+    try:
+        from mcp.server.fastmcp.exceptions import ToolError
+    except ImportError:
+        ToolError = Exception
+
+log = logging.getLogger("matinee.mcp")
+
+
+class MatineeError(RuntimeError, ToolError):
+    """Every Matinee failure. ToolError text reaches the model; RuntimeError keeps old callers working."""
+
+    def __init__(self, message: str, status: Optional[int] = None):
+        super().__init__(message)
+        self.status = status
+
 
 MATINEE_URL = os.environ.get("MATINEE_URL", "http://127.0.0.1:8769").rstrip("/")
 MATINEE_API_KEY = os.environ.get("MATINEE_API_KEY", "").strip()
@@ -100,15 +120,25 @@ class MatineeClient:
                 raw = resp.read()
                 return json.loads(raw) if raw else {"ok": True}
         except urllib.error.HTTPError as e:
-            err_body = e.read().decode("utf-8", errors="replace")
+            err_body = e.read().decode("utf-8", errors="replace")[:2000]
+            log.warning("Matinee %s %s -> HTTP %s", method, path.split("?")[0], e.code)
+            if e.code in (401, 403):
+                raise MatineeError(
+                    f"Matinee rejected the service's API key (HTTP {e.code}). Check MATINEE_API_KEY on CT 210."
+                ) from None
+            detail = ""
             try:
                 err_json = json.loads(err_body)
-                msg = err_json.get("error") or err_json.get("message") or err_body
-            except Exception:
-                msg = err_body
-            raise RuntimeError(f"Matinee API error ({e.code}): {msg}") from e
+                if isinstance(err_json, dict):
+                    detail = str(err_json.get("error") or err_json.get("message") or "")[:200]
+            except ValueError:
+                pass
+            raise MatineeError(
+                f"Matinee API error ({e.code})" + (f": {detail}" if detail else ""), status=e.code
+            ) from None
         except Exception as e:
-            raise RuntimeError(f"Failed to connect to Matinee at {self.api_url}: {e}") from e
+            log.warning("Matinee %s %s failed: %s", method, path.split("?")[0], type(e).__name__)
+            raise MatineeError("Matinee is unreachable right now. Try again in a minute.") from None
 
     # ------------------------------------------------------------------------ Reads
     def search_collection(
@@ -213,7 +243,7 @@ class MatineeClient:
             try:
                 t = con.execute("SELECT * FROM titles WHERE id=?", (title_id,)).fetchone()
                 if not t:
-                    raise RuntimeError(f"Movie with id {title_id} not found.")
+                    raise MatineeError(f"Movie with id {title_id} not found.")
                 copies = con.execute(
                     "SELECT id, kind, format, service, created_at FROM copies WHERE title_id=? ORDER BY created_at, id",
                     (title_id,),
@@ -247,7 +277,12 @@ class MatineeClient:
             finally:
                 con.close()
 
-        return self._api_request("GET", f"{self._read_prefix}/titles/{title_id}")
+        try:
+            return self._api_request("GET", f"{self._read_prefix}/titles/{title_id}")
+        except MatineeError as e:
+            if e.status == 404:
+                raise MatineeError(f"Movie with id {title_id} not found.") from None
+            raise
 
     def where_is(self, title: str) -> Dict[str, Any]:
         """Find where physical copies of a movie are stored or which digital services host it."""

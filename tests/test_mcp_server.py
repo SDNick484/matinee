@@ -369,3 +369,86 @@ def test_build_server_writes_false_lists_six_tools():
 def test_build_server_is_independent():
     mcp_server.build_server(writes=False)
     assert _names(mcp_server.mcp) == ALL_TOOLS
+
+
+# --------------------------------------------------------------- MatineeError messages
+import io
+import json as _json
+import socket
+import threading
+import time
+import urllib.error
+
+ERR_KEY = "test-matinee-api-key-0123456789"
+UNREACHABLE = "Matinee is unreachable right now. Try again in a minute."
+
+
+def _err_client():
+    return mcp_server.MatineeClient(api_url="http://127.0.0.1:8771", api_key=ERR_KEY, db_path="")
+
+
+def _http_error(code, body):
+    return urllib.error.HTTPError(
+        "http://127.0.0.1:8771/admin/api/titles", code, "x", {}, io.BytesIO(body.encode()))
+
+
+def _raising(exc):
+    def fake(req, timeout=None):
+        raise exc
+    return fake
+
+
+ERROR_CASES = {
+    "refused": (urllib.error.URLError(ConnectionRefusedError(111, "refused")), UNREACHABLE),
+    "timeout": (socket.timeout("timed out"), UNREACHABLE),
+    "401": (_http_error(401, '{"error":"unauthorized"}'),
+            "Matinee rejected the service's API key (HTTP 401). Check MATINEE_API_KEY on CT 210."),
+    "403": (_http_error(403, "<html>forbidden</html>"),
+            "Matinee rejected the service's API key (HTTP 403). Check MATINEE_API_KEY on CT 210."),
+    "500html": (_http_error(500, "<!DOCTYPE HTML><html>boom</html>"), "Matinee API error (500)"),
+    "500json": (_http_error(500, '{"error":"disk full"}'), "Matinee API error (500): disk full"),
+}
+
+
+@pytest.mark.parametrize("case", ERROR_CASES)
+def test_api_error_messages(monkeypatch, case):
+    exc, expected = ERROR_CASES[case]
+    monkeypatch.setattr(urllib.request, "urlopen", _raising(exc))
+    with pytest.raises(mcp_server.MatineeError) as ei:
+        _err_client()._api_request("GET", "/admin/api/titles")
+    assert str(ei.value) == expected
+    assert "<" not in str(ei.value)
+    assert "127.0.0.1" not in str(ei.value) and ERR_KEY not in str(ei.value)
+
+
+def test_hung_matinee_ends_in_unreachable_message(monkeypatch):
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(5)
+    held = []
+    threading.Thread(target=lambda: held.append(srv.accept()), daemon=True).start()
+    real = urllib.request.urlopen
+    monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout=None: real(req, timeout=0.2))
+    c = mcp_server.MatineeClient(api_url=f"http://127.0.0.1:{srv.getsockname()[1]}", api_key=ERR_KEY, db_path="")
+    t0 = time.time()
+    try:
+        with pytest.raises(mcp_server.MatineeError) as ei:
+            c._api_request("GET", "/admin/api/titles")
+    finally:
+        srv.close()
+    assert str(ei.value) == UNREACHABLE
+    assert time.time() - t0 < 2
+
+
+def test_matinee_error_is_runtimeerror_and_toolerror():
+    assert issubclass(mcp_server.MatineeError, RuntimeError)
+    assert issubclass(mcp_server.MatineeError, mcp_server.ToolError)
+    if mcp_server.ToolError is not Exception:
+        assert issubclass(mcp_server.MatineeError, mcp_server.ToolError)
+
+
+def test_rest_get_movie_404_says_not_found(monkeypatch):
+    monkeypatch.setattr(urllib.request, "urlopen", _raising(_http_error(404, '{"error":"not found"}')))
+    with pytest.raises(mcp_server.MatineeError) as ei:
+        _err_client().get_movie(99999)
+    assert str(ei.value) == "Movie with id 99999 not found."
