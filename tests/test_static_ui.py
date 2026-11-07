@@ -195,3 +195,117 @@ def test_movie_night_ignores_stale_responses():
     assert len(re.findall(r"if \(myToken !== pickToken\) return", JS)) >= 2
     # the guard sits before any render of a pick (after the await, before currentPick is set)
     assert JS.index("if (myToken !== pickToken) return") < JS.index("currentPick = res.results[0]")
+
+
+# --- AI search ("Ask") view ---------------------------------------------------
+
+def _ask_js():
+    m = re.search(r"// =+ Ask view\n(.*?)\n  // =+ ", JS, re.S)
+    assert m, "Ask view section not found in app.js"
+    return m.group(1)
+
+
+def _fn_body(name):
+    m = re.search(rf"function {name}\(.*?\n  \}}\n", JS, re.S)
+    assert m, f"function {name} not found"
+    return m.group(0)
+
+
+def _tokens():
+    return dict(re.findall(r"(--[\w-]+):\s*(#[0-9a-fA-F]{6})\b", _root_block()))
+
+
+def test_ask_route_is_parsed_and_admin_only():
+    assert re.search(r'segments\[0\] === "ask"', _fn_body("parseHash"))
+    route = _fn_body("handleRoute")
+    assert route.count("renderAsk(") == 1
+    m = re.search(r"if \(([^()]*)\)\s*\{[^{}]*renderAsk\(view\)", route)
+    assert m and "isAdmin" in m.group(1) and '"/ask"' in m.group(1), \
+        "renderAsk must only be called in an isAdmin branch"
+    assert "function renderAsk(container)" in JS
+    assert "function titleRowHTML(t)" in JS
+
+
+def test_ask_header_button_gated_on_flag():
+    header = _fn_body("updateHeader")
+    m = re.search(r"\$\{([^`]*?)\?\s*`\s*<a[^>]*id=\"btn-header-ask\"", header)
+    assert m, "Ask header button missing or not conditional"
+    assert "state.me" in m.group(1) and ".ask" in m.group(1)
+    assert header.index("btn-header-ask") < header.index("btn-header-movie-night")
+    assert '"/ask": "btn-header-ask"' in header
+    assert re.search(r"\bchat: '<", JS), "ICONS.chat missing"
+
+
+def test_ask_fetches_me_once():
+    assert JS.count('"/admin/api/me"') == 1
+    assert re.search(r"const mePromise = isAdmin \? loadMe\(\)", JS)
+
+
+def test_me_does_not_block_first_paint_and_updates_header_late():
+    assert re.search(r"Promise\.race\(\[mePromise,[^\]]*setTimeout\(r, 2500\)", JS)
+    assert re.search(r"mePromise\.then\(.{0,60}updateHeader\(\)", JS, re.S)
+
+
+def test_ask_no_refocus_after_answer_and_retry_gated():
+    body = _fn_body("sendAsk")
+    assert "focus(" not in body
+    assert "[400, 403, 429].includes(st.errorStatus)" in _fn_body("askThreadHTML")
+
+
+def test_ask_q_has_scroll_margin():
+    assert "scroll-margin-top" in _rule(".ask-q")
+
+
+def test_ask_code_has_no_browser_storage():
+    code = _ask_js() + _fn_body("titleRowHTML")
+    assert "localStorage" not in code and "sessionStorage" not in code
+
+
+def test_ask_answer_text_is_escaped():
+    code = _ask_js()
+    inserts = re.findall(r"\$\{([^{}]*\b(?:answer|\w+\.a)\b[^{}]*)\}", code)
+    assert inserts, "no answer insertion found"
+    for expr in inserts:
+        assert expr.strip().startswith("esc("), f"unescaped answer insertion: ${{{expr}}}"
+
+
+def test_ask_title_row_escapes_server_strings():
+    row = _fn_body("titleRowHTML")
+    for field in ("t.title", "c.location_path", "c.service"):
+        assert f"esc({field}" in row, f"{field} not escaped"
+    assert "onerror=\"this.onerror=null;this.parentElement.innerHTML" not in row
+    assert 'href="#/t/${' in row
+
+
+def test_ask_instead_link_in_no_matches():
+    grid = _fn_body("renderGridContent")
+    assert "Ask instead" in grid and "state.me && state.me.ask" in grid
+
+
+def test_ask_css_classes_defined():
+    for sel in (".ask-view", ".ask-thread", ".ask-q", ".ask-a", ".title-row",
+                ".title-row-thumb", ".title-row-loc", ".ask-input"):
+        assert re.search(r"(?m)^" + re.escape(sel) + r"\s*\{", CSS), f"{sel} missing"
+    assert "safe-area-inset-bottom" in _rule(".ask-input")
+    thumb = _rule(".title-row-thumb")
+    assert "width: 64px" in thumb and "height: 96px" in thumb
+
+
+def test_ask_input_hints():
+    m = re.search(r'<input[^>]*id="ask-q"[^>]*>', JS)
+    assert m
+    for attr in ('enterkeyhint="search"', 'maxlength="500"'):
+        assert attr in m.group(0)
+
+
+def test_title_row_text_passes_aa_on_card():
+    tok = _tokens()
+    rules = re.findall(r"(?m)^(\.title-row[\w-]*)\s*\{([^}]*)\}", CSS)
+    colors = []
+    for _sel, decl in rules:
+        for var in re.findall(r"(?<![-\w])color:\s*var\((--[\w-]+)\)", decl):
+            colors.append(var)
+    assert colors, "no text colors on .title-row rules"
+    for var in colors:
+        assert var in tok, f"{var} not a hex token"
+        assert _contrast(tok[var], "#16161c") >= 4.5, f"{var} fails AA on #16161c"

@@ -14,7 +14,8 @@ Editors: /admin            same UI with editing; put this path behind Cloudflare
 Health:  /healthz          {ok, titles, copies}
 
 Environment (see /etc/conf.d/matinee and .env.example):
-  PORT, DATA_DIR, CF_TEAM_DOMAIN, CF_AUD, ADMIN_EMAILS, LAN_EDIT, PUBLIC_VIEW, TMDB_READ_TOKEN, MATINEE_API_KEY
+  PORT, DATA_DIR, CF_TEAM_DOMAIN, CF_AUD, ADMIN_EMAILS, LAN_EDIT, PUBLIC_VIEW, TMDB_READ_TOKEN, MATINEE_API_KEY,
+  ANTHROPIC_SEARCH_KEY, ANTHROPIC_SEARCH_MODEL, ASK_DAILY_LIMIT
 """
 import datetime as dt, hashlib, hmac, json, os, re, sqlite3, sys, time, unicodedata
 import urllib.error, urllib.parse, urllib.request
@@ -158,7 +159,7 @@ CREATE TABLE IF NOT EXISTS omdb_ratings (
 );
 CREATE INDEX IF NOT EXISTS omdb_ratings_fetched ON omdb_ratings(fetched_at);
 """
-SCHEMA_VERSION = "7"
+SCHEMA_VERSION = "8"
 
 # Checked in the app (not the schema) so a new format or service needs no table rebuild.
 FORMATS = {"physical": ["4K UHD", "Blu-ray", "3D Blu-ray", "DVD", "VHS"],
@@ -317,6 +318,20 @@ def migrate(con):
     # v7: editor override for the US certification (survives TMDB refresh; not in TITLE_COLS)
     if "certification_override" not in title_cols:
         con.execute("ALTER TABLE titles ADD COLUMN certification_override TEXT")
+
+    # v8: Ask usage log (no question text)
+    con.executescript("""
+    CREATE TABLE IF NOT EXISTS ask_log (
+      id INTEGER PRIMARY KEY,
+      ts REAL NOT NULL,                 -- unix time
+      editor TEXT,                      -- g.editor: Access email or 'lan'
+      rounds INTEGER NOT NULL,
+      input_tokens INTEGER NOT NULL DEFAULT 0,
+      output_tokens INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL              -- ok | capped | api_error | timeout | error
+    );
+    CREATE INDEX IF NOT EXISTS ask_log_ts ON ask_log(ts);
+    """)
 
 
 def init_db():
@@ -1034,6 +1049,52 @@ QUALITY_MAP = {
 }
 
 
+CARD_SELECT = """SELECT t.id, t.title, t.year, COALESCE(t.custom_poster_file, t.poster_file) AS poster_file, t.fetched_at,
+              (SELECT MIN(c.created_at) FROM copies c WHERE c.title_id=t.id) AS added,
+              (SELECT group_concat(DISTINCT c.format) FROM copies c WHERE c.title_id=t.id) AS formats,
+              EXISTS (SELECT 1 FROM copies c WHERE c.title_id=t.id AND c.kind='physical') AS has_disc,
+              EXISTS (SELECT 1 FROM copies c WHERE c.title_id=t.id AND c.kind='digital') AS has_digital,
+              (SELECT rating FROM user_ratings r WHERE r.title_id=t.id) AS user_rating,
+              (SELECT MAX(watched_date) FROM watches w WHERE w.title_id=t.id) AS last_watched,
+              (SELECT count(*) FROM watches w WHERE w.title_id=t.id) AS watch_count
+            FROM titles t"""
+
+
+def _card(r):
+    """The grid card for one CARD_SELECT row."""
+    return {"id": r["id"], "title": r["title"], "year": r["year"],
+            "poster_url": image_url(r["poster_file"], r["fetched_at"]),
+            "poster_file": r["poster_file"],
+            "formats": sorted_formats((r["formats"] or "").split(",")) if r["formats"] else [],
+            "has_disc": bool(r["has_disc"]),
+            "has_digital": bool(r["has_digital"]),
+            "has_both": bool(r["has_disc"] and r["has_digital"]),
+            "added_on": (r["added"] or "")[:10] or None,
+            "user_rating": r["user_rating"],
+            "last_watched": r["last_watched"],
+            "watch_count": r["watch_count"]}
+
+
+def title_cards(con, ids):
+    """Grid cards plus copies for the owned titles in `ids`, in the given order.
+    Unknown and unowned ids are skipped; de-duplicating `ids` is the caller's job."""
+    ids = list(ids)
+    if not ids:
+        return []
+    q = ",".join("?" * len(ids))
+    rows = {r["id"]: r for r in con.execute(
+        f"{CARD_SELECT} WHERE t.id IN ({q}) AND EXISTS (SELECT 1 FROM copies c WHERE c.title_id=t.id)", ids)}
+    paths = get_location_path_map(con)
+    copies = {}
+    for cp in con.execute(
+            f"SELECT title_id, kind, format, service, location_id FROM copies WHERE title_id IN ({q}) "
+            "ORDER BY created_at, id", ids):
+        copies.setdefault(cp["title_id"], []).append(
+            {"kind": cp["kind"], "format": cp["format"], "service": cp["service"],
+             "location_path": paths.get(cp["location_id"])})
+    return [dict(_card(rows[i]), copies=copies.get(i, [])) for i in ids if i in rows]
+
+
 def list_titles(private):
     a = request.args
     where, args = ["EXISTS (SELECT 1 FROM copies c WHERE c.title_id=t.id)"], []
@@ -1134,26 +1195,8 @@ def list_titles(private):
 
     sort = a.get("sort") if a.get("sort") in SORTS else "title"
     rows = db().execute(
-        f"""SELECT t.id, t.title, t.year, COALESCE(t.custom_poster_file, t.poster_file) AS poster_file, t.fetched_at,
-              (SELECT MIN(c.created_at) FROM copies c WHERE c.title_id=t.id) AS added,
-              (SELECT group_concat(DISTINCT c.format) FROM copies c WHERE c.title_id=t.id) AS formats,
-              EXISTS (SELECT 1 FROM copies c WHERE c.title_id=t.id AND c.kind='physical') AS has_disc,
-              EXISTS (SELECT 1 FROM copies c WHERE c.title_id=t.id AND c.kind='digital') AS has_digital,
-              (SELECT rating FROM user_ratings r WHERE r.title_id=t.id) AS user_rating,
-              (SELECT MAX(watched_date) FROM watches w WHERE w.title_id=t.id) AS last_watched,
-              (SELECT count(*) FROM watches w WHERE w.title_id=t.id) AS watch_count
-            FROM titles t WHERE {' AND '.join(where)} ORDER BY {SORTS[sort]}""", args).fetchall()
-    titles = [{"id": r["id"], "title": r["title"], "year": r["year"],
-               "poster_url": image_url(r["poster_file"], r["fetched_at"]),
-               "poster_file": r["poster_file"],
-               "formats": sorted_formats((r["formats"] or "").split(",")) if r["formats"] else [],
-               "has_disc": bool(r["has_disc"]),
-               "has_digital": bool(r["has_digital"]),
-               "has_both": bool(r["has_disc"] and r["has_digital"]),
-               "added_on": (r["added"] or "")[:10] or None,
-               "user_rating": r["user_rating"],
-               "last_watched": r["last_watched"],
-               "watch_count": r["watch_count"]} for r in rows]
+        f"""{CARD_SELECT} WHERE {' AND '.join(where)} ORDER BY {SORTS[sort]}""", args).fetchall()
+    titles = [_card(r) for r in rows]
     return jsonify(titles=titles, count=len(titles), sort=sort)
 
 
@@ -1319,7 +1362,8 @@ def me_public():
 @app.get("/admin/api/me")
 @editor_required
 def me():
-    return jsonify(editor=True, email=g.editor, tmdb=bool(TMDB_READ_TOKEN))
+    import ask
+    return jsonify(editor=True, email=g.editor, tmdb=bool(TMDB_READ_TOKEN), ask=ask.enabled())
 
 
 # ============================================================================ writes
@@ -1910,7 +1954,9 @@ def delete_title(title_id):
     return jsonify(ok=True)
 
 
-init_db()
-
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8769)), debug=False)
+    import app as _real  # import as a module so ask.py registers onto the same app
+    _real.app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8769)), debug=False)
+else:
+    import ask  # noqa: E402,F401 -- AI search
+    init_db()

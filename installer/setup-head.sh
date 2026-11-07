@@ -90,6 +90,9 @@ add_setting "$CONF" PUBLIC_VIEW 1 "1 = anyone can browse the collection at /; 0 
 add_setting "$CONF" TMDB_READ_TOKEN "" "TMDB API Read Access Token (themoviedb.org -> Settings -> API); adding movies needs it"
 add_setting "$CONF" OMDB_API_KEY "" "Optional OMDb API key (omdbapi.com/apikey.aspx) for IMDb, Rotten Tomatoes & Metacritic scores"
 add_setting "$CONF" MATINEE_API_KEY "" "Optional API key for headless automation and MCP server (Authorization: Bearer <key>)"
+add_setting "$CONF" ANTHROPIC_SEARCH_KEY "" "Anthropic API key for Ask (AI search); empty = Ask is off"
+add_setting "$CONF" ANTHROPIC_SEARCH_MODEL "claude-haiku-5-5" "Model Ask uses"
+add_setting "$CONF" ASK_DAILY_LIMIT "200" "Ask questions per day across all editors"
 # Remote MCP (matinee-mcp). MCP_HTTP_BIND must be this host's LAN address because cloudflared runs in Docker.
 add_setting "$CONF" MATINEE_MCP_READONLY 1 "1 = the Claude app can only read; 0 = it may also rate, log watches and add titles"
 add_setting "$CONF" MCP_HTTP_BIND "$IP" "Address matinee-mcp listens on (cloudflared reaches it here)"
@@ -140,7 +143,7 @@ description="Matinee movie collection"
 : ${PORT:=8769}
 : ${DATA_DIR:=/var/lib/matinee}
 export HOME=/var/lib/matinee  # newer gunicorn keeps a small control socket under $HOME
-export PORT DATA_DIR CF_TEAM_DOMAIN CF_AUD ADMIN_EMAILS LAN_EDIT PUBLIC_VIEW TMDB_READ_TOKEN MATINEE_API_KEY OMDB_API_KEY
+export PORT DATA_DIR CF_TEAM_DOMAIN CF_AUD ADMIN_EMAILS LAN_EDIT PUBLIC_VIEW TMDB_READ_TOKEN MATINEE_API_KEY OMDB_API_KEY ANTHROPIC_SEARCH_KEY ANTHROPIC_SEARCH_MODEL ASK_DAILY_LIMIT
 supervisor="supervise-daemon"
 respawn_delay=5
 respawn_max=10

@@ -918,13 +918,13 @@ def test_migration_v7_idempotent(tmp_path, monkeypatch):
     row = con.execute("SELECT certification, certification_override FROM titles").fetchone()
     assert (row[0], row[1]) == ("PG", None)
     con.close()
-    # fresh DB: column present once, schema stamped 7
+    # fresh DB: column present once, schema stamped with the current version
     monkeypatch.setattr(matinee, "DB_PATH", tmp_path / "fresh.db")
     matinee.init_db()
     con = matinee.connect()
     cols = [r[1] for r in con.execute("PRAGMA table_info(titles)")]
     assert cols.count("certification_override") == 1
-    assert con.execute("SELECT v FROM meta WHERE k='schema'").fetchone()[0] == "7"
+    assert con.execute("SELECT v FROM meta WHERE k='schema'").fetchone()[0] == matinee.SCHEMA_VERSION
     con.close()
 
 
@@ -975,3 +975,64 @@ def test_certification_override_validation(monkeypatch):
     monkeypatch.setattr(matinee, "LAN_EDIT", False)
     # the app's editor_required answers 401 (not 403) with no identity
     assert c.put(url, json={"certification": "G"}).status_code == 401
+
+
+# ------------------------------------------------------------------- Ask: schema v8 and title_cards
+CARD_KEYS = {"id", "title", "year", "poster_url", "poster_file", "formats", "has_disc", "has_digital",
+             "has_both", "added_on", "user_rating", "last_watched", "watch_count"}
+
+
+def test_schema_v8_ask_log_idempotent():
+    matinee.init_db()
+    con = matinee.connect()
+    assert con.execute("SELECT v FROM meta WHERE k='schema'").fetchone()[0] == "8"
+    cols = [r[1] for r in con.execute("PRAGMA table_info(ask_log)")]
+    assert cols == ["id", "ts", "editor", "rounds", "input_tokens", "output_tokens", "status"]
+    matinee.migrate(con)
+    matinee.migrate(con)
+    # a v7 database (no ask_log) gains it
+    con.execute("DROP TABLE ask_log")
+    con.execute("INSERT OR REPLACE INTO meta VALUES ('schema', '7')")
+    con.commit()
+    matinee.migrate(con)
+    assert [r[1] for r in con.execute("PRAGMA table_info(ask_log)")] == cols
+    assert con.execute("SELECT 1 FROM sqlite_master WHERE name='ask_log_ts'").fetchone()
+    con.execute("INSERT OR REPLACE INTO meta VALUES ('schema', '8')")
+    con.commit()
+    con.close()
+
+
+def test_list_titles_unchanged_after_card_extraction():
+    add(155)
+    assert set(grid()[0]) == CARD_KEYS
+
+
+def test_title_cards_order_and_copies():
+    t155 = add(155)["id"]
+    t_io = add(150540, kind="digital", fmt="Digital HD", service="Movies Anywhere")["id"]
+    con = matinee.connect()
+    fr = con.execute("INSERT INTO locations (parent_id, name) VALUES (NULL, 'Family Room')").lastrowid
+    mc = con.execute("INSERT INTO locations (parent_id, name) VALUES (?, 'Media Cabinet')", (fr,)).lastrowid
+    sh = con.execute("INSERT INTO locations (parent_id, name) VALUES (?, 'Shelf 1')", (mc,)).lastrowid
+    con.execute("UPDATE copies SET location_id=? WHERE title_id=?", (sh, t155))
+    con.commit()
+    cards = matinee.title_cards(con, [t_io, t155, 999999])
+    assert [x["title"] for x in cards] == ["Inside Out", "The Dark Knight"]
+    assert cards[1]["copies"] == [{"kind": "physical", "format": "Blu-ray", "service": None,
+                                   "location_path": "Family Room › Media Cabinet › Shelf 1"}]
+    assert cards[0]["copies"] == [{"kind": "digital", "format": "Digital HD", "service": "Movies Anywhere",
+                                   "location_path": None}]
+    rows = {r["id"]: r for r in c.get("/admin/api/titles").get_json()["titles"]}
+    for card in cards:
+        assert {k: v for k, v in card.items() if k != "copies"} == rows[card["id"]]
+    assert matinee.title_cards(con, []) == []
+    con.close()
+
+
+def test_title_cards_skips_unowned():
+    tid = add(155)["id"]
+    con = matinee.connect()
+    con.execute("DELETE FROM copies WHERE title_id=?", (tid,))
+    con.commit()
+    assert matinee.title_cards(con, [tid]) == []
+    con.close()

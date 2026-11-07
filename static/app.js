@@ -1,6 +1,6 @@
 /**
  * Matinee — phone-first family movie collection browser & catalog manager.
- * Vanilla JS with hash routing: #/, #/t/<id>, #/add, #/about.
+ * Vanilla JS with hash routing: #/, #/t/<id>, #/add, #/about, #/ask (admin).
  */
 (() => {
   "use strict";
@@ -55,6 +55,11 @@
       selectedMovie: null,
       ownedInfo: null,
     },
+    // GET /admin/api/me, fetched once on admin load; null = unknown/failed (no Ask entry points).
+    me: null,
+    // AI search thread, JS memory only (a reload clears it). thread alternates {q}/{a};
+    // results[k] holds the hydrated rows for the k-th answer.
+    ask: { thread: [], results: [], draft: "", busy: false, error: null, turnsLeft: null },
   };
 
   // ================================================================= Helpers
@@ -177,6 +182,8 @@
     image: '<rect x="3.5" y="4" width="17" height="16" rx="2"/><circle cx="9" cy="9.5" r="1.7"/><path d="m20.5 15.5-5-5-10 9.5"/>',
     undo: '<path d="M4 9.5h10.5a5 5 0 0 1 0 10H8"/><path d="m7.5 6-3.5 3.5L7.5 13"/>',
     dot: '<circle cx="12" cy="12" r="6.5" fill="currentColor" stroke="none"/>',
+    chat: '<path d="M5 4.5h14A1.5 1.5 0 0 1 20.5 6v9a1.5 1.5 0 0 1-1.5 1.5h-8.5L6 20v-3.5H5A1.5 1.5 0 0 1 3.5 15V6A1.5 1.5 0 0 1 5 4.5z"/>',
+    send: '<path d="M4 12 20.5 4 16 20.5l-4-6.5z"/><path d="m12 14 8.5-10"/>',
   };
 
   function icon(name, cls = "") {
@@ -276,6 +283,9 @@
     if (segments[0] === "stats") {
       return { path: "/stats", params: {}, query };
     }
+    if (segments[0] === "ask") {
+      return { path: "/ask", params: {}, query };
+    }
 
     return { path: "/404", params: {}, query };
   }
@@ -290,6 +300,9 @@
 
     if (isAdmin) {
       nav.innerHTML = `
+        ${state.me && state.me.ask ? `<a href="#/ask" class="btn btn-sm btn-ghost" id="btn-header-ask" title="Ask about the collection">
+          ${icon("chat")} Ask
+        </a>` : ""}
         <button type="button" class="btn btn-sm btn-ghost" id="btn-header-movie-night" title="Movie Night Picker">
           ${icon("dice")} Movie Night
         </button>
@@ -324,7 +337,7 @@
     document.getElementById("btn-header-locations")?.addEventListener("click", () => openLocationsManagerModal());
 
     // Header admin bar is a swipeable row on phones; mark and reveal the current page's button.
-    const activeId = { "/stats": "btn-header-stats", "/add": "btn-header-add" }[state.route?.path];
+    const activeId = { "/ask": "btn-header-ask", "/stats": "btn-header-stats", "/add": "btn-header-add" }[state.route?.path];
     const activeBtn = activeId ? document.getElementById(activeId) : null;
     if (activeBtn) activeBtn.setAttribute("aria-current", "page");
     bindScrollRow(nav, activeBtn);
@@ -374,11 +387,32 @@
     location.hash = hash;
   }
 
+  // Editor capabilities (e.g. the Ask flag). Plain fetch, not api(): a 401 here
+  // just means "no Ask entry points", not a sign-in-expired toast.
+  async function loadMe() {
+    try {
+      const res = await fetch("/admin/api/me", { headers: { Accept: "application/json" } });
+      state.me = res.ok ? await res.json() : null;
+    } catch {
+      state.me = null;
+    }
+  }
+  // Do not let a slow /admin/api/me hold first paint: wait at most 2.5 s, then
+  // refresh the header once it lands so the Ask button still appears.
+  const mePromise = isAdmin ? loadMe() : Promise.resolve();
+  const meReady = isAdmin
+    ? Promise.race([mePromise, new Promise((r) => setTimeout(r, 2500))])
+    : mePromise;
+  mePromise.then(() => {
+    if (isAdmin) updateHeader();
+  });
+
   async function handleRoute() {
     closeModal();
     stopBarcodeScanner();
     const prevRoute = state.route;
     state.route = parseHash(location.hash);
+    await meReady;
     updateHeader();
 
     const view = document.getElementById("view");
@@ -410,6 +444,9 @@
         state.grid.scrollY = window.scrollY;
       }
       renderAbout(view);
+    } else if (state.route.path === "/ask" && isAdmin) {
+      if (prevRoute.path === "/") state.grid.scrollY = window.scrollY;
+      renderAsk(view);
     } else {
       renderNotFound(view);
     }
@@ -957,8 +994,16 @@
                 ? `<a href="#/add?q=${encodeURIComponent(q)}" class="btn">Search TMDB to add it</a>`
                 : ""
             }
+            ${
+              isAdmin && state.me && state.me.ask
+                ? `<a href="#/ask" class="btn btn-ghost" id="btn-ask-instead">Ask instead →</a>`
+                : ""
+            }
           </div>
         `;
+        document.getElementById("btn-ask-instead")?.addEventListener("click", () => {
+          state.ask.draft = q; // prefilled, not sent
+        });
       } else if (hasFilters) {
         el.innerHTML = `
           <div class="empty-state">
@@ -3104,6 +3149,159 @@
         <a href="#/" class="btn">Back to collection</a>
       </div>
     `;
+  }
+
+  // ================================================================= Ask view
+  // #/ask (admin only): a short thread with Claude over the collection. The
+  // server hydrates every row from the database; the answer is plain text and
+  // always goes through esc(). State lives in JS memory only (state.ask).
+  const ASK_MAX_QUESTIONS = 5; // mirrors ask.MAX_QUESTIONS
+
+  function titleRowHTML(t) {
+    const id = encodeURIComponent(t.id);
+    const src = t.poster_url || (t.poster_file ? `/images/${encodeURIComponent(t.poster_file)}` : "");
+    // Placeholder sits under the image; a failed image just removes itself (no text in the handler).
+    const thumb = `
+      <span class="title-row-thumb">
+        <span class="poster-ph" aria-hidden="true">${esc(t.title)}</span>
+        ${src ? `<img src="${esc(src)}" alt="" loading="lazy" onerror="this.remove()">` : ""}
+      </span>`;
+    const chips = (t.formats || [])
+      .map((fmt) => `<span class="chip ${getChipClass(fmt)}">${getChipIcon(fmt)}${esc(fmt)}</span>`)
+      .join("");
+    const locs = (t.copies || [])
+      .map((c) =>
+        c.kind === "digital"
+          ? `<span class="title-row-loc">${icon("cloud")}<span>${esc(c.service || "Digital")}</span></span>`
+          : `<span class="title-row-loc">${icon("pin")}<span>${esc(c.location_path || "Unassigned shelf")}</span></span>`
+      )
+      .join("");
+    const year = t.year ? ` · ${esc(t.year)}` : "";
+    return `
+      <a class="title-row" href="#/t/${id}">
+        ${thumb}
+        <span class="title-row-main">
+          <span class="title-row-title">${esc(t.title)}${year}</span>
+          ${chips ? `<span class="chips">${chips}</span>` : ""}
+          ${locs}
+        </span>
+      </a>`;
+  }
+
+  function askThreadHTML() {
+    const st = state.ask;
+    let k = 0;
+    const turns = st.thread
+      .map((turn) => {
+        if ("q" in turn) return `<div class="ask-q">${esc(turn.q)}</div>`;
+        const rows = st.results[k++] || [];
+        return `
+          <div class="ask-turn">
+            <p class="ask-a">${esc(turn.a)}</p>
+            ${rows.map(titleRowHTML).join("")}
+          </div>`;
+      })
+      .join("");
+    const busy = st.busy ? `<div class="ask-status" role="status">Thinking…</div>` : "";
+    const err = st.error
+      ? `<div class="ask-error" role="alert">
+           <span>${icon("warn")} ${esc(st.error)}</span>
+           ${[400, 403, 429].includes(st.errorStatus) ? "" : `<button type="button" class="btn btn-sm btn-ghost" id="ask-retry">Retry</button>`}
+         </div>`
+      : "";
+    const empty = !st.thread.length && !busy
+      ? `<div class="ask-hint">Ask about the collection: “where's The Dark Knight 4K?”, “something under 100 minutes the girls haven't seen, on disc”.</div>`
+      : "";
+    return empty + turns + busy + err;
+  }
+
+  function renderAskThread() {
+    const st = state.ask;
+    const thread = document.getElementById("ask-thread");
+    const input = document.getElementById("ask-q");
+    const send = document.getElementById("ask-send");
+    const meta = document.getElementById("ask-meta");
+    if (!thread || !input || !send || !meta) return;
+    thread.innerHTML = askThreadHTML();
+    const left = st.turnsLeft == null ? ASK_MAX_QUESTIONS : st.turnsLeft;
+    const done = left <= 0 && !st.error;
+    input.disabled = st.busy || done;
+    send.disabled = st.busy || done;
+    input.placeholder = done ? "Start a new question to keep going" : "Ask about the collection…";
+    meta.innerHTML = `<button type="button" class="ask-new" id="ask-new"${st.busy ? " disabled" : ""}>New question</button> · ${left} left`;
+    document.getElementById("ask-retry")?.addEventListener("click", () => sendAsk(true));
+    document.getElementById("ask-new")?.addEventListener("click", () => {
+      state.ask = { thread: [], results: [], draft: "", busy: false, error: null, turnsLeft: null };
+      input.value = "";
+      renderAskThread();
+      input.focus();
+    });
+  }
+
+  async function sendAsk(retry = false) {
+    const st = state.ask;
+    if (st.busy) return;
+    const last = st.thread[st.thread.length - 1];
+    if (!retry) {
+      const q = (st.draft || "").trim();
+      if (!q) return;
+      if (last && "q" in last) st.thread.pop(); // replace a failed, unanswered question
+      st.thread.push({ q });
+      st.draft = "";
+      const input = document.getElementById("ask-q");
+      if (input) input.value = "";
+    } else if (!last || !("q" in last)) {
+      return;
+    }
+    st.error = null;
+    st.errorStatus = null;
+    st.busy = true;
+    renderAskThread();
+    try {
+      const res = await api("/admin/api/ask", { method: "POST", body: { thread: st.thread } });
+      if (state.ask !== st) return; // "New question" pressed meanwhile
+      st.thread.push({ a: String(res.answer || "").slice(0, 1000) || "No answer." });
+      st.results.push(Array.isArray(res.items) ? res.items : []);
+      if (typeof res.turns_left === "number") st.turnsLeft = res.turns_left;
+    } catch (err) {
+      if (state.ask !== st) return;
+      st.error = err.message || "AI search is unavailable right now, try again";
+      st.errorStatus = err.status || null;
+    } finally {
+      st.busy = false;
+      if (state.ask === st && state.route.path === "/ask") {
+        renderAskThread();
+        const qs = document.querySelectorAll("#ask-thread .ask-q");
+        qs[qs.length - 1]?.scrollIntoView({ block: "start", behavior: "smooth" });
+      }
+    }
+  }
+
+  function renderAsk(container) {
+    container.innerHTML = `
+      <section class="ask-view">
+        <h1 class="ask-title">${icon("chat")} Ask</h1>
+        <div class="ask-thread" id="ask-thread" aria-live="polite"></div>
+        <form class="ask-input" id="ask-form" autocomplete="off">
+          <div class="ask-input-row">
+            <input type="text" id="ask-q" class="search-input" enterkeyhint="search" maxlength="500" aria-label="Ask about the collection" autocorrect="on" spellcheck="true" value="${esc(state.ask.draft)}">
+            <button type="submit" class="btn" id="ask-send" aria-label="Send">${icon("send")}</button>
+          </div>
+          <div class="ask-meta" id="ask-meta"></div>
+        </form>
+      </section>
+    `;
+    const input = document.getElementById("ask-q");
+    input.addEventListener("input", () => {
+      state.ask.draft = input.value;
+    });
+    document.getElementById("ask-form").addEventListener("submit", (e) => {
+      e.preventDefault();
+      state.ask.draft = input.value;
+      sendAsk(false);
+    });
+    renderAskThread();
+    if (!state.ask.thread.length) input.focus({ preventScroll: true });
   }
 
   // ================================================================= Movie Night Modal

@@ -36,6 +36,8 @@ The MCP server runs locally on your workstation and communicates with Matinee ov
 ### Mode B: Direct SQLite Read Acceleration (Co-located / Local Host)
 When the MCP server runs on the same machine/container as Matinee, setting `MATINEE_DB_PATH` accelerates catalog queries and statistics by reading directly from SQLite in read-only mode, while routing writes through `MATINEE_URL`.
 
+Direct SQLite mode now matches REST behaviour in three places: `search_collection` matches every word of the query independently, accent-insensitively and with LIKE wildcards escaped ("knight dark" and "amelie" both find their films); `get_movie` copies carry `location_id` and a `location_path` breadcrumb such as `Family Room › Shelf 1`; and `where_is` returns the matched title's `id` when `found` is true, in both modes.
+
 ---
 
 ## 3. Client Configuration
