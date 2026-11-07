@@ -120,3 +120,28 @@ def test_health_checks_added_once_and_matinee_does_not_hide_matinee_mcp(tmp_path
     text = ops.read_text()
     assert text.count("|matinee-mcp") == 1 and text.count("8771/healthz|matinee") == 1
     subprocess.run(["sh", "-n", str(ops)], check=True)
+
+
+# ------------------------------------------------------------------ docs
+NEW_KEYS = ["MATINEE_MCP_READONLY", "MCP_HTTP_PORT", "MCP_HTTP_BIND", "MCP_HTTP_PATH", "MCP_PUBLIC_HOSTS",
+            "CF_ACCESS_TEAM_DOMAIN", "CF_ACCESS_AUD", "MCP_ALLOWED_EMAILS"]
+
+
+@pytest.mark.parametrize("key", NEW_KEYS)
+def test_env_example_documents_new_settings(key):
+    lines = (ROOT / ".env.example").read_text(encoding="utf-8").splitlines()
+    i = next((n for n, l in enumerate(lines) if l.startswith(f"{key}=")), None)
+    assert i is not None, f"{key} missing from .env.example"
+    assert lines[i - 1].startswith("# "), f"{key} needs a comment line above it"
+
+
+def test_mcp_setup_mentions_remote():
+    text = (ROOT / "docs" / "mcp-setup.md").read_text(encoding="utf-8")
+    for needle in ("https://mcp.nickandrade.com/matinee/mcp", "^/matinee/", "http://192.168.1.174:8719",
+                   "MATINEE_MCP_READONLY", "rc-service matinee-mcp restart"):
+        assert needle in text, needle
+    assert ":8769" not in text
+
+
+def test_readme_points_to_remote_setup():
+    assert "Remote access from the Claude app" in (ROOT / "README.md").read_text(encoding="utf-8")
