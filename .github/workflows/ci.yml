@@ -63,9 +63,9 @@ jobs:
             bash \
             tar
 
-      - name: Install FastMCP for Python
+      - name: Install FastMCP and the HTTP MCP stack for Python
         run: |
-          python3 -m pip install --no-cache-dir --break-system-packages mcp
+          python3 -m pip install --no-cache-dir --break-system-packages "mcp>=2.3,<3" "uvicorn>=0.31" "pyjwt[crypto]>=2.10" anyio httpx
 
       - name: Run pytest under Alpine (musl libc + apk packages)
         run: |
