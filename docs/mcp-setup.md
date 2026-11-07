@@ -128,7 +128,7 @@ The installer adds any missing key and never overwrites one you edited. The file
 | `MCP_HTTP_PORT` | `8719` | Port. |
 | `MCP_HTTP_PATH` | `/matinee/mcp` | Endpoint path. The tunnel does not strip the prefix. |
 | `MCP_PUBLIC_HOSTS` | *(required)* | `mcp.nickandrade.com`. Without it requests through the tunnel get HTTP 421. |
-| `CF_ACCESS_TEAM_DOMAIN` | *(empty: uses `CF_TEAM_DOMAIN`)* | Access team domain. |
+| `CF_TEAM_DOMAIN` | *(already set for `/admin`)* | Access team domain, shared with the web app. `matinee-mcp` copies it into `CF_ACCESS_TEAM_DOMAIN`, the name the shared `mcp_remote.py` reads; set that only to override. |
 | `CF_ACCESS_AUD` | *(required)* | AUD tag of the Access application for `mcp.nickandrade.com`. This is **not** `CF_AUD` (the `/admin` app). |
 | `MCP_ALLOWED_EMAILS` | *(empty)* | Second gate: only these Access emails may call tools. A token with no email claim is refused when this is set. |
 | `MATINEE_API_KEY` | *(required)* | Already used by section 1. The service reads Matinee through `/admin/api` with it and refuses to start when it is empty. |

@@ -220,6 +220,16 @@ def call_tool(client, tok, sid, name, args, id_=3):
 
 
 # ------------------------------------------------------------------ tests
+@pytest.mark.parametrize("team", [TEAM, f"https://{TEAM}/"])
+def test_team_domain_falls_back_to_cf_team_domain(env, team):
+    import mcp_http
+    env = {k: v for k, v in env.items() if k != "CF_ACCESS_TEAM_DOMAIN"}
+    env["CF_TEAM_DOMAIN"] = team
+    assert mcp_http._http_config(env).access.team_domain == TEAM
+    env["CF_ACCESS_TEAM_DOMAIN"] = ""          # an old empty line in /etc/conf.d/matinee
+    assert mcp_http._http_config(env).access.team_domain == TEAM
+
+
 @pytest.mark.parametrize("value,expected", [
     (None, True), ("", True), ("1", True), ("true", True), ("garbage", True), (" yes ", True),
     ("0", False), ("false", False), ("No", False), (" off ", False),
