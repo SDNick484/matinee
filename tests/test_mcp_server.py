@@ -452,3 +452,63 @@ def test_rest_get_movie_404_says_not_found(monkeypatch):
     with pytest.raises(mcp_server.MatineeError) as ei:
         _err_client().get_movie(99999)
     assert str(ei.value) == "Movie with id 99999 not found."
+
+
+# --------------------------------------------------------------- REST where_is parity
+def _where_client(monkeypatch, search_results, details=None):
+    seen = []
+
+    def fake(method, path, data=None):
+        seen.append(path)
+        if "/titles?" in path:
+            return {"titles": search_results}
+        tid = int(path.rsplit("/", 1)[1])
+        return (details or {}).get(tid) or {
+            "id": tid, "title": next(t["title"] for t in search_results if t["id"] == tid),
+            "year": 2000, "copies": [{"id": 1, "kind": "physical", "format": "Blu-ray",
+                                       "location_path": "Family Room › Media Cabinet › Shelf 2"}]}
+
+    c = mcp_server.MatineeClient(api_url="http://x", api_key="k", db_path="")
+    monkeypatch.setattr(c, "_api_request", fake)
+    return c, seen
+
+
+def test_rest_where_is_prefers_exact_title(monkeypatch):
+    c, seen = _where_client(monkeypatch, [
+        {"id": 5, "title": "Super 8"}, {"id": 9, "title": "Up"}, {"id": 11, "title": "Upstream Color"}])
+    assert c.where_is("Up")["title"] == "Up"
+    assert seen[-1].endswith("/titles/9")
+
+
+def test_rest_where_is_falls_back_to_shortest_title(monkeypatch):
+    c, seen = _where_client(monkeypatch, [
+        {"id": 3, "title": "Paddington in Peru"}, {"id": 4, "title": "Paddington 2"}])
+    assert c.where_is("Paddington")["title"] == "Paddington 2"
+
+
+def test_rest_where_is_requests_limit_50(monkeypatch):
+    c, seen = _where_client(monkeypatch, [{"id": 9, "title": "Up"}])
+    c.where_is("Up")
+    assert "limit=50" in seen[0]
+
+
+@pytest.mark.parametrize("title,enc", [("WALL·E", "WALL%C2%B7E"), ("Amélie", "Am%C3%A9lie")])
+def test_rest_where_is_encodes_non_ascii(monkeypatch, title, enc):
+    c, seen = _where_client(monkeypatch, [{"id": 7, "title": title}])
+    out = c.where_is(title)
+    assert enc in seen[0]
+    assert out["found"] is True
+
+
+def test_rest_matches_sqlite_branch_for_up(test_env, monkeypatch):
+    import app as _app
+    c = _app.db()
+    for tid, name in ((50, "Super 8"), (51, "Up")):
+        c.execute("INSERT INTO titles (id, tmdb_id, title, sort_title, search_text, year, fetched_at) "
+                  "VALUES (?,?,?,?,?,?, '2026-01-01')", (tid, 900 + tid, name, name, name.lower(), 2009))
+        c.execute("INSERT INTO copies (title_id, kind, format) VALUES (?, 'physical', 'Blu-ray')", (tid,))
+    c.commit()
+    direct = mcp_server.MatineeClient(db_path=str(test_env)).where_is("Up")
+    assert direct["title"] == "Up"
+    rest, _ = _where_client(monkeypatch, [{"id": 50, "title": "Super 8"}, {"id": 51, "title": "Up"}])
+    assert rest.where_is("Up")["title"] == direct["title"]

@@ -365,7 +365,7 @@ class MatineeClient:
                 con.close()
 
         # REST mode
-        results = self.search_collection(query=title, limit=5)
+        results = self.search_collection(query=title, limit=50)
         if not results:
             return {
                 "found": False,
@@ -374,7 +374,12 @@ class MatineeClient:
                 "copies": [],
                 "summary": f"'{title}' is not currently in the collection.",
             }
-        movie = self.get_movie(results[0]["id"])
+        # Mirror the SQLite branch: exact title first, else the shortest title.
+        wanted = title.strip().lower()
+        pick = next((r for r in results if (r.get("title") or "").strip().lower() == wanted), None)
+        if pick is None:
+            pick = min(results, key=lambda r: len(r.get("title") or ""))
+        movie = self.get_movie(pick["id"])
         copies = movie.get("copies", [])
         copies_list = []
         summary_parts = []
