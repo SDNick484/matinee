@@ -273,3 +273,11 @@ def test_tool_result_truncated():
     blk = ask.tool_result_block("t2", None, "boom")
     assert blk["is_error"] is True and blk["content"] == "boom"
     assert ask.tool_result_block("t3", {"é": 1}, None)["content"] == '{"é": 1}'
+
+
+@pytest.mark.parametrize("arg", ["title_id", "limit"])
+@pytest.mark.parametrize("bad", ["\u00b2", "9" * 5000, float("nan"), float("inf"), 1e400])
+def test_run_tool_rejects_odd_integers(client, arg, bad):
+    import ask
+    tool = "get_movie" if arg == "title_id" else "search_collection"
+    assert ask.run_tool(ask.LocalClient(), tool, {arg: bad}) == (None, f"{tool}: {arg} must be an integer")

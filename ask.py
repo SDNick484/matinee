@@ -191,10 +191,15 @@ def _to_int(v):
         return None
     if isinstance(v, int):
         return v
-    if isinstance(v, float):
-        return int(v) if v.is_integer() else None
-    if isinstance(v, str) and v.strip().isdigit():
-        return int(v.strip())
+    try:
+        if isinstance(v, float):
+            return int(v) if v.is_integer() else None  # nan/inf are not integers
+        if isinstance(v, str):
+            t = v.strip()
+            if t.isascii() and t.isdigit() and len(t) <= 18:
+                return int(t)
+    except (ValueError, OverflowError):
+        pass
     return None
 
 
