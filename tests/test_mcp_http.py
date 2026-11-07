@@ -376,3 +376,80 @@ def test_secrets_never_logged(client, token, other_key, fake_matinee, caplog):
     blob = caplog.text + "\n".join(bodies)
     for secret in (KEY, good, bad, "Bearer"):
         assert secret not in blob
+
+
+# ------------------------------------------------------------------ Task 7: main() and startup refusals
+@pytest.fixture
+def served(monkeypatch):
+    calls = []
+    monkeypatch.setattr(mcp_remote, "serve_http", lambda server, cfg, **kw: calls.append((server, cfg, kw)))
+    # main() rewrites these; restore afterwards so later tests see the original client
+    monkeypatch.setattr(mcp_server, "_default_client", mcp_server._default_client)
+    monkeypatch.setattr(mcp_server, "MATINEE_URL", mcp_server.MATINEE_URL)
+    monkeypatch.setenv("MATINEE_DB_PATH", "")
+    monkeypatch.setenv("MATINEE_URL", "http://127.0.0.1:1")
+    return calls
+
+
+def full_env():
+    return {"MATINEE_API_KEY": KEY, "PORT": "8771", "MCP_HTTP_BIND": "127.0.0.1", "MCP_HTTP_PORT": "8719",
+            "MCP_HTTP_PATH": "/matinee/mcp", "MCP_PUBLIC_HOSTS": HOST, "CF_ACCESS_TEAM_DOMAIN": TEAM,
+            "CF_ACCESS_AUD": AUD, "MCP_ALLOWED_EMAILS": EMAIL}
+
+
+def test_main_refuses_empty_api_key(served, capsys):
+    import mcp_http
+    env = full_env()
+    env["MATINEE_API_KEY"] = "  "
+    assert mcp_http.main([], env) == 2
+    assert "MATINEE_API_KEY" in capsys.readouterr().err
+    assert served == []
+
+
+def test_main_refuses_public_bind_without_access(served, capsys):
+    import mcp_http
+    env = {"MATINEE_API_KEY": KEY, "MCP_HTTP_BIND": "192.168.1.174"}
+    assert mcp_http.main([], env) == 2
+    assert "Cloudflare Access" in capsys.readouterr().err
+    assert served == []
+
+
+def test_main_refuses_public_host_without_access(served, capsys):
+    import mcp_http
+    env = {"MATINEE_API_KEY": KEY, "MCP_PUBLIC_HOSTS": HOST}
+    assert mcp_http.main([], env) == 2
+    assert "Cloudflare Access" in capsys.readouterr().err
+    assert served == []
+
+
+def test_main_forces_db_path_empty(served):
+    import os
+
+    import mcp_http
+    env = full_env()
+    env["MATINEE_DB_PATH"] = "/var/lib/matinee/matinee.db"
+    assert mcp_http.main([], env) == 0
+    assert os.environ["MATINEE_DB_PATH"] == ""
+    assert mcp_server._default_client.db_path == ""
+
+
+def test_main_derives_matinee_url_from_port(served):
+    import os
+
+    import mcp_http
+    assert mcp_http.main([], full_env()) == 0
+    assert os.environ["MATINEE_URL"] == "http://127.0.0.1:8771"
+    assert mcp_server._default_client.api_url == "http://127.0.0.1:8771"
+    assert mcp_server._default_client.api_key == KEY
+
+
+def test_main_serves_with_configured_values(served):
+    import asyncio
+
+    import mcp_http
+    assert mcp_http.main([], full_env()) == 0
+    assert len(served) == 1
+    server, cfg, kw = served[0]
+    assert cfg.port == 8719 and cfg.path == "/matinee/mcp"
+    assert {t.name for t in asyncio.run(server.list_tools())} == READ_TOOLS
+    assert callable(kw["health_check"])

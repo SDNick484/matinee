@@ -6,6 +6,9 @@ build_server(); mcp_remote.py (a verbatim copy of mcp-server-shared's remote.py)
 JWT check, the Host check and /healthz. Read-only unless MATINEE_MCP_READONLY is 0/false/no/off.
 """
 import argparse
+import logging
+import os
+import sys
 import urllib.request
 from typing import Mapping, Optional
 
@@ -45,6 +48,13 @@ def _http_config(env: Mapping[str, str]) -> "mcp_remote.HttpConfig":
     return mcp_remote.http_config(parser.parse_args([]), env)
 
 
+def _health_check(base: str):
+    async def health() -> bool:
+        return await anyio.to_thread.run_sync(matinee_healthy, base)
+
+    return health
+
+
 def build_http_app(env: Mapping[str, str], verifier: Optional["mcp_remote.AccessVerifier"] = None):
     """The ASGI app for the given settings. `verifier` is injected by tests."""
     import mcp_server  # imported late: it reads MATINEE_* from os.environ at import
@@ -53,9 +63,42 @@ def build_http_app(env: Mapping[str, str], verifier: Optional["mcp_remote.Access
     server = mcp_server.build_server(writes=not readonly(env))
     if server is None:
         raise mcp_remote.ConfigError("The MCP SDK is not installed: pip install -r requirements-mcp.txt")
+    return mcp_remote.build_app(server, cfg, verifier, health_check=_health_check(matinee_url(env)))
+
+
+def main(argv: Optional[list] = None, env: Optional[Mapping[str, str]] = None) -> int:
+    """Run the service. Returns 2 with a one-line stderr message when the settings are unsafe."""
+    env = dict(os.environ if env is None else env)
+    env["MATINEE_DB_PATH"] = ""  # REST only: this service never opens the database
+    api_key = (env.get("MATINEE_API_KEY") or "").strip()
+    if not api_key:
+        print("matinee-mcp: MATINEE_API_KEY is empty; the service reads Matinee through its admin API.",
+              file=sys.stderr)
+        return 2
     base = matinee_url(env)
+    os.environ["MATINEE_DB_PATH"] = ""
+    os.environ["MATINEE_URL"] = base
+    try:
+        cfg = _http_config(env)
+        cfg.check()
+    except mcp_remote.ConfigError as exc:
+        print(f"matinee-mcp: {exc}", file=sys.stderr)
+        return 2
+    import mcp_server  # after the environment is set: it reads MATINEE_* at import
 
-    async def health() -> bool:
-        return await anyio.to_thread.run_sync(matinee_healthy, base)
+    mcp_server._default_client = mcp_server.MatineeClient(api_url=base, api_key=api_key, db_path="")
+    server = mcp_server.build_server(writes=not readonly(env))
+    if server is None:
+        print("matinee-mcp: the MCP SDK is not installed: pip install -r requirements-mcp.txt", file=sys.stderr)
+        return 2
+    logging.basicConfig(level=logging.INFO, stream=sys.stderr, force=True,
+                        format="%(asctime)s %(levelname)s %(message)s")
+    logging.getLogger("matinee.mcp").info(
+        "matinee-mcp starting: %s on %s:%s (%s)", cfg.path, cfg.bind, cfg.port,
+        "read-only" if readonly(env) else "writes enabled")
+    mcp_remote.serve_http(server, cfg, health_check=_health_check(base))
+    return 0
 
-    return mcp_remote.build_app(server, cfg, verifier, health_check=health)
+
+if __name__ == "__main__":
+    raise SystemExit(main())
