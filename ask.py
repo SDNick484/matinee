@@ -139,6 +139,7 @@ def ask_route():
     if asked_today(db()) >= DAILY_LIMIT:
         log(g.editor, 0, 0, 0, "capped")
         return make_err(429, "Daily AI search limit reached; try again tomorrow.")
+    g.ask_stats = {"rounds": 0, "input_tokens": 0, "output_tokens": 0, "status": "error"}  # answer() updates it
     try:
         status, payload = answer(messages)
     finally:

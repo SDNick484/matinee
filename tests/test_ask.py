@@ -164,3 +164,17 @@ def test_messages_api(monkeypatch):
     with pytest.raises(ask.ClaudeAPIError) as e:
         ask.messages_api({}, "test-key", 5)
     assert (e.value.status, e.value.detail) == (529, "overloaded")
+
+
+def test_answer_raising_still_logs_error_row(client, monkeypatch):
+    import ask
+
+    def boom(messages):
+        raise RuntimeError("model blew up")
+
+    monkeypatch.setattr(ask, "answer", boom)
+    monkeypatch.setitem(app.config, "PROPAGATE_EXCEPTIONS", False)
+    r = post(client)
+    assert r.status_code == 500
+    rows = log_rows()
+    assert len(rows) == 1 and rows[0]["status"] == "error" and rows[0]["editor"] == "lan"
