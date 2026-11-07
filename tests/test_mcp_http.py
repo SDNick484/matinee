@@ -293,3 +293,86 @@ def test_read_only_call_to_write_tool_is_unknown(client, token, fake_matinee):
     assert msg["result"]["isError"] is True
     assert msg["result"]["content"][0]["text"] == "Unknown tool: rate_movie"
     assert not [r for r in fake_matinee.requests if r[0] == "PUT"]
+
+
+# ------------------------------------------------------------------ Task 6: path, host, health, errors, secrets
+def test_health_ok_without_auth(client):
+    r = client.get("/healthz")
+    assert r.status_code == 200
+    assert r.json() == {"status": "ok"}
+
+
+def test_health_503_when_matinee_down(client, fake_matinee):
+    fake_matinee.stop()
+    r = client.get("/healthz")
+    assert r.status_code == 503
+    assert r.json() == {"status": "degraded", "error": "health check returned False"}
+
+
+def test_path_prefix(client, token, env, signing_key, where_is_calls):
+    tok = token()
+    open_session(client, tok)  # POST /matinee/mcp works
+    r = rpc(client, "tools/list", {}, token=tok, path="/mcp")
+    assert (r.status_code, r.text) == (404, "Not Found")
+    assert client.get("/matinee/healthz", headers={"Cf-Access-Jwt-Assertion": tok}).status_code == 404
+    env["MCP_HTTP_PATH"] = "/x/mcp"
+    with make_client(env, signing_key) as moved:
+        assert rpc(moved, "initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
+                                         "clientInfo": {"name": "t", "version": "1"}},
+                   token=tok, path="/x/mcp").status_code == 200
+        assert rpc(moved, "tools/list", {}, token=tok, path="/matinee/mcp").status_code == 404
+
+
+def test_wrong_host_is_421(client, token):
+    r = rpc(client, "initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
+                                   "clientInfo": {"name": "t", "version": "1"}},
+            token=token(), host="evil.example.com")
+    assert (r.status_code, r.text) == (421, "Invalid Host header")
+
+
+def test_matinee_unreachable_tool_message(client, token, fake_matinee):
+    tok = token()
+    sid = open_session(client, tok)
+    fake_matinee.stop()
+    msg = call_tool(client, tok, sid, "where_is", {"title": "Paddington 2"})
+    assert msg["result"]["isError"] is True
+    assert msg["result"]["content"][0]["text"] == \
+        "Error executing tool where_is: Matinee is unreachable right now. Try again in a minute."
+
+
+def test_matinee_401_and_500_messages(client, token, fake_matinee):
+    tok = token()
+    sid = open_session(client, tok)
+    fake_matinee.mode = "401"
+    text = call_tool(client, tok, sid, "where_is", {"title": "Paddington 2"})["result"]["content"][0]["text"]
+    assert text == ("Error executing tool where_is: Matinee rejected the service's API key (HTTP 401). "
+                    "Check MATINEE_API_KEY on CT 210.")
+    fake_matinee.mode = "500html"
+    text = call_tool(client, tok, sid, "where_is", {"title": "Paddington 2"}, id_=4)["result"]["content"][0]["text"]
+    assert text == "Error executing tool where_is: Matinee API error (500)"
+    assert "<" not in text and KEY not in text
+
+
+def test_stale_session_id_is_404(client, token, where_is_calls):
+    tok = token()
+    r = rpc(client, "tools/call", {"name": "where_is", "arguments": {"title": "Paddington 2"}},
+            token=tok, sid="deadbeef" * 4)
+    assert r.status_code == 404
+    assert where_is_calls == []
+
+
+def test_secrets_never_logged(client, token, other_key, fake_matinee, caplog):
+    import logging
+    caplog.set_level(logging.DEBUG)
+    good = token()
+    bad = token(key=other_key)
+    bodies = [rpc(client, "tools/list", {}, token=bad).text, rpc(client, "tools/list", {}).text]
+    sid = open_session(client, good)
+    bodies.append(call_tool(client, good, sid, "where_is", {"title": "Paddington 2"}).__str__())
+    fake_matinee.mode = "401"
+    bodies.append(str(call_tool(client, good, sid, "where_is", {"title": "Paddington 2"}, id_=4)))
+    fake_matinee.mode = "500html"
+    bodies.append(str(call_tool(client, good, sid, "where_is", {"title": "Paddington 2"}, id_=5)))
+    blob = caplog.text + "\n".join(bodies)
+    for secret in (KEY, good, bad, "Bearer"):
+        assert secret not in blob
