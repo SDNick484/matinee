@@ -443,6 +443,26 @@ def test_build_server_writes_false_lists_six_tools():
     assert _names(mcp_server.build_server(writes=False)) == ALL_TOOLS - set(mcp_server.WRITE_TOOLS)
 
 
+def _prompts(server):
+    return {p.name for p in asyncio.run(server.list_prompts())}
+
+
+def test_read_only_server_does_not_advertise_writes():
+    # The remote read-only service must not tell the model to call tools it removed.
+    ro = mcp_server.build_server(writes=False)
+    for name in mcp_server.WRITE_TOOLS:
+        assert name not in ro.instructions, name
+    assert "where_is" in ro.instructions and 'max_cert="PG-13"' in ro.instructions
+    assert _prompts(ro) == {"what_to_watch"}
+
+
+def test_writable_server_keeps_write_guidance():
+    rw = mcp_server.build_server(writes=True)
+    assert rw.instructions == mcp_server.SERVER_INSTRUCTIONS
+    assert "log_watch" in rw.instructions
+    assert _prompts(rw) == {"what_to_watch", "log_movie_night"}
+
+
 def test_build_server_is_independent():
     mcp_server.build_server(writes=False)
     assert _names(mcp_server.mcp) == ALL_TOOLS

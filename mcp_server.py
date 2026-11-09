@@ -590,14 +590,17 @@ Matinee is the family's own collection of physical discs and digital copies.
 - "What's next in the series we're watching": mode="next_in_franchise". "Let's start a new series": mode="start_franchise".
 - After a pick, "where is it?": call where_is(title). After watching: call log_watch, then rate_movie if the user gives a rating.
 """
+# For build_server(writes=False): the remote read-only service has no log_watch or rate_movie to point at.
+READONLY_INSTRUCTIONS = SERVER_INSTRUCTIONS.replace(
+    " After watching: call log_watch, then rate_movie if the user gives a rating.", "")
 
 
-def _make_server():
+def _make_server(instructions: str = SERVER_INSTRUCTIONS):
     """Build the FastMCP server; older mcp releases may not accept instructions=."""
     if not FastMCP:
         return None
     try:
-        return FastMCP("matinee", instructions=SERVER_INSTRUCTIONS)
+        return FastMCP("matinee", instructions=instructions)
     except TypeError:
         return FastMCP("matinee")
 
@@ -759,7 +762,7 @@ def build_server(*, writes: bool = True):
 
     Tool functions are module-level and read _default_client at call time.
     """
-    server = _make_server()
+    server = _make_server(SERVER_INSTRUCTIONS if writes else READONLY_INSTRUCTIONS)
     if not server:
         return None
     server.tool()(search_collection)
@@ -774,7 +777,8 @@ def build_server(*, writes: bool = True):
     server.resource("matinee://stats")(resource_stats)
     server.resource("matinee://recommendations")(resource_recommendations)
     server.prompt("what_to_watch")(prompt_what_to_watch)
-    server.prompt("log_movie_night")(prompt_log_movie_night)
+    if writes:
+        server.prompt("log_movie_night")(prompt_log_movie_night)
     return server
 
 
