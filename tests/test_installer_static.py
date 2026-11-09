@@ -168,3 +168,22 @@ def test_runlevel_and_health_check_only_once_the_service_is_up():
 def test_tunnel_hint_uses_the_configured_address():
     line = next(l for l in HEAD.splitlines() if "MCP tunnel route" in l)
     assert "8719" not in line and "conf_val MCP_HTTP_BIND" in line
+
+
+@pytest.mark.parametrize("value,warns", [("", True), ("you@example.com", False)])
+def test_final_banner_warns_when_allowed_emails_is_empty(tmp_path, value, warns):
+    # The Access app usually fronts several MCP servers; with no MCP_ALLOWED_EMAILS anyone its policy
+    # admits can read the collection, so the banner must say so whatever state matinee-mcp ended in.
+    lines = HEAD.splitlines()
+    warn = [l for l in lines if "MCP_ALLOWED_EMAILS is empty" in l]
+    assert len(warn) == 1
+    assert "rc-service matinee-mcp restart" in warn[0]
+    case_end = next(i for i, l in enumerate(lines) if l.strip() == "esac" and i > lines.index(
+        next(l for l in lines if l.startswith('case "$MCP_STATE" in'))))
+    assert lines.index(warn[0]) > case_end, "the warning belongs after the MCP_STATE case, not inside one branch"
+    conf = tmp_path / "matinee"
+    conf.write_text(f"MCP_ALLOWED_EMAILS={value}\n")
+    conf_val = next(l for l in lines if l.startswith("conf_val()"))
+    out = subprocess.run(["sh", "-c", f'CONF="{conf}"\n{conf_val}\n{warn[0]}\n:'],
+                         capture_output=True, text=True, check=True).stdout
+    assert ("MCP_ALLOWED_EMAILS is empty" in out) is warns
