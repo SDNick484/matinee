@@ -264,6 +264,28 @@ def test_where_is_db_matches_rest(test_env, query):
     assert (direct["found"], direct.get("id"), direct["title"]) == (rest["found"], rest.get("id"), rest["title"])
 
 
+@pytest.mark.parametrize("key,exposed", [("", False), ("k", True)])
+def test_rest_get_movie_added_by_only_with_key(test_env, monkeypatch, key, exposed):
+    # docs/mcp-setup.md relies on this: without MATINEE_API_KEY reads go to /api and copies carry no
+    # added_by; with it they go to /admin/api and carry the editor's email.
+    monkeypatch.setattr("app.LAN_EDIT", False)
+    monkeypatch.setattr("app.MATINEE_API_KEY", "k")
+    con = db()
+    con.execute("UPDATE copies SET added_by='editor@example.com' WHERE title_id=1"); con.commit()
+    client = mcp_server.MatineeClient(api_url="http://fake-host", api_key=key, db_path="")
+
+    def via_flask(method, path, data=None):
+        with app.test_client() as c:
+            res = c.open(path, method=method, json=data,
+                         headers={"Authorization": f"Bearer {key}"} if key else {})
+        assert res.status_code == 200, (path, res.status_code)
+        return res.get_json()
+
+    client._api_request = via_flask
+    copy = client.get_movie(1)["copies"][0]
+    assert (copy.get("added_by") == "editor@example.com") is exposed
+
+
 def test_rest_recommendations_forwards_params(monkeypatch):
     client = mcp_server.MatineeClient(api_url="http://fake-host", db_path="")
     seen = []
