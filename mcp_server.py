@@ -162,7 +162,7 @@ class MatineeClient:
             log.warning("Matinee %s %s -> HTTP %s", method, path.split("?")[0], e.code)
             if e.code in (401, 403):
                 raise MatineeError(
-                    f"Matinee rejected the service's API key (HTTP {e.code}). Check MATINEE_API_KEY on CT 210."
+                    f"Matinee rejected the service's API key (HTTP {e.code}). Check MATINEE_API_KEY on the Matinee host."
                 ) from None
             detail = ""
             try:

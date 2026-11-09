@@ -40,7 +40,7 @@ jobs:
           node -c static/app.js
 
   test-alpine:
-    name: Alpine Linux Container (CT 210 parity)
+    name: Alpine Linux Container (production parity)
     runs-on: ubuntu-latest
     container:
       image: alpine:latest

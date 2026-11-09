@@ -479,9 +479,9 @@ ERROR_CASES = {
     "refused": (urllib.error.URLError(ConnectionRefusedError(111, "refused")), UNREACHABLE),
     "timeout": (socket.timeout("timed out"), UNREACHABLE),
     "401": (_http_error(401, '{"error":"unauthorized"}'),
-            "Matinee rejected the service's API key (HTTP 401). Check MATINEE_API_KEY on CT 210."),
+            "Matinee rejected the service's API key (HTTP 401). Check MATINEE_API_KEY on the Matinee host."),
     "403": (_http_error(403, "<html>forbidden</html>"),
-            "Matinee rejected the service's API key (HTTP 403). Check MATINEE_API_KEY on CT 210."),
+            "Matinee rejected the service's API key (HTTP 403). Check MATINEE_API_KEY on the Matinee host."),
     "500html": (_http_error(500, "<!DOCTYPE HTML><html>boom</html>"), "Matinee API error (500)"),
     "500json": (_http_error(500, '{"error":"disk full"}'), "Matinee API error (500): disk full"),
 }

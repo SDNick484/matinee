@@ -143,7 +143,7 @@ def test_env_example_documents_new_settings(key):
 
 def test_mcp_setup_mentions_remote():
     text = (ROOT / "docs" / "mcp-setup.md").read_text(encoding="utf-8")
-    for needle in ("https://mcp.nickandrade.com/matinee/mcp", "^/matinee/", "http://192.168.1.174:8719",
+    for needle in ("https://mcp.example.com/matinee/mcp", "^/matinee/", "http://192.168.1.100:8719",
                    "MATINEE_MCP_READONLY", "rc-service matinee-mcp restart"):
         assert needle in text, needle
     assert ":8769" not in text

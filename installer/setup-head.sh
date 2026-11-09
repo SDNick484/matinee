@@ -98,7 +98,7 @@ add_setting "$CONF" MATINEE_MCP_READONLY 1 "1 = the Claude app can only read; 0 
 add_setting "$CONF" MCP_HTTP_BIND "$IP" "Address matinee-mcp listens on (cloudflared reaches it here)"
 add_setting "$CONF" MCP_HTTP_PORT 8719 "Port matinee-mcp listens on"
 add_setting "$CONF" MCP_HTTP_PATH /matinee/mcp "URL path of the MCP endpoint (the tunnel route is ^/matinee/)"
-add_setting "$CONF" MCP_PUBLIC_HOSTS "" "Public hostname(s) of the tunnel, e.g. mcp.nickandrade.com (required)"
+add_setting "$CONF" MCP_PUBLIC_HOSTS "" "Public hostname(s) of the tunnel, e.g. mcp.example.com (required)"
 add_setting "$CONF" CF_ACCESS_AUD "" "AUD tag of the Access application that fronts mcp.<your-domain> (required)"
 add_setting "$CONF" MCP_ALLOWED_EMAILS "" "Only these Access emails may use the MCP tools (comma separated); empty = anyone Access lets in"
 # Holds API keys, so root only: OpenRC and the cron jobs run as root; services get what they need from the environment.
