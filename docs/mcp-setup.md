@@ -133,7 +133,7 @@ The installer adds any missing key and never overwrites one you edited. The file
 | `CF_TEAM_DOMAIN` | *(already set for `/admin`)* | Access team domain, shared with the web app. `matinee-mcp` copies it into `CF_ACCESS_TEAM_DOMAIN`, the name the shared `mcp_remote.py` reads; set that only to override. |
 | `CF_ACCESS_AUD` | *(required)* | AUD tag of the Access application for `mcp.example.com`. This is **not** `CF_AUD` (the `/admin` app). |
 | `MCP_ALLOWED_EMAILS` | *(empty)* | Second gate: only these Access emails may call tools. A token with no email claim is refused when this is set. |
-| `MATINEE_API_KEY` | *(required)* | Already used by section 1. The service reads Matinee through `/admin/api` with it and refuses to start when it is empty. |
+| `MATINEE_API_KEY` | *(required)* | Already used by section 1. The service reads Matinee through `/admin/api` with it and refuses to start when it is empty. For the read tools this exposes nothing extra: ratings and watch notes are public at `/api` when `PUBLIC_VIEW=1` (`title_detail()` does not gate them; only copies' `added_by` is editor-only), so the key adds only `search_tmdb`. It is write-capable, though, whatever `MATINEE_MCP_READONLY` says. |
 
 The service starts only when `CF_ACCESS_AUD`, `MCP_PUBLIC_HOSTS` and `MATINEE_API_KEY` are set. It also refuses to start on a non-loopback address without the Access settings. `MATINEE_DB_PATH` is ignored there: it never opens the database.
 

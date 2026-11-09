@@ -3,8 +3,9 @@
 **Date:** 2026-11-06
 **Branch:** `feat/remote-mcp`
 **Schema:** unchanged
-**Status:** DRAFT — awaiting Nick's approval. No implementation has started.
-**Verified against:** `matinee` `main` @ `572d53d`, `mcp-server-shared` `main` @ `3ccb5f1`, `mcp` 2.3.0
+**Status:** IMPLEMENTED — PR #13 (merged 969551d, 2026-11-06). PR #15 (`fix/cf-team-domain`) removed the installer's `CF_ACCESS_TEAM_DOMAIN` key; matinee-mcp now derives it from `CF_TEAM_DOMAIN`.
+**Post-merge deltas** (see `.superpowers/review/2026-11-08-spec-reconciliation.md`): §5 `CF_ACCESS_TEAM_DOMAIN` row (PR #15); §14 row 2 (ratings and watch notes are public at `/api`, not editor-only); §3 "24 tests" was 25; the host-specific address and hostname in §5/§8 are now placeholders in the shipped files (`192.168.1.100`, `mcp.example.com`); a read-only service no longer advertises `log_watch`/`rate_movie` or the `log_movie_night` prompt.
+**Verified against:** `matinee` `main` @ `572d53d` at design time, `mcp-server-shared` `main` @ `3ccb5f1`, `mcp` 2.3.0
 
 ---
 
@@ -104,7 +105,7 @@ All new settings live in `/etc/conf.d/matinee` (the installer *adds* missing key
 | `MCP_HTTP_BIND` | CT 210's detected LAN address | `matinee-mcp` | Where to listen. Must be the address the tunnel route points at (cloudflared is a container). A non-loopback bind **refuses to start without the Access settings below**. |
 | `MCP_HTTP_PATH` | `/matinee/mcp` | `matinee-mcp` | The endpoint path. Must start with the tunnel prefix; the tunnel does not strip it. |
 | `MCP_PUBLIC_HOSTS` | *(empty — required)* | `matinee-mcp` | `mcp.nickandrade.com`. Without it every request through the tunnel gets HTTP 421. |
-| `CF_ACCESS_TEAM_DOMAIN` | *(empty; falls back to `CF_TEAM_DOMAIN`)* | `matinee-mcp` | Same team domain as the Flask app's Access. |
+| `CF_ACCESS_TEAM_DOMAIN` | *(not written since PR #15; falls back to `CF_TEAM_DOMAIN`)* | `matinee-mcp` | Same team domain as the Flask app's Access. Only set it if the MCP Access app is in a different team. |
 | `CF_ACCESS_AUD` | *(empty — required)* | `matinee-mcp` | AUD tag of the **`mcp.nickandrade.com` Access app**. Not `CF_AUD`: that is the Flask `/admin` app's tag. |
 | `MCP_ALLOWED_EMAILS` | *(empty)* | `matinee-mcp` | Second gate behind the Access policy. Set it to Nick's Access email. |
 | `MATINEE_URL` | *(derived)* `http://127.0.0.1:$PORT` | `matinee-mcp` | Loopback URL of the Flask app. |
@@ -404,7 +405,7 @@ Harness: a generated RSA key, `mcp_remote.AccessVerifier(policy, key_resolver=�
 | If this leaks or is abused | What the holder gets |
 |----------------------------|----------------------|
 | A request with no/forged/expired Access JWT (internet or LAN) | 403 (or Access 401). No tool runs. |
-| A stolen Access session | Whatever the tools allow, until it expires (15 minutes if the Access app is set as in the webos README). Read-only by default: titles, shelves, your ratings and watch notes (REST mode uses `/admin/api`, so editor-only data is visible to the tool). |
+| A stolen Access session | Whatever the tools allow, until it expires (15 minutes if the Access app is set as in the webos README). Read-only by default: titles, shelves, ratings and watch notes — the same data `GET /api/titles/<id>` serves anonymously when `PUBLIC_VIEW=1` (`title_detail()` does not gate them; only copies' `added_by` is editor-only). `MATINEE_API_KEY` adds nothing to the read tools except `search_tmdb`. |
 | Someone on the LAN who can reach `192.168.1.174:8719` | `/healthz` only. They cannot mint a Cloudflare-signed JWT. (The Flask app on `0.0.0.0:8771` with `LAN_EDIT=1` is a pre-existing, separate exposure.) |
 | Code execution as `matinee-mcp` | `MATINEE_API_KEY`, which is **write-capable** on the admin API regardless of `MATINEE_MCP_READONLY`. Mitigations: dedicated user with no database access, bound to a LAN address, `MATINEE_DB_PATH` forced empty, TMDB/OMDb keys not in its environment. A scoped read-only key is deferred (§16). |
 | A prompt-injected model | In read-only mode: nothing destructive is reachable. With writes on: it can rate, log watches and import titles. |

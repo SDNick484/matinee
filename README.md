@@ -1,7 +1,7 @@
 # Matinee
 
 > Configuration: every setting is listed with a one-line explanation in [`.env.example`](.env.example).
-> That file is documentation only. In production the settings live in `/etc/conf.d/matinee`, and the app does not load a `.env` file.
+> In production the settings live in `/etc/conf.d/matinee`. For local development the app also reads a `.env` next to `app.py` (copy `.env.example`); variables already in the environment win.
 
 A self-hosted movie collection web app for physical discs and digital libraries.
 

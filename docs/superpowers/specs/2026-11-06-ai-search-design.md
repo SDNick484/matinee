@@ -3,7 +3,8 @@
 **Date:** 2026-11-06
 **Branch:** `feat/ai-search` (one PR)
 **Schema:** v7 → v8 (one new table)
-**Status:** DRAFT, waiting for Nick's review. No implementation has started.
+**Status:** IMPLEMENTED — PR #14 (merged e468a1b, 2026-11-07), after PR #13 (remote MCP); PR #15 followed.
+**Post-merge deltas** (see `.superpowers/review/2026-11-08-spec-reconciliation.md`): §7's fold-and-split was applied to `search_collection` only; `fix/spec-reconciliation` extends it to `where_is`'s DB fallback ("Wall-E" now finds WALL·E in Ask as in remote MCP). §12: ratings and watch notes were never private (see below).
 **Verified against:** `matinee` `main` @ `572d53d`; reference `cookbook-collection` `main` @ `f00829f`
 (`docs/superpowers/specs/2026-11-06-ai-search-design.md`, `docs/superpowers/plans/2026-11-06-ai-search.md`, `ask.py`).
 
@@ -400,7 +401,8 @@ CI is unchanged: Python 3.10–3.13 on Ubuntu, the Alpine job (no new `apk` pack
   - setup (an API key, ideally in its own Console workspace with a monthly spend limit, set as
     `ANTHROPIC_SEARCH_KEY` in `/etc/conf.d/matinee`, then `rc-service matinee restart`);
   - the three variables and the cost figures from §9;
-  - what is sent to Anthropic: questions and tool results, including personal ratings and watch notes; no
+  - what is sent to Anthropic: questions and tool results, including ratings and watch notes (which are also public
+    at `/api` when `PUBLIC_VIEW=1`: `title_detail()` does not gate them; only copies' `added_by` is editor-only); no
     images. The question text isn't stored locally, and token counts are logged in `ask_log`.
 - **`docs/mcp-setup.md`:** the three §7 changes.
 - **`.env.example`:** the three settings.
