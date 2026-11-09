@@ -9,7 +9,7 @@ Matinee includes a full-featured **Model Context Protocol (MCP)** server (`mcp_s
 ### 1.1 Enable Headless API Authentication in Matinee
 To allow write operations (`rate_movie`, `log_watch`, `add_movie`) from your AI assistant, configure a secret `MATINEE_API_KEY`.
 
-- **On Alpine LXC (CT 210)**:
+- **On the Matinee host (Alpine LXC)**:
   Add to `/etc/conf.d/matinee`:
   ```sh
   MATINEE_API_KEY="your-secret-api-token-here"
@@ -112,8 +112,8 @@ In Antigravity, add the Matinee MCP configuration to your workspace or global se
 The sections above run the server on a workstation over stdio. To use the tools from the Claude app on a phone, from anywhere, Matinee also ships `mcp_http.py`, an always-on service (`matinee-mcp`) on the Matinee host that speaks MCP over Streamable HTTP behind Cloudflare Access.
 
 ```
-Claude app (Pixel 9) -> Anthropic cloud -> https://mcp.nickandrade.com/matinee/mcp
-  -> Cloudflare Access (sign-in, OAuth)  -> tunnel route ^/matinee/ -> http://192.168.1.174:8719  (matinee-mcp)
+Claude app (Pixel 9) -> Anthropic cloud -> https://mcp.example.com/matinee/mcp
+  -> Cloudflare Access (sign-in, OAuth)  -> tunnel route ^/matinee/ -> http://192.168.1.100:8719  (matinee-mcp)
   -> checks the Access JWT again         -> http://127.0.0.1:8771/admin/api/...  (Matinee, with MATINEE_API_KEY)
 ```
 
@@ -129,11 +129,11 @@ The installer adds any missing key and never overwrites one you edited. The file
 | `MCP_HTTP_BIND` | the host's LAN IP | Where `matinee-mcp` listens. It must be the address the tunnel route points at, because `cloudflared` runs in Docker (`127.0.0.1` gives HTTP 502). |
 | `MCP_HTTP_PORT` | `8719` | Port. |
 | `MCP_HTTP_PATH` | `/matinee/mcp` | Endpoint path. The tunnel does not strip the prefix. |
-| `MCP_PUBLIC_HOSTS` | *(required)* | `mcp.nickandrade.com`. Without it requests through the tunnel get HTTP 421. |
+| `MCP_PUBLIC_HOSTS` | *(required)* | `mcp.example.com`. Without it requests through the tunnel get HTTP 421. |
 | `CF_TEAM_DOMAIN` | *(already set for `/admin`)* | Access team domain, shared with the web app. `matinee-mcp` copies it into `CF_ACCESS_TEAM_DOMAIN`, the name the shared `mcp_remote.py` reads; set that only to override. |
-| `CF_ACCESS_AUD` | *(required)* | AUD tag of the Access application for `mcp.nickandrade.com`. This is **not** `CF_AUD` (the `/admin` app). |
+| `CF_ACCESS_AUD` | *(required)* | AUD tag of the Access application for `mcp.example.com`. This is **not** `CF_AUD` (the `/admin` app). |
 | `MCP_ALLOWED_EMAILS` | *(empty)* | Second gate: only these Access emails may call tools. A token with no email claim is refused when this is set. |
-| `MATINEE_API_KEY` | *(required)* | Already used by section 1. The service reads Matinee through `/admin/api` with it and refuses to start when it is empty. |
+| `MATINEE_API_KEY` | *(required)* | Already used by section 1. The service reads Matinee through `/admin/api` with it and refuses to start when it is empty. For the read tools it exposes little extra: ratings and watch notes are already public at `/api` when `PUBLIC_VIEW=1` (`title_detail()` does not gate them), so the key adds `search_tmdb` and copies' `added_by` (the editor's Access email, returned by `get_movie`). It is write-capable, though, whatever `MATINEE_MCP_READONLY` says. |
 
 The service starts only when `CF_ACCESS_AUD`, `MCP_PUBLIC_HOSTS` and `MATINEE_API_KEY` are set. It also refuses to start on a non-loopback address without the Access settings. `MATINEE_DB_PATH` is ignored there: it never opens the database.
 
@@ -145,23 +145,23 @@ In the tunnel's published application routes add:
 
 | Field | Value |
 |-------|-------|
-| Hostname | `mcp.nickandrade.com` |
+| Hostname | `mcp.example.com` |
 | Path | `^/matinee/` |
-| Service | `http://192.168.1.174:8719` |
+| Service | `http://192.168.1.100:8719` |
 | HTTP Host header override | unset |
 
-The Access application for `mcp.nickandrade.com` is the one the other MCP servers already use (Managed OAuth on, path empty). Check that no other Access app or Bypass policy covers a path under `/matinee`, and copy its AUD tag into `CF_ACCESS_AUD`.
+The Access application for `mcp.example.com` is the one the other MCP servers already use (Managed OAuth on, path empty). Check that no other Access app or Bypass policy covers a path under `/matinee`, and copy its AUD tag into `CF_ACCESS_AUD`.
 
 ### 4.3 Connect the Claude app
 
-In Claude, open **Customize > Connectors > Add custom connector**, enter `https://mcp.nickandrade.com/matinee/mcp`, choose **Sign in now**, and sign in through Cloudflare Access. *Unverified until the first deployment: whether the Android app can add the connector itself or it must be added on claude.ai or Desktop first (it then appears on the phone).* For Claude Code: `claude mcp add --transport http matinee https://mcp.nickandrade.com/matinee/mcp`.
+In Claude, open **Customize > Connectors > Add custom connector**, enter `https://mcp.example.com/matinee/mcp`, choose **Sign in now**, and sign in through Cloudflare Access. *Unverified until the first deployment: whether the Android app can add the connector itself or it must be added on claude.ai or Desktop first (it then appears on the phone).* For Claude Code: `claude mcp add --transport http matinee https://mcp.example.com/matinee/mcp`.
 
 Ask "Where is Paddington 2?" and the answer is `Paddington 2 (2017): Blu-ray at Family Room › Media Cabinet › Shelf 2`.
 
 Check that the endpoint refuses anonymous calls (from any machine):
 
 ```sh
-curl -si -X POST https://mcp.nickandrade.com/matinee/mcp \
+curl -si -X POST https://mcp.example.com/matinee/mcp \
   -H 'content-type: application/json' -H 'accept: application/json, text/event-stream' \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | head -5
 # expect: HTTP 401 with a www-authenticate header from Access. Any 200 is a failure.

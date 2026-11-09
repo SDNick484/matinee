@@ -36,7 +36,7 @@ KEY = "test-matinee-api-key-0123456789"
 AUD = "aud-tag-matinee"
 TEAM = "nick.cloudflareaccess.com"
 EMAIL = "nick@example.com"
-HOST = "mcp.nickandrade.com"
+HOST = "mcp.example.com"
 READ_TOOLS = {"search_collection", "get_movie", "where_is", "get_recommendations",
               "get_collection_stats", "search_tmdb"}
 WRITE = {"rate_movie", "log_watch", "add_movie"}
@@ -356,7 +356,7 @@ def test_matinee_401_and_500_messages(client, token, fake_matinee):
     fake_matinee.mode = "401"
     text = call_tool(client, tok, sid, "where_is", {"title": "Paddington 2"})["result"]["content"][0]["text"]
     assert text == ("Error executing tool where_is: Matinee rejected the service's API key (HTTP 401). "
-                    "Check MATINEE_API_KEY on CT 210.")
+                    "Check MATINEE_API_KEY on the Matinee host.")
     fake_matinee.mode = "500html"
     text = call_tool(client, tok, sid, "where_is", {"title": "Paddington 2"}, id_=4)["result"]["content"][0]["text"]
     assert text == "Error executing tool where_is: Matinee API error (500)"
@@ -418,7 +418,7 @@ def test_main_refuses_empty_api_key(served, capsys):
 
 def test_main_refuses_public_bind_without_access(served, capsys):
     import mcp_http
-    env = {"MATINEE_API_KEY": KEY, "MCP_HTTP_BIND": "192.168.1.174"}
+    env = {"MATINEE_API_KEY": KEY, "MCP_HTTP_BIND": "192.168.1.100"}
     assert mcp_http.main([], env) == 2
     assert "Cloudflare Access" in capsys.readouterr().err
     assert served == []

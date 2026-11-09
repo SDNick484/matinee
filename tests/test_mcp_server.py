@@ -229,6 +229,63 @@ def test_mcp_direct_sqlite_matches_api(test_env, mode, genre, max_cert):
     assert key(direct) == key(api)
 
 
+def test_where_is_db_hyphen_variant(test_env):
+    # search_text for WALL·E is 'wall e | walle': a single '%wall-e%' substring never matches it.
+    from conftest import seed_title
+    seed_title(db(), 10681)
+    out = mcp_server.MatineeClient(db_path=str(test_env)).where_is("Wall-E")
+    assert out["found"] is True
+    assert out["title"] == "WALL·E"
+
+
+def _api_backed_client():
+    """A REST-mode client whose requests go to the real Flask app on the same database (public /api)."""
+    client = mcp_server.MatineeClient(api_url="http://fake-host", api_key="", db_path="")
+
+    def via_flask(method, path, data=None):
+        with app.test_client() as c:
+            res = c.open(path, method=method, json=data)
+        assert res.status_code == 200, (path, res.status_code)
+        return res.get_json()
+
+    client._api_request = via_flask
+    return client
+
+
+@pytest.mark.parametrize("query", ["Wall-E", "wall e", "WALL·E", "knight dark", "the dark knight",
+                                   "Inception", "100%", "Paddington 2"])
+def test_where_is_db_matches_rest(test_env, query):
+    from conftest import seed_title
+    con = db()
+    seed_title(con, 10681)                                          # WALL·E
+    seed_title(con, 155, copies=("4K UHD",))                        # The Dark Knight
+    direct = mcp_server.MatineeClient(db_path=str(test_env)).where_is(query)
+    rest = _api_backed_client().where_is(query)
+    assert (direct["found"], direct.get("id"), direct["title"]) == (rest["found"], rest.get("id"), rest["title"])
+
+
+@pytest.mark.parametrize("key,exposed", [("", False), ("k", True)])
+def test_rest_get_movie_added_by_only_with_key(test_env, monkeypatch, key, exposed):
+    # docs/mcp-setup.md relies on this: without MATINEE_API_KEY reads go to /api and copies carry no
+    # added_by; with it they go to /admin/api and carry the editor's email.
+    monkeypatch.setattr("app.LAN_EDIT", False)
+    monkeypatch.setattr("app.MATINEE_API_KEY", "k")
+    con = db()
+    con.execute("UPDATE copies SET added_by='editor@example.com' WHERE title_id=1"); con.commit()
+    client = mcp_server.MatineeClient(api_url="http://fake-host", api_key=key, db_path="")
+
+    def via_flask(method, path, data=None):
+        with app.test_client() as c:
+            res = c.open(path, method=method, json=data,
+                         headers={"Authorization": f"Bearer {key}"} if key else {})
+        assert res.status_code == 200, (path, res.status_code)
+        return res.get_json()
+
+    client._api_request = via_flask
+    copy = client.get_movie(1)["copies"][0]
+    assert (copy.get("added_by") == "editor@example.com") is exposed
+
+
 def test_rest_recommendations_forwards_params(monkeypatch):
     client = mcp_server.MatineeClient(api_url="http://fake-host", db_path="")
     seen = []
@@ -408,6 +465,26 @@ def test_build_server_writes_false_lists_six_tools():
     assert _names(mcp_server.build_server(writes=False)) == ALL_TOOLS - set(mcp_server.WRITE_TOOLS)
 
 
+def _prompts(server):
+    return {p.name for p in asyncio.run(server.list_prompts())}
+
+
+def test_read_only_server_does_not_advertise_writes():
+    # The remote read-only service must not tell the model to call tools it removed.
+    ro = mcp_server.build_server(writes=False)
+    for name in mcp_server.WRITE_TOOLS:
+        assert name not in ro.instructions, name
+    assert "where_is" in ro.instructions and 'max_cert="PG-13"' in ro.instructions
+    assert _prompts(ro) == {"what_to_watch"}
+
+
+def test_writable_server_keeps_write_guidance():
+    rw = mcp_server.build_server(writes=True)
+    assert rw.instructions == mcp_server.SERVER_INSTRUCTIONS
+    assert "log_watch" in rw.instructions
+    assert _prompts(rw) == {"what_to_watch", "log_movie_night"}
+
+
 def test_build_server_is_independent():
     mcp_server.build_server(writes=False)
     assert _names(mcp_server.mcp) == ALL_TOOLS
@@ -444,9 +521,9 @@ ERROR_CASES = {
     "refused": (urllib.error.URLError(ConnectionRefusedError(111, "refused")), UNREACHABLE),
     "timeout": (socket.timeout("timed out"), UNREACHABLE),
     "401": (_http_error(401, '{"error":"unauthorized"}'),
-            "Matinee rejected the service's API key (HTTP 401). Check MATINEE_API_KEY on CT 210."),
+            "Matinee rejected the service's API key (HTTP 401). Check MATINEE_API_KEY on the Matinee host."),
     "403": (_http_error(403, "<html>forbidden</html>"),
-            "Matinee rejected the service's API key (HTTP 403). Check MATINEE_API_KEY on CT 210."),
+            "Matinee rejected the service's API key (HTTP 403). Check MATINEE_API_KEY on the Matinee host."),
     "500html": (_http_error(500, "<!DOCTYPE HTML><html>boom</html>"), "Matinee API error (500)"),
     "500json": (_http_error(500, '{"error":"disk full"}'), "Matinee API error (500): disk full"),
 }
