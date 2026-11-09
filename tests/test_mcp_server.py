@@ -229,6 +229,41 @@ def test_mcp_direct_sqlite_matches_api(test_env, mode, genre, max_cert):
     assert key(direct) == key(api)
 
 
+def test_where_is_db_hyphen_variant(test_env):
+    # search_text for WALL·E is 'wall e | walle': a single '%wall-e%' substring never matches it.
+    from conftest import seed_title
+    seed_title(db(), 10681)
+    out = mcp_server.MatineeClient(db_path=str(test_env)).where_is("Wall-E")
+    assert out["found"] is True
+    assert out["title"] == "WALL·E"
+
+
+def _api_backed_client():
+    """A REST-mode client whose requests go to the real Flask app on the same database (public /api)."""
+    client = mcp_server.MatineeClient(api_url="http://fake-host", api_key="", db_path="")
+
+    def via_flask(method, path, data=None):
+        with app.test_client() as c:
+            res = c.open(path, method=method, json=data)
+        assert res.status_code == 200, (path, res.status_code)
+        return res.get_json()
+
+    client._api_request = via_flask
+    return client
+
+
+@pytest.mark.parametrize("query", ["Wall-E", "wall e", "WALL·E", "knight dark", "the dark knight",
+                                   "Inception", "100%", "Paddington 2"])
+def test_where_is_db_matches_rest(test_env, query):
+    from conftest import seed_title
+    con = db()
+    seed_title(con, 10681)                                          # WALL·E
+    seed_title(con, 155, copies=("4K UHD",))                        # The Dark Knight
+    direct = mcp_server.MatineeClient(db_path=str(test_env)).where_is(query)
+    rest = _api_backed_client().where_is(query)
+    assert (direct["found"], direct.get("id"), direct["title"]) == (rest["found"], rest.get("id"), rest["title"])
+
+
 def test_rest_recommendations_forwards_params(monkeypatch):
     client = mcp_server.MatineeClient(api_url="http://fake-host", db_path="")
     seen = []

@@ -336,9 +336,13 @@ class MatineeClient:
                     (q_clean,),
                 ).fetchone()
                 if not row:
+                    # Fold and split like the grid's list_titles, so 'Wall-E' finds 'WALL·E' in both modes.
+                    ws = _words(title)
+                    clauses = "".join(" AND search_text LIKE ? ESCAPE '\\'" for _ in ws)
                     row = con.execute(
-                        "SELECT id, title, year FROM titles WHERE search_text LIKE ? AND EXISTS (SELECT 1 FROM copies c WHERE c.title_id=titles.id) ORDER BY length(title) ASC LIMIT 1",
-                        (f"%{q_clean}%",),
+                        "SELECT id, title, year FROM titles WHERE EXISTS (SELECT 1 FROM copies c WHERE c.title_id=titles.id)"
+                        f"{clauses} ORDER BY length(title) ASC LIMIT 1",
+                        [f"%{_like_escape(w)}%" for w in ws],
                     ).fetchone()
                 if not row:
                     return {
