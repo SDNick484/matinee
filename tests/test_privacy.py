@@ -215,3 +215,78 @@ def test_public_routes_never_touch_attendance_outside_a_private_branch():
                     f"{name} uses {used} (line {node.lineno}) outside its `private` branch")
         else:
             assert not hits, f"public path {name} uses {hits[0][1]} (line {hits[0][0].lineno})"
+
+
+# ------------------------------------------------------------------ every public route, at runtime (review F4)
+# The AST guard above reads app.py only; the public routes also call recommend.py, and a route added later would
+# not be in a fixed list. This walks app.url_map, so a new /api/ rule is covered (or fails as unknown) the day it
+# lands, with people, recorded and assumed attendance and a note in the database.
+
+NAMES = ("Nick", "Lauren", "Midge", "Alice", "Paige")
+PRIVATE_KEYS = {"notes", "attendance", "attendees", "seen_by", "not_seen_by", "people", "audience"}
+RECOMMEND_MODES = ("forgotten_gems", "never_watched", "quick_picks", "genre_mood", "next_in_franchise",
+                   "start_franchise")
+
+
+@pytest.fixture
+def family_with_history(client):
+    """People (one inactive), Harry Potter 1 and 2 (a franchise), Toy Story, The Dark Knight; recorded, assumed
+    (recent) and assumed-adults (10+ Years) watches, every one with a note."""
+    from conftest import seed_people
+    con = db()
+    people = seed_people(con)
+    con.execute("UPDATE people SET active = 0 WHERE id = ?", (people["Paige"],))
+    ids = [seed_title(con, 155, rating=9.5), seed_title(con, 671, rating=8.5), seed_title(con, 672),
+           seed_title(con, 862, digital=("Digital HD",))]
+    rows = [(ids[0], "2026-11-07", None), (ids[1], "2015-06-01", None), (ids[1], None, "over_10_years"),
+            (ids[3], "2024-12-25", None)]
+    for tid, day, bucket in rows:
+        wid = con.execute("INSERT INTO watches (title_id, watched_date, date_bucket, notes) VALUES (?, ?, ?, ?)",
+                          (tid, day, bucket, NOTE)).lastrowid
+        if tid == ids[0]:
+            for n in ("Nick", "Midge"):
+                con.execute("INSERT INTO watch_people (watch_id, person_id) VALUES (?, ?)", (wid, people[n]))
+    con.commit()
+    return ids
+
+
+def _public_urls(ids):
+    """Every GET under /api/ with each title id, every recommendation mode and a few public filters."""
+    urls, rules = [], set()
+    for rule in app.url_map.iter_rules():
+        if not rule.rule.startswith("/api/") or "GET" not in rule.methods:
+            continue
+        rules.add(rule.rule)
+        if "<int:title_id>" in rule.rule:
+            urls += [rule.rule.replace("<int:title_id>", str(i)) for i in ids]
+        elif rule.rule == "/api/recommendations":
+            urls += [f"/api/recommendations?mode={m}&limit=50" for m in RECOMMEND_MODES]
+        elif rule.rule == "/api/titles":
+            urls += ["/api/titles", "/api/titles?watched=watched", "/api/titles?sort=last_watched",
+                     "/api/titles?q=harry"]
+        else:
+            assert "<" not in rule.rule, f"new public rule {rule.rule}: teach _public_urls its arguments"
+            urls.append(rule.rule)
+    return rules, urls
+
+
+def test_no_public_route_carries_notes_people_or_attendance(client, family_with_history):
+    rules, urls = _public_urls(family_with_history)
+    assert {"/api/titles", "/api/titles/<int:title_id>", "/api/recommendations", "/api/stats", "/api/me"} <= rules
+    for url in urls:
+        res = client.get(url)
+        assert res.status_code == 200, (url, res.status_code)
+        text = res.get_data(as_text=True)
+        assert NOTE not in text, url
+        for name in NAMES:
+            assert name not in text, (url, name)
+        body = res.get_json()
+        assert not PRIVATE_KEYS & set(_walk_keys(body)), (url, PRIVATE_KEYS & set(_walk_keys(body)))
+
+
+@pytest.mark.parametrize("param", ["audience=kids", "unseen_by=kids", "attendance=unknown", "audience=1",
+                                   "unseen_by=Nick"])
+def test_people_parameters_answer_the_same_400_on_every_public_list(client, family_with_history, param):
+    for path in ("/api/titles", "/api/recommendations"):
+        res = client.get(f"{path}?{param}")
+        assert res.status_code == 400 and res.get_json() == {"error": "Sign in to pick for specific people."}, path
