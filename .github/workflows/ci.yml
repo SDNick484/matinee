@@ -111,9 +111,15 @@ jobs:
         run: |
           python -m pytest -v
 
-      - name: Verify JavaScript syntax
+      - name: Verify JavaScript syntax (every ES module in static/js/)
         run: |
-          node -c static/app.js
+          for f in static/js/*.js; do node --check "$f"; done
+          # Without static/js/package.json ("type": "module"), node --check exits 0 on a broken file that uses
+          # `import`. Prove the marker still makes Node parse modules: a broken copy beside it must be rejected.
+          t=$(mktemp -d)
+          cp static/js/package.json static/js/core.js "$t/"
+          echo 'const x = ;' >> "$t/core.js"
+          if node --check "$t/core.js" 2>/dev/null; then echo "node --check accepted a broken module" >&2; exit 1; fi
 
   test-alpine:
     name: Alpine Linux Container (production parity)
@@ -155,6 +161,12 @@ jobs:
         run: |
           sh -n dist/setup-matinee.sh
 
-      - name: Verify JavaScript syntax under Alpine
+      - name: Verify JavaScript syntax under Alpine (every ES module in static/js/)
         run: |
-          node -c static/app.js
+          for f in static/js/*.js; do node --check "$f"; done
+          # Without static/js/package.json ("type": "module"), node --check exits 0 on a broken file that uses
+          # `import`. Prove the marker still makes Node parse modules: a broken copy beside it must be rejected.
+          t=$(mktemp -d)
+          cp static/js/package.json static/js/core.js "$t/"
+          echo 'const x = ;' >> "$t/core.js"
+          if node --check "$t/core.js" 2>/dev/null; then echo "node --check accepted a broken module" >&2; exit 1; fi
