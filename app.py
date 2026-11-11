@@ -1730,6 +1730,10 @@ def api_owned(tmdb_id):
 @app.get("/admin/api/upc/<upc>")
 @editor_required
 def api_upc_lookup(upc):
+    # This GET spends UPCitemdb's 100-a-day trial quota and writes upc_cache, so the read key (held by matinee-mcp
+    # at level none) may not call it (review 2026-11-11, decision D1).
+    if g.editor == "read-key":
+        abort(make_err(403, "The read key can't look up barcodes."))
     clean_code = re.sub(r"[^\d]", "", upc or "")
     if not (11 <= len(clean_code) <= 14):
         abort(make_err(400, "Invalid barcode: must be 12 to 14 digits."))

@@ -12,7 +12,7 @@ Matinee has two keys for headless clients (`Authorization: Bearer <key>` or `X-A
 | Key | Can | Use it for |
 |-----|-----|------------|
 | `MATINEE_API_KEY` | read and write everything under `/admin/api` | write tools (`rate_movie`, `log_watch`, `add_movie`), scripts that change data; the remote `matinee-mcp` service at write level `log` or `all` |
-| `MATINEE_READ_KEY` | `GET` under `/admin/api` only; any other method answers `403 {"error": "The read key can only read"}` | assistants that only read; the remote `matinee-mcp` service while it is read-only |
+| `MATINEE_READ_KEY` | `GET` under `/admin/api` only; any other method answers `403 {"error": "The read key can only read"}`. Not the barcode lookup `GET /admin/api/upc/<upc>` (UPCitemdb's 100-a-day quota): `403 {"error": "The read key can't look up barcodes."}`. `search_tmdb` works. | assistants that only read; the remote `matinee-mcp` service while it is read-only |
 
 What each kind of caller sees:
 
