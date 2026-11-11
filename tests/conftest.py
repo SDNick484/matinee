@@ -53,3 +53,32 @@ def seed_people(con):
                                 (name, kind, color, order)).lastrowid
     con.commit()
     return ids
+
+
+class FakeResponse:
+    """What a stubbed urllib.request.urlopen returns: a context manager with a status."""
+
+    def __init__(self, status=200):
+        self.status = status
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def read(self):
+        return b""
+
+
+class FakeThread:
+    """Stands in for threading.Thread: runs the target inline on start() and remembers how it was created
+    (`FakeThread.created`; reset it per test)."""
+    created = []
+
+    def __init__(self, target=None, args=(), kwargs=None, daemon=None, name=None):
+        self.target, self.args, self.kwargs, self.daemon = target, args, kwargs or {}, daemon
+        FakeThread.created.append(self)
+
+    def start(self):
+        self.target(*self.args, **self.kwargs)

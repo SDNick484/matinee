@@ -1187,3 +1187,87 @@ def test_log_watch_old_date_defaults_to_the_adults(test_env, monkeypatch):
     res = client.log_watch(pb, watched_date=old)
     assert res["watch"]["attendees"] == [people["Nick"], people["Lauren"]]
     assert "Paige" in client.get_movie(pb)["not_seen_by"]
+
+
+# ------------------------------------------------------------------------ Home Assistant webhook (feat/ha-events)
+# MatineeClient.log_watch has one implementation, a POST to /admin/api/titles/<id>/watches, in REST mode and in
+# direct-database mode alike (MATINEE_DB_PATH only speeds up reads, through a mode=ro connection). So Flask's
+# add_watch is the only place that fires, and the MCP server needs no hook of its own.
+
+HA_URL = "http://homeassistant.local:8123/api/webhook/k3Qx9-Zr7wLmPv2T-movie-night"
+
+
+@pytest.fixture
+def ha_posts(monkeypatch):
+    """Webhook requests, decoded; the thread runs inline and urlopen is replaced. No network."""
+    import json
+    from conftest import FakeResponse, FakeThread
+    import types
+    import app as matinee_app
+    posts = []
+    monkeypatch.setattr("app.HA_WEBHOOK_URL", HA_URL, raising=False)
+    monkeypatch.setattr(matinee_app, "threading", types.SimpleNamespace(Thread=FakeThread), raising=False)
+    FakeThread.created = []
+    monkeypatch.setattr(matinee_app.urllib.request, "urlopen",
+                        lambda req, timeout=None: posts.append((req.full_url, json.loads(req.data))) or FakeResponse())
+    return posts
+
+
+def _today():
+    import datetime as dt
+    return dt.date.today().isoformat()
+
+
+def test_log_watch_rest_mode_fires_once(test_env, monkeypatch, ha_posts):
+    client = _admin_rest_client(monkeypatch)
+    res = client.log_watch(1, watched_date=_today())
+    assert res["ok"] is True
+    assert len(ha_posts) == 1
+    url, body = ha_posts[0]
+    assert url == HA_URL
+    assert (body["title"], body["year"], body["runtime"], body["formats"], body["watched_date"], body["title_id"]) == \
+           ("Inception", 2010, 148, ["4K UHD"], _today(), 1)
+
+
+def test_log_watch_direct_database_mode_fires_once_and_cannot_write_itself(test_env, monkeypatch, ha_posts):
+    import sqlite3
+    client = _admin_rest_client(monkeypatch)
+    client.db_path = str(test_env)                      # MATINEE_DB_PATH set: Mode B
+    con = client._get_db()
+    assert con is not None, "direct-database mode is on"
+    try:
+        with pytest.raises(sqlite3.OperationalError, match="readonly"):
+            con.execute("INSERT INTO watches (title_id, watched_date) VALUES (1, '2026-11-11')")
+    finally:
+        con.close()
+    before = db().execute("SELECT count(*) FROM watches").fetchone()[0]
+    client.log_watch(1, watched_date=_today())
+    assert db().execute("SELECT count(*) FROM watches").fetchone()[0] == before + 1   # the write went over REST
+    assert len(ha_posts) == 1, "one watch, one webhook: the REST write fires, a second hook would double it"
+
+
+def test_log_watch_tool_function_fires(test_env, monkeypatch, ha_posts):
+    monkeypatch.setattr(mcp_server, "_default_client", _admin_rest_client(monkeypatch))
+    assert mcp_server.log_watch(title_id=1, watched_date=_today())["ok"] is True
+    assert len(ha_posts) == 1
+
+
+@pytest.mark.parametrize("kwargs", [
+    {"watched_date": "2019-07-04"},
+    {"date_bucket": "over_10_years"},
+    {"date_bucket": "past_year"},
+    {},                                                  # no date: the MCP tool records a DATELESS watch
+    {"notes": "Saw it in theaters"},
+], ids=["2019-07-04", "10+years", "past-year", "no-date-is-dateless", "notes-only"])
+def test_log_watch_history_and_dateless_never_fire(test_env, monkeypatch, ha_posts, kwargs):
+    assert _admin_rest_client(monkeypatch).log_watch(1, **kwargs)["ok"] is True
+    assert ha_posts == []
+
+
+def test_log_watch_attendees_and_notes_stay_out_of_the_payload(test_env, monkeypatch, ha_posts):
+    _seed_family(test_env)
+    client = _admin_rest_client(monkeypatch)
+    client.log_watch(1, watched_date=_today(), notes="Alice cried at the end", attendees=["Nick", "Alice"])
+    body = ha_posts[0][1]
+    assert "attendees" not in body and "notes" not in body
+    assert "Alice" not in str(body) and "cried" not in str(body)

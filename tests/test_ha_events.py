@@ -14,39 +14,13 @@ import pytest
 
 import app as matinee_app
 from app import app, db, init_db
-from conftest import seed_people
+from conftest import FakeResponse, FakeThread, seed_people
 
 WEBHOOK_ID = "k3Qx9-Zr7wLmPv2T-movie-night"
 URL = f"http://homeassistant.local:8123/api/webhook/{WEBHOOK_ID}"
 TODAY = dt.date.today().isoformat()
 PAYLOAD_KEYS = {"event", "title", "year", "runtime", "certification", "formats", "location", "watched_date",
                 "title_id"}
-
-
-class FakeResponse:
-    def __init__(self, status=200):
-        self.status = status
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        return False
-
-    def read(self):
-        return b""
-
-
-class FakeThread:
-    """Runs the target inline on start() and remembers how it was created."""
-    created = []
-
-    def __init__(self, target=None, args=(), kwargs=None, daemon=None, name=None):
-        self.target, self.args, self.kwargs, self.daemon = target, args, kwargs or {}, daemon
-        FakeThread.created.append(self)
-
-    def start(self):
-        self.target(*self.args, **self.kwargs)
 
 
 @pytest.fixture
