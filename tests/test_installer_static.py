@@ -101,6 +101,13 @@ def test_build_copies_mcp_files():
         assert f in BUILD, f
 
 
+def test_build_ships_js_modules():
+    # cp -r of the whole static/ directory carries static/js/ (and its package.json) into the payload.
+    cp = next(line for line in BUILD.splitlines() if line.startswith("cp -r "))
+    assert " static " in cp
+    assert (ROOT / "static" / "js" / "main.js").is_file() and (ROOT / "static" / "js" / "package.json").is_file()
+
+
 def test_requirements_mcp_pins():
     text = (ROOT / "requirements-mcp.txt").read_text()
     for pin in ("mcp>=2.3,<3", "uvicorn>=0.31", "pyjwt[crypto]>=2.10"):
