@@ -227,6 +227,19 @@ def test_lan_hosts_setting_is_written_and_exported():
     assert re.search(r"^# .+\nLAN_HOSTS=$", (ROOT / ".env.example").read_text(encoding="utf-8"), re.M)
 
 
+def test_ha_webhook_url_is_written_exported_and_documented():
+    # The URL is a secret (the webhook id is the only credential): empty by default, added when missing and never
+    # overwritten, exported to the Flask service only. The matinee-mcp service never posts to Home Assistant.
+    assert re.search(r'^add_setting "\$CONF" HA_WEBHOOK_URL "" ".+"$', HEAD, re.M)
+    export = next(l for l in HEAD.splitlines() if l.startswith("export PORT "))
+    assert " HA_WEBHOOK_URL " in f" {export} "
+    mcp_export = next(l for l in _init_script().splitlines() if l.startswith("export "))
+    assert "HA_WEBHOOK_URL" not in mcp_export
+    env = (ROOT / ".env.example").read_text(encoding="utf-8")
+    assert re.search(r"^# .+\nHA_WEBHOOK_URL=$", env, re.M)
+    assert "HA_WEBHOOK_URL=http" not in env, "no example webhook id in the committed example"
+
+
 # ------------------------------------------------------------------ MATINEE_READ_KEY
 # Mirrors mcp_http.readonly(): only 0/false/no/off (case-insensitive, trimmed) turn writes on.
 READONLY_CASES = [(None, "read"), ("", "read"), ("1", "read"), ("true", "read"), ("garbage", "read"),
