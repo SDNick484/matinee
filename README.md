@@ -101,6 +101,11 @@ without signing in. Two checks keep that from being usable by other websites:
   different host, or that says `Sec-Fetch-Site: cross-site`, with
   `403 {"error": "Cross-site request refused"}`. This applies to LAN and Cloudflare Access editors alike;
   requests authenticated with `MATINEE_API_KEY` or `MATINEE_READ_KEY` (scripts, the MCP server) are exempt.
+- **Barcode lookups.** `GET /admin/api/upc/<upc>` spends UPCitemdb's 100-a-day trial quota and caches the answer,
+  so it is narrower: a browser must mark the request `Sec-Fetch-Site: same-origin` (Matinee's own page does; an
+  older browser, `curl` on the LAN or another app on the same domain gets
+  `403 {"error": "Barcode lookups must come from the Matinee page."}`), and `MATINEE_READ_KEY` is refused.
+  `MATINEE_API_KEY` scripts may still call it.
 
 If you reach Matinee on the LAN by a name instead of an IP (a router DNS entry, `/etc/hosts`, mDNS), list it,
 without a port, and restart:

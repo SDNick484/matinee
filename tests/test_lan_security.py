@@ -225,3 +225,28 @@ def test_security_headers_on_every_response(client, path):
 def test_security_headers_on_errors(client):
     r = client.delete("/admin/api/titles/1", headers={"Host": "evil.example.com"})
     assert r.status_code == 401 and r.headers["X-Content-Type-Options"] == "nosniff"
+
+
+# ------------------------------------------------------------------ decision D3: the barcode lookup is same-origin only
+# GET /admin/api/upc/<upc> spends UPCitemdb's daily quota and writes upc_cache. A browser marks its own page's fetch
+# Sec-Fetch-Site: same-origin; anything else for a browser identity (no header: an old browser or curl; same-site:
+# another app on the same domain) is refused before any lookup.
+
+
+@pytest.mark.parametrize("headers", [{}, {"Sec-Fetch-Site": "same-site"}, {"Sec-Fetch-Site": "cross-site"}])
+def test_barcode_lookup_needs_a_same_origin_page(client, monkeypatch, headers):
+    calls = []
+    monkeypatch.setattr(core, "http_json", lambda *a, **kw: calls.append(a) or {"items": []})
+    r = client.get("/admin/api/upc/883929637581", headers={"Host": LAN_IP, **headers})
+    assert r.status_code == 403
+    assert r.get_json()["error"] in ("Barcode lookups must come from the Matinee page.", "Cross-site request refused")
+    assert calls == []
+    assert count("SELECT count(*) FROM upc_cache") == 0
+
+
+@pytest.mark.parametrize("site", ["same-origin", "none"])
+def test_barcode_lookup_from_the_page_runs(client, monkeypatch, site):
+    monkeypatch.setattr(core, "http_json", lambda *a, **kw: {"items": []})
+    r = client.get("/admin/api/upc/883929637581", headers={"Host": LAN_IP, "Sec-Fetch-Site": site})
+    assert r.status_code == 404   # looked up; UPCitemdb had no product
+    assert count("SELECT count(*) FROM upc_cache") == 1

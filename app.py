@@ -1730,10 +1730,14 @@ def api_owned(tmdb_id):
 @app.get("/admin/api/upc/<upc>")
 @editor_required
 def api_upc_lookup(upc):
-    # This GET spends UPCitemdb's 100-a-day trial quota and writes upc_cache, so the read key (held by matinee-mcp
-    # at level none) may not call it (review 2026-11-11, decision D1).
+    # This GET spends UPCitemdb's 100-a-day trial quota and writes upc_cache, so it is narrower than other reads
+    # (review 2026-11-11, decisions D1 and D3): never the read key, and from a browser only when the browser says
+    # the request comes from Matinee's own page. editor_required has already refused cross-site requests.
     if g.editor == "read-key":
         abort(make_err(403, "The read key can't look up barcodes."))
+    if g.editor not in KEY_IDENTITIES and \
+            (request.headers.get("Sec-Fetch-Site") or "").lower() not in ("same-origin", "none"):
+        abort(make_err(403, "Barcode lookups must come from the Matinee page."))
     clean_code = re.sub(r"[^\d]", "", upc or "")
     if not (11 <= len(clean_code) <= 14):
         abort(make_err(400, "Invalid barcode: must be 12 to 14 digits."))
