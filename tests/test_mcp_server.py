@@ -1,4 +1,5 @@
 import asyncio
+import re
 import urllib.parse
 import pytest
 mcp = pytest.importorskip("mcp")
@@ -646,3 +647,110 @@ def test_stdio_client_falls_back_to_the_read_key(monkeypatch):
     assert (c.api_key, c.key_name) == ("wk", "MATINEE_API_KEY")
     c = mcp_server.MatineeClient(api_url="http://x", api_key="", db_path="")  # explicit "" still means /api
     assert c._read_prefix == "/api"
+
+
+# --------------------------------------------------------------- tool annotations (spec §5)
+# name: (readOnly, destructive, idempotent, openWorld)
+EXPECTED_HINTS = {
+    "search_collection": (True, False, True, False),
+    "get_movie": (True, False, True, False),
+    "where_is": (True, False, True, False),
+    "get_recommendations": (True, False, True, False),
+    "get_collection_stats": (True, False, True, False),
+    "search_tmdb": (True, False, True, True),
+    "rate_movie": (False, True, True, False),
+    "log_watch": (False, False, False, False),
+    "add_movie": (False, False, False, True),
+}
+
+
+def _hints(tool):
+    """The four hints as the client sees them: the wire (camelCase) form of the annotations."""
+    assert tool.annotations is not None, f"{tool.name} has no annotations"
+    wire = tool.annotations.model_dump(by_alias=True)
+    return (wire["readOnlyHint"], wire["destructiveHint"], wire["idempotentHint"], wire["openWorldHint"])
+
+
+def test_every_tool_has_the_annotations_from_the_spec():
+    pytest.importorskip("mcp.types")
+    tools = {t.name: t for t in asyncio.run(mcp_server.mcp.list_tools())}
+    assert set(tools) == set(EXPECTED_HINTS)
+    for name, expected in EXPECTED_HINTS.items():
+        assert _hints(tools[name]) == expected, name
+
+
+def test_annotation_kwargs_guarded_on_tool_signature():
+    class NoAnnotations:
+        def tool(self, name=None, description=None):
+            pass
+
+    class WithAnnotations:
+        def tool(self, name=None, description=None, annotations=None):
+            pass
+
+    assert mcp_server._annotation_kwargs(None, "where_is") == {}
+    assert mcp_server._annotation_kwargs(NoAnnotations, "where_is") == {}
+    assert "annotations" in mcp_server._annotation_kwargs(WithAnnotations, "where_is")
+
+
+def test_annotation_table_covers_exactly_the_nine_tools():
+    assert set(mcp_server.TOOL_HINTS) == set(EXPECTED_HINTS)
+
+
+# --------------------------------------------------------------- write levels (spec §2, §4, §6)
+LOG_TOOLS = {"rate_movie", "log_watch"}
+READ_ONLY_TOOLS = ALL_TOOLS - set(mcp_server.WRITE_TOOLS)
+
+
+@pytest.mark.parametrize("level,expected", [
+    ("none", READ_ONLY_TOOLS),
+    ("log", READ_ONLY_TOOLS | LOG_TOOLS),
+    ("all", ALL_TOOLS),
+    (False, READ_ONLY_TOOLS),
+    (True, ALL_TOOLS),
+])
+def test_build_server_levels_list_the_right_tools(level, expected):
+    assert _names(mcp_server.build_server(writes=level)) == expected
+
+
+@pytest.mark.parametrize("bad", ["ALL", "", " log ", "write", None, 2, 0, ["all"]])
+def test_build_server_rejects_unknown_levels(bad):
+    with pytest.raises(ValueError, match="writes must be"):
+        mcp_server.build_server(writes=bad)
+
+
+def test_log_prompt_only_where_log_and_watch_exist():
+    assert _prompts(mcp_server.build_server(writes="none")) == {"what_to_watch"}
+    assert _prompts(mcp_server.build_server(writes="log")) == {"what_to_watch", "log_movie_night"}
+    assert _prompts(mcp_server.build_server(writes="all")) == {"what_to_watch", "log_movie_night"}
+
+
+def test_instructions_for_each_level():
+    none = mcp_server.instructions_for("none")
+    log = mcp_server.instructions_for("log")
+    full = mcp_server.instructions_for("all")
+    assert full == mcp_server.SERVER_INSTRUCTIONS
+    assert log.startswith(mcp_server.SERVER_INSTRUCTIONS)
+    assert "cannot add movies" in log and "log_watch" in log and "rate_movie" in log
+    assert none.startswith(mcp_server.READONLY_INSTRUCTIONS)
+    assert "read-only" in none and "log_watch" not in none and "rate_movie" not in none
+    assert mcp_server.instructions_for(True) == full and mcp_server.instructions_for(False) == none
+    for text in (none, log, full):
+        assert 'max_cert="PG-13"' in text and "where_is" in text
+
+
+PROMPT_TEXT = {
+    "what_to_watch": lambda: mcp_server.prompt_what_to_watch(mood="cozy", max_runtime=100, kids=True),
+    "log_movie_night": lambda: mcp_server.prompt_log_movie_night("Paddington 2"),
+}
+
+
+@pytest.mark.parametrize("level", ["none", "log", "all"])
+def test_instructions_and_prompts_name_only_registered_tools(level):
+    server = mcp_server.build_server(writes=level)
+    registered = _names(server)
+    texts = [server.instructions] + [PROMPT_TEXT[name]() for name in _prompts(server)]
+    for text in texts:
+        for tool in ALL_TOOLS:
+            if re.search(rf"\b{tool}\b", text):
+                assert tool in registered, f"level {level}: text names {tool}, which is not registered"

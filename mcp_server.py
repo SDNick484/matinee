@@ -19,7 +19,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 try:
     from mcp.server.mcpserver import MCPServer as FastMCP
@@ -65,9 +65,24 @@ def _location_paths(con) -> Dict[int, str]:
     return {i: build_path(i) for i in by_id}
 
 
-def _readonly_kwargs(server_cls) -> Dict[str, Any]:
-    """Read-only tool annotations, only when this mcp release supports them on tool()."""
-    if server_cls is None:
+# (readOnlyHint, destructiveHint, idempotentHint, openWorldHint) per tool; the reasons are in
+# docs/superpowers/specs/2026-11-11-mcp-tiered-writes-design.md §5.
+TOOL_HINTS: Dict[str, Tuple[bool, bool, bool, bool]] = {
+    "search_collection": (True, False, True, False),
+    "get_movie": (True, False, True, False),
+    "where_is": (True, False, True, False),
+    "get_recommendations": (True, False, True, False),
+    "get_collection_stats": (True, False, True, False),
+    "search_tmdb": (True, False, True, True),   # reads TMDB
+    "rate_movie": (False, True, True, False),   # overwrites or clears the previous rating
+    "log_watch": (False, False, False, False),  # appends a watch row each call
+    "add_movie": (False, False, False, True),   # inserts a copy each call, may fetch TMDB
+}
+
+
+def _annotation_kwargs(server_cls, name: str) -> Dict[str, Any]:
+    """Tool annotations for `name`, only when this mcp release supports them on tool()."""
+    if server_cls is None or name not in TOOL_HINTS:
         return {}
     try:
         from mcp.types import ToolAnnotations
@@ -75,10 +90,15 @@ def _readonly_kwargs(server_cls) -> Dict[str, Any]:
             return {}
     except (ImportError, TypeError, ValueError):
         return {}
-    return {"annotations": ToolAnnotations(readOnlyHint=True, openWorldHint=False)}
+    read_only, destructive, idempotent, open_world = TOOL_HINTS[name]
+    return {"annotations": ToolAnnotations(readOnlyHint=read_only, destructiveHint=destructive,
+                                           idempotentHint=idempotent, openWorldHint=open_world)}
 
 
-_READONLY = _readonly_kwargs(FastMCP)
+def _readonly_kwargs(server_cls) -> Dict[str, Any]:
+    """Read-only tool annotations (kept for callers that predate TOOL_HINTS; same as get_recommendations')."""
+    return _annotation_kwargs(server_cls, "get_recommendations")
+
 
 try:
     from mcp.server.mcpserver.exceptions import ToolError
@@ -602,6 +622,21 @@ Matinee is the family's own collection of physical discs and digital copies.
 # For build_server(writes=False): the remote read-only service has no log_watch or rate_movie to point at.
 READONLY_INSTRUCTIONS = SERVER_INSTRUCTIONS.replace(
     " After watching: call log_watch, then rate_movie if the user gives a rating.", "")
+# Said at the levels that lack tools, in words that name none of them.
+_NO_WRITES_NOTE = ("- This connection is read-only: it cannot log watches, rate movies or add titles. "
+                   "For those, tell the user to use the Matinee app.\n")
+_LOG_ONLY_NOTE = ("- This connection can log watches and ratings but cannot add movies or copies; "
+                  "a title they do not own has to be added in the Matinee app.\n")
+
+
+def instructions_for(writes) -> str:
+    """Server instructions that only mention tools registered at this write level."""
+    level = _level(writes)
+    if level == "all":
+        return SERVER_INSTRUCTIONS
+    if level == "log":
+        return SERVER_INSTRUCTIONS + _LOG_ONLY_NOTE
+    return READONLY_INSTRUCTIONS + _NO_WRITES_NOTE
 
 
 def _make_server(instructions: str = SERVER_INSTRUCTIONS):
@@ -617,6 +652,24 @@ def _make_server(instructions: str = SERVER_INSTRUCTIONS):
 _default_client = MatineeClient()
 
 WRITE_TOOLS = ("rate_movie", "log_watch", "add_movie")
+# Which write tools each level registers. "log" is what the phone needs to log a movie night: it can record a
+# watch and a rating but cannot import titles (add_movie spends TMDB quota and adds copies).
+WRITE_LEVELS: Dict[str, Tuple[str, ...]] = {
+    "none": (),
+    "log": ("rate_movie", "log_watch"),
+    "all": WRITE_TOOLS,
+}
+
+
+def _level(writes) -> str:
+    """Normalize build_server's `writes`: True is "all", False is "none", or one of WRITE_LEVELS."""
+    if writes is True:
+        return "all"
+    if writes is False:
+        return "none"
+    if isinstance(writes, str) and writes in WRITE_LEVELS:
+        return writes
+    raise ValueError(f"writes must be True, False or one of {sorted(WRITE_LEVELS)}, not {writes!r}")
 
 
 def search_collection(
@@ -766,27 +819,29 @@ def prompt_log_movie_night(movie_title: str = "") -> str:
     )
 
 
-def build_server(*, writes: bool = True):
-    """Build a MCP server with every tool; writes=False leaves out WRITE_TOOLS.
+def build_server(*, writes=True):
+    """Build a MCP server. `writes` is True (all nine tools), False (the six read tools) or a level from
+    WRITE_LEVELS: "none", "log" (adds rate_movie and log_watch) or "all". Anything else raises ValueError.
 
     Tool functions are module-level and read _default_client at call time.
     """
-    server = _make_server(SERVER_INSTRUCTIONS if writes else READONLY_INSTRUCTIONS)
+    level = _level(writes)
+    server = _make_server(instructions_for(level))
     if not server:
         return None
-    server.tool()(search_collection)
-    server.tool()(get_movie)
-    server.tool()(where_is)
-    server.tool(**_READONLY)(get_recommendations)
-    server.tool()(get_collection_stats)
-    server.tool()(search_tmdb)
-    if writes:
-        for fn in (rate_movie, log_watch, add_movie):
-            server.tool()(fn)
+
+    def register(fn):
+        server.tool(**_annotation_kwargs(FastMCP, fn.__name__))(fn)
+
+    for fn in (search_collection, get_movie, where_is, get_recommendations, get_collection_stats, search_tmdb):
+        register(fn)
+    for fn in (rate_movie, log_watch, add_movie):
+        if fn.__name__ in WRITE_LEVELS[level]:
+            register(fn)
     server.resource("matinee://stats")(resource_stats)
     server.resource("matinee://recommendations")(resource_recommendations)
     server.prompt("what_to_watch")(prompt_what_to_watch)
-    if writes:
+    if level != "none":  # log_movie_night names rate_movie and log_watch
         server.prompt("log_movie_night")(prompt_log_movie_night)
     return server
 
