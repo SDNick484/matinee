@@ -813,6 +813,7 @@ def test_audience_db_matches_rest(test_env, monkeypatch):
             mode=mode, audience=audience, limit=50)
         rest = rest_client.get_recommendations(mode=mode, audience=audience, limit=50)
         assert direct["audience"] == rest["audience"], audience
+        assert not [p for _, p in rest_client.requested if "Alice" in p or "Paige" in p]   # ids went out (I3)
         assert [(r["id"], r["seen_by"]) for r in direct["results"]] == \
                [(r["id"], r["seen_by"]) for r in rest["results"]], audience
     kids = mcp_server.MatineeClient(db_path=str(test_env)).get_recommendations(
@@ -828,6 +829,7 @@ def test_unseen_by_db_matches_rest(test_env, monkeypatch):
         direct = direct_client.search_collection(unseen_by=who, limit=50)
         rest = rest_client.search_collection(unseen_by=who, limit=50)
         assert [t["id"] for t in direct] == [t["id"] for t in rest], who
+    assert not [p for _, p in rest_client.requested if any(n in p for n in ("Midge", "Alice", "Paige"))]
     assert [t["title"] for t in direct_client.search_collection(unseen_by="kids")] == ["Toy Story", "WALL·E"]
     assert [t["title"] for t in direct_client.search_collection(unseen_by="Midge")] == ["Toy Story", "WALL·E"]
     assert direct_client.search_collection(query="inside", unseen_by="Nick") == []
@@ -975,15 +977,95 @@ def test_public_rest_mode_does_not_probe_and_surfaces_the_400(monkeypatch):
         client.list_people()
 
 
-def test_rest_forwards_audience_and_unseen_by(monkeypatch):
+# Paige is inactive here: a name still resolves to its id whether or not the person is active.
+REST_PEOPLE = [{"id": i, "name": n, "kind": k, "color": c, "sort_order": i - 1, "active": i != 5, "watch_count": 0}
+               for i, (n, k, c) in enumerate((("Nick", "adult", "green"), ("Lauren", "adult", "blue"),
+                                              ("Midge", "kid", "red"), ("Alice", "kid", "pink"),
+                                              ("Paige", "kid", "purple")), 1)]
+
+
+def _people_rest_client(monkeypatch, people=REST_PEOPLE):
+    """REST client whose /people answers `people` and whose other reads echo an audience; returns (client, paths)."""
     client = mcp_server.MatineeClient(api_url="http://fake-host", api_key="k", db_path="")
     seen = []
     monkeypatch.setattr(client, "_api_request", lambda m, p, d=None: seen.append(p) or (
-        {"people": []} if p.endswith("/people") else {"results": [], "audience": {"label": "kids"}, "titles": []}))
+        {"people": people} if p.endswith("/people") else {"results": [], "audience": {"label": "x"}, "titles": []}))
+    return client, seen
+
+
+def _sent(paths, key):
+    return [urllib.parse.parse_qs(urllib.parse.urlparse(p).query).get(key) for p in paths if "?" in p]
+
+
+def test_rest_forwards_audience_and_unseen_by(monkeypatch):
+    client, seen = _people_rest_client(monkeypatch)
     client.get_recommendations(audience="Alice,Paige")
     client.search_collection(unseen_by="kids")
-    qs = [urllib.parse.parse_qs(urllib.parse.urlparse(p).query) for p in seen if "?" in p]
-    assert qs[0]["audience"] == ["Alice,Paige"] and qs[1]["unseen_by"] == ["kids"]
+    assert _sent(seen, "audience") == [["4,5"], None] and _sent(seen, "unseen_by") == [None, ["kids"]]
+
+
+@pytest.mark.parametrize("given,sent", [
+    ("Alice,Paige", "4,5"), ("alice, PAIGE", "4,5"), ("Midge", "3"), ("Paige", "5"),     # inactive people resolve too
+    ("Nick,4", "1,4"), ("3", "3"), ("99", "99"),                                         # ids pass as given
+    ("kids", "kids"), ("Adults", "Adults"), ("everyone", "everyone"),                   # keywords pass as given
+])
+def test_rest_sends_person_ids_not_names(monkeypatch, given, sent):
+    """Names never reach the server's query string (and so its access log): REST mode sends ids (I3)."""
+    client, seen = _people_rest_client(monkeypatch)
+    client.get_recommendations(audience=given)
+    client.search_collection(unseen_by=given)
+    assert _sent(seen, "audience")[0] == [sent] and _sent(seen, "unseen_by")[1] == [sent]
+    assert all(name not in p for p in seen for name in ("Alice", "alice", "Paige", "PAIGE", "Midge"))
+
+
+def test_rest_unknown_person_is_refused_before_sending(monkeypatch):
+    client, seen = _people_rest_client(monkeypatch)
+    msg = "Unknown person: Grandma. People: Nick, Lauren, Midge, Alice, Paige."
+    for call in (lambda: client.get_recommendations(audience="Alice,Grandma"),
+                 lambda: client.search_collection(unseen_by="Grandma")):
+        with pytest.raises(mcp_server.MatineeError) as e:
+            call()
+        assert str(e.value) == msg
+    assert all(p.endswith("/people") for p in seen)          # only the people probe went out
+    # nobody set up: the server's own text, and still nothing sent with the name in it
+    client, seen = _people_rest_client(monkeypatch, people=[])
+    with pytest.raises(mcp_server.MatineeError) as e:
+        client.get_recommendations(audience="Alice")
+    assert str(e.value) == "No people are set up yet. Add them under People in the admin view."
+    assert all(p.endswith("/people") for p in seen)
+
+
+def test_rest_people_messages_match_the_server(test_env):
+    """The REST client words its refusals exactly as recommend.py does (it cannot import it on that path)."""
+    import recommend
+    from conftest import seed_people
+    con = db()
+    seed_people(con)
+    rows = [dict(r) for r in con.execute("SELECT id, name FROM people ORDER BY sort_order, id")]
+    assert mcp_server._unknown_person(rows, "Bob") == recommend.unknown_person_message(con, "Bob")
+    assert mcp_server.NO_PEOPLE == recommend._NO_PEOPLE
+
+
+def test_public_rest_mode_sends_audience_unchanged(monkeypatch):
+    client = mcp_server.MatineeClient(api_url="http://fake-host", api_key="", db_path="")
+    seen = []
+    monkeypatch.setattr(client, "_api_request", lambda m, p, d=None: seen.append(p) or {"results": [], "audience": {}})
+    client.get_recommendations(audience="Alice")
+    assert len(seen) == 1 and _sent(seen, "audience") == [["Alice"]]   # no probe; the server's 400 answers it
+
+
+def test_log_watch_with_attendees_refuses_an_older_server(monkeypatch):
+    client = mcp_server.MatineeClient(api_url="http://fake-host", api_key="k", db_path="")
+    old = {"ok": True, "watch": {"id": 88, "title_id": 42, "watched_date": "2026-11-10", "notes": None}}
+    monkeypatch.setattr(client, "_api_request", lambda m, p, d=None: old)
+    with pytest.raises(mcp_server.MatineeError) as e:
+        client.log_watch(42, watched_date="2026-11-10", attendees=["Nick", "Lauren"])
+    assert str(e.value) == ("This Matinee server is too old to pick for specific people. Update Matinee. "
+                            "The watch was logged for everyone.")
+    assert client.log_watch(42, watched_date="2026-11-10") == old          # no attendees: nothing to check
+    new = {"ok": True, "watch": dict(old["watch"], attendance="recorded", attendees=[1, 2])}
+    monkeypatch.setattr(client, "_api_request", lambda m, p, d=None: new)
+    assert client.log_watch(42, watched_date="2026-11-10", attendees=["Nick", "Lauren"]) == new
 
 
 def test_tool_lists_per_level():
@@ -1002,6 +1084,17 @@ def test_readonly_instructions_name_no_write_tool():
     assert mcp_server.SERVER_INSTRUCTIONS.count("pass attendees to log_watch only when someone was missing") == 1
     assert '"The girls" or "the kids": audience="kids". "Us two", "date night": audience="adults". ' \
            'A named person: audience="Alice".' in mcp_server.SERVER_INSTRUCTIONS
+
+
+def test_instructions_say_to_drop_audience_when_nobody_is_set_up():
+    fallback = "If a tool answers that no people are set up, repeat the call without audience."
+    after_full = ('A named person: audience="Alice". After watching, pass attendees to log_watch only when someone '
+                  f'was missing. {fallback}')
+    assert mcp_server.SERVER_INSTRUCTIONS.count(fallback) == 1 and after_full in mcp_server.SERVER_INSTRUCTIONS
+    for level in ("none", "log", "all"):
+        text = mcp_server.instructions_for(level)
+        assert text.count(fallback) == 1, level
+    assert f'A named person: audience="Alice". {fallback}' in mcp_server.instructions_for("none")
 
 
 def test_tool_schemas_carry_the_new_arguments():

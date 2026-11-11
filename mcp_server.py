@@ -127,6 +127,39 @@ MATINEE_DB_PATH = os.environ.get("MATINEE_DB_PATH", "").strip()
 
 
 TOO_OLD_FOR_PEOPLE = "This Matinee server is too old to pick for specific people. Update Matinee."
+# recommend.py's wording, written out here because the REST path does not import recommend.py
+# (tests/test_mcp_server.py::test_rest_people_messages_match_the_server keeps them equal).
+NO_PEOPLE = "No people are set up yet. Add them under People in the admin view."
+_AUDIENCE_KEYWORDS = ("everyone", "adults", "kids")
+_ASCII_LOWER = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
+
+
+def _unknown_person(people: List[Dict[str, Any]], token: str) -> str:
+    """recommend.unknown_person_message for the REST client: `people` in the server's (sort_order, id) order."""
+    return f"Unknown person: {token}. People: {', '.join(p['name'] for p in people)}."
+
+
+def _people_ids(raw: str, people: List[Dict[str, Any]]) -> str:
+    """REST: an `audience` / `unseen_by` value with every name swapped for its id, so a person's name never goes
+    in a query string (and so never in the server's access log). A lone keyword and numeric ids pass as given;
+    the server still validates them. Names match as the server's COLLATE NOCASE column does (ASCII case only)."""
+    tokens = [t.strip() for t in str(raw).split(",")]
+    tokens = [t for t in tokens if t]
+    if not tokens or (len(tokens) == 1 and tokens[0].lower() in _AUDIENCE_KEYWORDS):
+        return raw
+    by_name = {str(p.get("name", "")).translate(_ASCII_LOWER): p["id"] for p in people}
+    out = []
+    for token in tokens:
+        if token.isascii() and token.isdigit():
+            out.append(token)
+            continue
+        if not people:
+            raise MatineeError(NO_PEOPLE, status=400)
+        pid = by_name.get(token.translate(_ASCII_LOWER))
+        if pid is None:
+            raise MatineeError(_unknown_person(people, token), status=400)
+        out.append(str(pid))
+    return ",".join(out)
 
 
 class MatineeClient:
@@ -222,12 +255,14 @@ class MatineeClient:
             raise
         return res.get("people", []) if isinstance(res, dict) else []
 
-    def _require_people_api(self) -> None:
-        """REST: refuse before sending when the server predates people, since it would ignore `audience` and
-        `unseen_by` and return an unfiltered list. Public mode (no key) is not probed: /api/people does not
-        exist, and the server's own 400 ("Sign in to pick for specific people.") is the right answer there."""
-        if self.api_key:
-            self._people_rows()
+    def _people_param(self, raw: str) -> str:
+        """REST: the `audience` / `unseen_by` value to send. Refuses before sending when the server predates
+        people, since it would ignore the argument and return an unfiltered list, and sends person ids rather
+        than names (_people_ids). Public mode (no key) is not probed and sends the value as given: /api/people
+        does not exist, and the server's own 400 ("Sign in to pick for specific people.") is the answer there."""
+        if not self.api_key:
+            return raw
+        return _people_ids(raw, self._people_rows())
 
     def list_people(self) -> List[Dict[str, Any]]:
         """The family members Matinee knows: id, name, kind (adult/kid), color, active."""
@@ -354,7 +389,7 @@ class MatineeClient:
 
         # Fallback to REST API
         if unseen_by is not None:
-            self._require_people_api()
+            unseen_by = self._people_param(unseen_by)
         params = {"limit": limit}
         if query:
             params["q"] = query
@@ -609,11 +644,10 @@ class MatineeClient:
             finally:
                 con.close()
 
-        if audience is not None:
-            self._require_people_api()
+        sent_audience = self._people_param(audience) if audience is not None else None
         params = {"mode": mode, "limit": limit}
-        if audience is not None:
-            params["audience"] = audience
+        if sent_audience is not None:
+            params["audience"] = sent_audience
         if genre:
             params["genre"] = genre
         if medium:
@@ -704,7 +738,12 @@ class MatineeClient:
             payload["notes"] = notes
         if attendees is not None:
             payload["attendees"] = list(attendees)
-        return self._api_request("POST", f"/admin/api/titles/{title_id}/watches", payload)
+        res = self._api_request("POST", f"/admin/api/titles/{title_id}/watches", payload)
+        watch = res.get("watch") if isinstance(res, dict) else None
+        if attendees is not None and isinstance(watch, dict) and "attendance" not in watch:
+            # A server that predates people ignored `attendees` and logged the watch anyway; say both.
+            raise MatineeError(f"{TOO_OLD_FOR_PEOPLE} The watch was logged for everyone.")
+        return res
 
     def search_tmdb(self, query: str) -> List[Dict[str, Any]]:
         """Search TMDB for movies to add to the collection."""
@@ -734,7 +773,8 @@ Matinee is the family's own collection of physical discs and digital copies.
 - Recommend only what get_recommendations or search_collection return. Use search_tmdb only when the user asks about movies they do not own.
 - "Kids' night" or "something the kids can watch": call get_recommendations(max_cert="PG-13") unless the user names a rating. Unrated films are left out whenever max_cert is set.
 - "What's next in the series we're watching": mode="next_in_franchise". "Let's start a new series": mode="start_franchise".
-- "The girls" or "the kids": audience="kids". "Us two", "date night": audience="adults". A named person: audience="Alice". After watching, pass attendees to log_watch only when someone was missing.
+- "The girls" or "the kids": audience="kids". "Us two", "date night": audience="adults". A named person: audience="Alice". After watching, pass attendees to log_watch only when someone was missing. \
+If a tool answers that no people are set up, repeat the call without audience.
 - After a pick, "where is it?": call where_is(title). After watching: call log_watch, then rate_movie if the user gives a rating.
 """
 # For build_server(writes=False): the remote read-only service has no log_watch or rate_movie to point at.
