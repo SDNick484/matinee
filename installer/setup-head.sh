@@ -4,7 +4,7 @@
 # missing settings to existing config files.
 #
 #   sh setup-matinee.sh               install / upgrade
-#   MATINEE_PORT=8769 sh setup-matinee.sh
+#   MATINEE_PORT=8771 sh setup-matinee.sh
 #   sh setup-matinee.sh --uninstall   remove app + service (keeps /var/lib/matinee and backups)
 set -eu
 APP_DIR=/opt/matinee
@@ -14,7 +14,7 @@ OPS_CONF="${OPS_CONF:-/etc/conf.d/ops}"
 SVC_USER=matinee
 MCP_USER=matinee-mcp
 MCP_VENV=/opt/matinee-mcp/venv
-PORT="${MATINEE_PORT:-8769}"
+PORT="${MATINEE_PORT:-8771}"
 
 if [ "$(id -u)" != 0 ]; then echo "Run as root"; exit 1; fi
 command -v apk >/dev/null || { echo "This installer is for Alpine (apk)."; exit 1; }
@@ -31,7 +31,7 @@ if [ "${1:-}" = "--uninstall" ]; then
 fi
 
 # an existing install keeps its port
-[ -f "$CONF" ] && PORT=$(sed -n 's/^PORT=//p' "$CONF" | head -n1) && PORT=${PORT:-8769}
+[ -f "$CONF" ] && PORT=$(sed -n 's/^PORT=//p' "$CONF" | head -n1) && PORT=${PORT:-8771}
 
 echo "==> Installing packages"
 apk add --no-cache python3 py3-flask py3-gunicorn py3-jwt py3-cryptography sqlite >/dev/null
@@ -140,7 +140,7 @@ cat > /etc/init.d/matinee <<'EOF'
 #!/sbin/openrc-run
 name="matinee"
 description="Matinee movie collection"
-: ${PORT:=8769}
+: ${PORT:=8771}
 : ${DATA_DIR:=/var/lib/matinee}
 export HOME=/var/lib/matinee  # newer gunicorn keeps a small control socket under $HOME
 export PORT DATA_DIR CF_TEAM_DOMAIN CF_AUD ADMIN_EMAILS LAN_EDIT LAN_HOSTS PUBLIC_VIEW TMDB_READ_TOKEN MATINEE_API_KEY OMDB_API_KEY ANTHROPIC_SEARCH_KEY ANTHROPIC_SEARCH_MODEL ASK_DAILY_LIMIT
@@ -162,7 +162,7 @@ name="matinee-mcp"
 description="Matinee MCP server (Streamable HTTP, behind Cloudflare Access)"
 # OpenRC runs this as root, so it can read the root-only config; the service user never reads it.
 [ -r /etc/conf.d/matinee ] && . /etc/conf.d/matinee
-: ${PORT:=8769}
+: ${PORT:=8771}
 : ${MATINEE_URL:=http://127.0.0.1:${PORT}}
 # Only what this service needs: TMDB_READ_TOKEN and OMDB_API_KEY deliberately stay out of its environment.
 export MATINEE_URL MATINEE_API_KEY MATINEE_MCP_READONLY MCP_HTTP_BIND MCP_HTTP_PORT MCP_HTTP_PATH MCP_PUBLIC_HOSTS CF_ACCESS_TEAM_DOMAIN CF_ACCESS_AUD MCP_ALLOWED_EMAILS CF_TEAM_DOMAIN

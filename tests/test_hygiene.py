@@ -37,3 +37,30 @@ def test_no_personal_identifiers():
             if PATTERN.search(line):
                 hits.append(f"{rel}:{n}: {line.strip()[:100]}")
     assert not hits, "personal identifiers found:\n" + "\n".join(hits)
+
+
+# The lunch app owns the old default port on the same host; Matinee's default is 8771. Built from fragments so
+# this file does not match its own pattern.
+OLD_PORT = re.compile("|".join((":87" + "69", "PORT=87" + "69")))
+
+
+def test_no_stale_default_port():
+    hits = []
+    for path in tracked_files():
+        rel = path.relative_to(ROOT).as_posix()
+        if rel.startswith(EXEMPT) or not path.is_file():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+        for n, line in enumerate(text.splitlines(), 1):
+            if OLD_PORT.search(line):
+                hits.append(f"{rel}:{n}: {line.strip()[:100]}")
+    assert not hits, "stale default port found (use 8771):\n" + "\n".join(hits)
+
+
+def test_installer_preserves_existing_port():
+    text = (ROOT / "installer" / "setup-head.sh").read_text(encoding="utf-8")
+    assert "sed -n 's/^PORT=//p' \"$CONF\"" in text
+    assert 'PORT="${MATINEE_PORT:-8771}"' in text
