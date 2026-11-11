@@ -466,7 +466,7 @@ def test_movie_night_audience_row_is_editor_only_and_guarded():
     assert "matinee.movieNight.audience" in NIGHT_JS and 'role="radiogroup"' in NIGHT_JS
     assert "Who's watching" in NIGHT_JS
     # the param is only appended when the row is shown, and never blank
-    assert re.search(r'const aud = showAudience \? \(forceEveryone === true \? "everyone" : audienceParam\(\)\) : "";', NIGHT_JS)
+    assert re.search(r'const aud = showAudience \? audienceParam\(\) : "";', NIGHT_JS)
     assert "min-height: 44px" in _rule(".movie-night-audience-option")
 
 

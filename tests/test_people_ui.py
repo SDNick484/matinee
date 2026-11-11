@@ -279,8 +279,9 @@ def _wait(page, cond, what="condition"):
     raise AssertionError(f"timed out waiting for {what}")
 
 
-def _open_grid(browser, server, people, stored=None, rec=None, width=412, anonymous_me=None):
-    """Open the grid with stubbed APIs. `rec(n, url)` returns (status, body) for the n-th recommendations call."""
+def _open_grid(browser, server, people, stored=None, rec=None, width=412, anonymous_me=None, hash="#/", titles_reply=None):
+    """Open the grid with stubbed APIs. `rec(n, url)` returns (status, body) for the n-th recommendations call;
+    `titles_reply(url)` does the same for /admin/api/titles (default: 200, no titles)."""
     page = browser.new_page(viewport={"width": width, "height": 915})
     errors, recs, titles = [], [], []
     page.on("pageerror", lambda e: errors.append(str(e)))
@@ -292,7 +293,8 @@ def _open_grid(browser, server, people, stored=None, rec=None, width=412, anonym
 
     def on_titles(route):
         titles.append(route.request.url)
-        _json(route, {"titles": []})
+        status, body = titles_reply(route.request.url) if titles_reply else (200, {"titles": []})
+        _json(route, body, status)
 
     def on_rec(route):
         recs.append(route.request.url)
@@ -301,7 +303,7 @@ def _open_grid(browser, server, people, stored=None, rec=None, width=412, anonym
 
     page.route("**/admin/api/titles?*", on_titles)
     page.route("**/admin/api/recommendations?*", on_rec)
-    page.goto(f"{server}/admin#/")
+    page.goto(f"{server}/admin{hash}")
     page.wait_for_selector("#btn-header-movie-night")
     return page, recs, titles, errors
 
@@ -343,7 +345,6 @@ def test_movie_night_audience_kids_custom_and_no_overflow(server, browser):
     page.wait_for_function("document.getElementById('btn-movie-night-roll').disabled")
     assert page.is_disabled("#btn-movie-night-view")
     page.wait_for_timeout(100)
-    assert len(recs) == 4 or all("audience=&" not in u and not u.endswith("audience=") for u in recs)
     assert not any(u.endswith("audience=") or "audience=&" in u for u in recs)
 
     widths = {}
@@ -367,7 +368,7 @@ def test_movie_night_stale_audience_falls_back(server, browser):
     # "3" is an active person locally, but the server (stub) no longer knows the audience it names
     page, recs, _, errors = _open_grid(browser, server, PEOPLE, stored="3", rec=rec)
     _open_picker(page, recs, 2)
-    assert "audience=3" in recs[0] and "audience=everyone" in recs[1]
+    assert "audience=3" in recs[0] and "audience" not in recs[1]       # the retry is today's Everyone request
     page.wait_for_selector(".movie-night-title")
     assert page.locator('[data-audience="everyone"]').get_attribute("aria-checked") == "true"
     text = page.locator("#movie-night-content").inner_text()
@@ -399,7 +400,7 @@ def test_movie_night_second_400_is_shown(server, browser):
     page, recs, _, errors = _open_grid(browser, server, PEOPLE, stored="3", rec=rec)
     _open_picker(page, recs, 2)
     page.wait_for_function("document.getElementById('movie-night-content').innerText.includes('No people are set up yet')")
-    assert len(recs) == 2 and "audience=3" in recs[0] and "audience=everyone" in recs[1]
+    assert len(recs) == 2 and "audience=3" in recs[0] and "audience" not in recs[1]
     # a further 400 after the one allowed fallback: still a visible error, no third request
     page.click('[data-audience="kids"]')
     page.wait_for_function("document.getElementById('movie-night-content').innerText.includes('No people are set up yet')")
@@ -444,8 +445,8 @@ def test_grid_unseen_by_and_unknown_attendance_filters(server, browser):
     labels = [t.strip() for t in group.locator('input[data-facet="unseen_by"] + span').all_inner_texts()]
     assert labels == ["Everyone", "Adults", "Kids", "Nick", "Lauren", "Midge", "Alice", "Paige"]
     assert group.locator('input[data-facet="attendance"]').count() == 1
-    assert all(group.locator(".popover-item").nth(i).bounding_box()["height"] >= 44
-               for i in range(group.locator(".popover-item").count()))
+    who = group.locator(".popover-item-who")
+    assert who.count() == 9 and all(who.nth(i).bounding_box()["height"] >= 44 for i in range(who.count()))
 
     n = len(titles)
     page.click('#popover-watched label:has(input[data-val="kids"]) span')
@@ -481,4 +482,187 @@ def test_grid_watched_popover_unchanged_without_people(server, browser):
     assert page.locator('#popover-watched input[data-facet="unseen_by"]').count() == 0
     assert page.locator('#popover-watched input[data-facet="attendance"]').count() == 0
     assert page.locator("#popover-watched .popover-item").count() == 3
+    assert errors == []
+
+
+# --- final review fixes: people filters in the hash, pick-card dots, popover rows, People modal --------------
+
+UNKNOWN_7 = "Unknown person: 7. People: Nick, Lauren, Midge, Alice, Paige."
+
+
+def _row_min_heights(page, popover):
+    return page.evaluate(f"Array.from(document.querySelectorAll('#{popover} .popover-item'))"
+                         ".map((e) => getComputedStyle(e).minHeight)")
+
+
+def test_anonymous_people_filter_in_hash_is_dropped(server, browser):
+    """An editor's "Unseen by Kids" link opened in the public view: the grid loads without the filter."""
+    page = browser.new_page(viewport={"width": 412, "height": 915})
+    errors, urls = [], []
+    page.on("pageerror", lambda e: errors.append(str(e)))
+    page.route("**/admin/api/**", lambda r: _json(r, {"error": "no"}, 401))
+    page.route("**/api/facets", lambda r: _json(r, {}))
+
+    def on_titles(route):
+        urls.append(route.request.url)
+        if "unseen_by" in route.request.url or "attendance" in route.request.url:
+            _json(route, {"error": "Sign in to pick for specific people."}, 400)
+        else:
+            _json(route, {"titles": []})
+
+    page.route("**/api/titles?*", on_titles)
+    page.goto(f"{server}/#/?unseen_by=kids&attendance=unknown&sort=year")
+    page.wait_for_selector("#filter-bar .filter-btn")
+    assert len(urls) == 1 and "/admin/" not in urls[0]
+    assert "unseen_by" not in urls[0] and "attendance" not in urls[0] and "sort=year" in urls[0]
+    assert page.evaluate("location.hash") == "#/?sort=year"
+    assert "Unable to load collection" not in page.locator("#view").inner_text()
+    # the public Watched popover keeps its pre-people rows: the same min-height as the Rating popover's (M5)
+    watched, rating = _row_min_heights(page, "popover-watched"), _row_min_heights(page, "popover-rating")
+    assert len(watched) == 3 and set(watched) == set(rating) and "44px" not in watched
+    assert errors == []
+
+
+def test_editor_public_view_link_drops_people_filters(server, browser):
+    page, _, titles, errors = _open_grid(browser, server, PEOPLE, hash="#/?unseen_by=kids&attendance=unknown&sort=year")
+    _wait(page, lambda: titles, "first grid load")
+    page.wait_for_selector("#footer-links a")
+    assert page.locator("#footer-links a", has_text="Public View").get_attribute("href") == "/#/?sort=year"
+    assert "unseen_by=kids" in titles[0]                         # the editor's own grid keeps the filter
+    assert errors == []
+
+
+def test_editor_stale_unseen_by_retries_once_without_it(server, browser):
+    """unseen_by=7 names a person who was deleted: one retry without it, a toast with the server's message."""
+    def reply(url):
+        if "unseen_by" in url or "attendance" in url:
+            return 400, {"error": UNKNOWN_7}
+        return 200, {"titles": []}
+
+    page, _, titles, errors = _open_grid(browser, server, PEOPLE, hash="#/?unseen_by=7&attendance=unknown&sort=year",
+                                         titles_reply=reply)
+    page.wait_for_selector("#filter-bar .filter-btn")
+    assert len(titles) == 2
+    assert "unseen_by=7" in titles[0] and "attendance=unknown" in titles[0]
+    assert "unseen_by" not in titles[1] and "attendance" not in titles[1] and "sort=year" in titles[1]
+    assert page.evaluate("location.hash") == "#/?sort=year"
+    assert "Unable to load collection" not in page.locator("#view").inner_text()
+    assert UNKNOWN_7 in page.locator("#toast").inner_text()
+    assert errors == []
+
+
+def test_editor_people_filter_400_does_not_loop(server, browser):
+    """If the retry fails too, the error shows; there is no third request."""
+    page, _, titles, errors = _open_grid(browser, server, PEOPLE, hash="#/?unseen_by=7",
+                                         titles_reply=lambda url: (400, {"error": UNKNOWN_7}))
+    page.wait_for_selector("text=Unable to load collection")
+    assert len(titles) == 2 and "unseen_by=7" in titles[0] and "unseen_by" not in titles[1]
+    assert errors == []
+
+
+def _audience_reply(seen_by):
+    kids = [{"id": 3, "name": "Midge"}, {"id": 4, "name": "Alice"}, {"id": 5, "name": "Paige"}]
+
+    def rec(n, url):
+        if "audience=kids" in url:
+            return 200, {"results": [dict(PICK, seen_by=seen_by)], "audience": {"label": "kids", "people": kids}}
+        return 200, {"results": [dict(PICK, seen_by=[])]}
+    return rec
+
+
+def test_pick_card_hides_seen_by_when_only_the_audience_has_seen_it(server, browser):
+    page, recs, _, errors = _open_grid(browser, server, PEOPLE, stored="kids", rec=_audience_reply(["Midge"]))
+    _open_picker(page, recs)
+    assert "audience=kids" in recs[0]
+    page.wait_for_selector(".movie-night-title")
+    assert page.locator(".movie-night-seen-by").count() == 0
+    assert errors == []
+
+
+def test_pick_card_shows_only_people_outside_the_audience(server, browser):
+    page, recs, _, errors = _open_grid(browser, server, PEOPLE, stored="kids", rec=_audience_reply(["Nick", "Midge"]))
+    _open_picker(page, recs)
+    page.wait_for_selector(".movie-night-seen-by .person-dot")
+    dots = page.locator(".movie-night-seen-by .person-dot")
+    assert dots.count() == 1 and dots.get_attribute("aria-label") == "Nick, watched"
+    # outside a button the label needs a role to be read (M4)
+    assert dots.get_attribute("role") == "img"
+    assert page.get_by_role("img", name="Nick, watched").count() == 1
+    assert errors == []
+
+
+def _open_title_with_people_api(browser, server, people):
+    """Title view whose /admin/api/people GET returns `people` (a list the test mutates) and whose POST adds one.
+    Returns (page, title_gets, errors)."""
+    page = browser.new_page(viewport={"width": 412, "height": 915})
+    errors, title_gets = [], []
+    page.on("pageerror", lambda e: errors.append(str(e)))
+    page.route("**/admin/api/me", lambda r: _json(r, ME))
+
+    def on_people(route):
+        if route.request.method == "POST":
+            body = route.request.post_data_json
+            person = {"id": len(people) + 1, "sort_order": len(people), "active": True, "watch_count": 0, **body}
+            people.append(person)
+            _json(route, {"ok": True, "person": person})
+        else:
+            _json(route, {"people": people})
+
+    def on_title(route):
+        title_gets.append(route.request.url)
+        _json(route, {**TITLE, "seen_by": [], "watches": []})
+
+    page.route("**/admin/api/people", on_people)
+    page.route("**/admin/api/titles/1", on_title)
+    page.goto(f"{server}/admin#/t/1")
+    page.wait_for_selector(".detail-view")
+    return page, title_gets, errors
+
+
+def test_people_modal_close_refreshes_the_view_only_after_a_change(server, browser):
+    people = []
+    page, title_gets, errors = _open_title_with_people_api(browser, server, people)
+    assert page.locator("#who-watched-row").count() == 0
+
+    # open and close with no change: the title is not fetched again
+    page.click("#btn-header-people")
+    page.wait_for_selector("#add-person-form")
+    close = page.locator("#modal-root .modal-actions .btn")
+    assert close.inner_text().strip() == "Close" and close.bounding_box()["height"] >= 44     # M10
+    n = len(title_gets)
+    close.click()
+    assert page.locator("#add-person-form").count() == 0 and len(title_gets) == n
+
+    # add Midge and close: the Who watched row appears without navigation
+    page.click("#btn-header-people")
+    page.wait_for_selector("#add-person-form")
+    page.fill("#person-add-name", "Midge")
+    page.select_option("#person-add-kind", "kid")
+    page.click("#add-person-form button[type=submit]")
+    page.wait_for_selector('.people-row .people-name[aria-label="Name for Midge"]')
+    _mark_stale(page)
+    page.locator("#modal-root .modal-actions .btn").click()
+    page.wait_for_function("document.querySelector('.detail-view') && !document.querySelector('.detail-view[data-stale]')"
+                           " && document.querySelector('#who-watched-row .person-toggle')")
+    assert page.locator("#who-watched-row .person-toggle").count() == 1
+    assert len(title_gets) == n + 1 and page.evaluate("location.hash") == "#/t/1"
+    assert errors == []
+
+
+def test_people_modal_escape_after_a_change_refreshes_the_grid(server, browser):
+    page, _, titles, errors = _open_grid(browser, server, PEOPLE)
+    _wait(page, lambda: titles, "first grid load")
+    page.wait_for_selector("#filter-bar .filter-btn")
+    page.route("**/admin/api/people/*", lambda r: _json(r, {"ok": True, "person": PEOPLE[4]}))
+    page.click("#btn-header-people")
+    page.wait_for_selector("#add-person-form")
+    n = len(titles)
+    page.evaluate("document.querySelector('#modal-root .people-dialog').dataset.stale = '1'")
+    page.locator('.people-row[data-id="5"] [data-act="kind"][data-kind="adult"]').click()
+    page.wait_for_function("document.querySelector('#modal-root .people-dialog')"
+                           " && !document.querySelector('#modal-root .people-dialog[data-stale]')")   # saved, re-rendered
+    assert len(titles) == n                                      # nothing refreshes while the modal is open
+    page.keyboard.press("Escape")
+    _wait(page, lambda: len(titles) > n, "grid refresh after Escape")
+    assert page.locator("#add-person-form").count() == 0
     assert errors == []

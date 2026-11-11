@@ -30,7 +30,7 @@ import { closeModal } from "./forms.js";
     const wanted = new Set(ids || []);
     const dots = (state.people || [])
       .filter((p) => wanted.has(p.id))
-      .map((p) => `<span class="person-dot person-${esc(p.color)}" title="${esc(p.name)}" aria-label="${esc(p.name)}, watched">${personInitial(p)}</span>`)
+      .map((p) => `<span class="person-dot person-${esc(p.color)}" role="img" title="${esc(p.name)}" aria-label="${esc(p.name)}, watched">${personInitial(p)}</span>`)
       .join("");
     if (!assumed) return `<span class="person-dots">${dots}</span>`;
     const who = assumed === "adults" ? "adults" : "everyone";
@@ -92,7 +92,7 @@ import { closeModal } from "./forms.js";
     const nextColor = COLORS.find((c) => !used.has(c)) || COLORS[0];
     return `
       <div class="modal-overlay" id="modal-overlay">
-        <div class="modal-dialog" style="max-width:640px" role="dialog" aria-modal="true" aria-label="People">
+        <div class="modal-dialog people-dialog" style="max-width:640px" role="dialog" aria-modal="true" aria-label="People">
           <div class="modal-header">
             <div>
               <div class="modal-title">${icon("dot")} People</div>
@@ -118,11 +118,34 @@ import { closeModal } from "./forms.js";
               </div>
               <button type="submit" class="btn people-btn">＋ Add person</button>
             </form>
-            <div class="modal-actions"><button type="button" class="btn btn-ghost" id="btn-modal-cancel">Close</button></div>
+            <div class="modal-actions"><button type="button" class="btn btn-ghost people-btn" id="btn-modal-cancel">Close</button></div>
           </div>
         </div>
       </div>`;
   }
+
+  // True once a change in the People modal has been saved; closing the modal then re-renders the current view
+  // (a Who watched row or the Unseen by filters may appear or go). Reset each time the modal opens.
+  let peopleChanged = false;
+
+  function peopleModalOpen() {
+    return Boolean(document.querySelector("#modal-root .people-dialog"));
+  }
+
+  function closePeopleModal() {
+    const wasOpen = peopleModalOpen();
+    closeModal();
+    if (wasOpen && peopleChanged) {
+      peopleChanged = false;
+      // main.js routes on hashchange; this re-renders the current route in place (no history entry).
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+    }
+  }
+
+  // Escape: forms.js closes any modal on window; this runs first (document) so a change is not lost.
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && peopleModalOpen()) closePeopleModal();
+  });
 
   async function renderPeopleModal() {
     const modalRoot = document.getElementById("modal-root");
@@ -133,12 +156,18 @@ import { closeModal } from "./forms.js";
     const dialog = modalRoot.querySelector(".modal-dialog");
     if (dialog) dialog.scrollTop = scroll;
 
-    document.getElementById("btn-modal-close")?.addEventListener("click", closeModal);
-    document.getElementById("btn-modal-cancel")?.addEventListener("click", closeModal);
+    document.getElementById("btn-modal-close")?.addEventListener("click", closePeopleModal);
+    document.getElementById("btn-modal-cancel")?.addEventListener("click", closePeopleModal);
     document.getElementById("modal-overlay")?.addEventListener("click", (e) => {
-      if (e.target.id === "modal-overlay") closeModal();
+      if (e.target.id === "modal-overlay") closePeopleModal();
     });
 
+    // Every write goes through send(): a saved one marks the view for a refresh when the modal closes.
+    const send = async (path, opts) => {
+      const res = await api(path, opts);
+      peopleChanged = true;
+      return res;
+    };
     // Run a change, show the server's message on failure, then reload and re-render either way.
     const change = async (fn, okMsg) => {
       try {
@@ -150,7 +179,7 @@ import { closeModal } from "./forms.js";
       await loadPeople();
       await renderPeopleModal();
     };
-    const put = (id, body) => api(`/admin/api/people/${id}`, { method: "PUT", body });
+    const put = (id, body) => send(`/admin/api/people/${id}`, { method: "PUT", body });
 
     document.getElementById("add-person-form")?.addEventListener("submit", (e) => {
       e.preventDefault();
@@ -158,7 +187,7 @@ import { closeModal } from "./forms.js";
       if (!name) return;
       const kind = document.getElementById("person-add-kind").value;
       const color = document.getElementById("person-add-color").value;
-      change(() => api("/admin/api/people", { method: "POST", body: { name, kind, color } }), name + " added");
+      change(() => send("/admin/api/people", { method: "POST", body: { name, kind, color } }), name + " added");
     });
 
     modalRoot.querySelectorAll(".people-row").forEach((row) => {
@@ -179,7 +208,7 @@ import { closeModal } from "./forms.js";
           else if (act === "activate") change(() => put(id, { active: true }), p.name + " activated");
           else if (act === "delete") {
             if (!window.confirm("Delete " + p.name + "? This cannot be undone.")) return;
-            change(() => api(`/admin/api/people/${id}`, { method: "DELETE" }), p.name + " deleted");
+            change(() => send(`/admin/api/people/${id}`, { method: "DELETE" }), p.name + " deleted");
           } else if (act === "up" || act === "down") {
             const list = (state.people || []).slice();
             const i = list.findIndex((x) => x.id === id);
@@ -198,9 +227,9 @@ import { closeModal } from "./forms.js";
   }
 
   async function openPeopleModal() {
+    peopleChanged = false;
     await loadPeople();
     await renderPeopleModal();
   }
 
-// Task 9 adds the rest here as it imports them (tests/test_js_modules.py rejects an export nothing imports).
 export { activePeople, loadPeople, openPeopleModal, personDotsHTML, personTogglesHTML, readToggles };

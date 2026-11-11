@@ -1,7 +1,7 @@
 // Matinee — hash router, header, /admin/api/me and handleRoute.
 import { api, isAdmin, state } from "./core.js";
 import { icon } from "./icons.js";
-import { renderGrid } from "./grid.js";
+import { hashWithoutPeopleFilters, renderGrid } from "./grid.js";
 import { renderDetail } from "./detail.js";
 import { renderAdd, stopBarcodeScanner } from "./add.js";
 import { closeModal } from "./forms.js";
@@ -108,7 +108,7 @@ import { loadPeople, openPeopleModal } from "./people.js";
           <a href="#/">Collection</a> &nbsp;·&nbsp;
           <a href="#/stats">Stats</a> &nbsp;·&nbsp;
           <a href="#/about">About &amp; TMDB Attribution</a> &nbsp;·&nbsp;
-          <a href="/${location.hash || ""}">Public View</a>
+          <a href="/${location.hash ? hashWithoutPeopleFilters(location.hash) : ""}">Public View</a>
         `;
       } else {
         footerLinks.innerHTML = `

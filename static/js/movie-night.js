@@ -174,16 +174,21 @@ import { activePeople, personDotsHTML, personTogglesHTML, readToggles } from "./
       box.innerHTML = personTogglesHTML(customIds, "Custom audience");
     }
 
-    // Display dots for the people outside the audience who have seen this film (seen_by holds names).
-    function seenByHTML(pick) {
+    // Spec 7.4: display dots for the people OUTSIDE the audience who have seen this film; no line when nobody
+    // outside has. seen_by holds names (everyone who has seen it); `aud` is the response's audience echo.
+    function seenByHTML(pick, aud) {
       const names = showAudience && Array.isArray(pick.seen_by) ? pick.seen_by : [];
-      const ids = (state.people || []).filter((p) => names.includes(p.name)).map((p) => p.id);
+      const inside = Array.isArray(aud && aud.people) ? aud.people : [];
+      const insideIds = new Set(inside.map((x) => x.id));
+      const insideNames = new Set(inside.map((x) => x.name));
+      const ids = (state.people || [])
+        .filter((p) => names.includes(p.name) && !insideIds.has(p.id) && !insideNames.has(p.name))
+        .map((p) => p.id);
       return ids.length ? `<div class="movie-night-seen-by"><span class="movie-night-seen-label">Seen by</span> ${personDotsHTML(ids)}</div>` : "";
     }
 
     let pickToken = 0;
-    // `forceEveryone` is the stale-audience retry: ask for audience=everyone explicitly.
-    async function fetchPick(forceEveryone = false) {
+    async function fetchPick() {
       const content = document.getElementById("movie-night-content");
       const viewBtn = document.getElementById("btn-movie-night-view");
       if (!content) return;
@@ -202,7 +207,7 @@ import { activePeople, personDotsHTML, personTogglesHTML, readToggles } from "./
       }
       const rollBtn = document.getElementById("btn-movie-night-roll");
       if (rollBtn) rollBtn.disabled = false;
-      const aud = showAudience ? (forceEveryone === true ? "everyone" : audienceParam()) : "";
+      const aud = showAudience ? audienceParam() : "";
       try {
         const res = await api(`${apiPrefix}/recommendations?mode=${encodeURIComponent(currentMode)}&limit=1&random=1${currentCap ? `&max_cert=${encodeURIComponent(currentCap)}` : ""}${aud ? `&audience=${encodeURIComponent(aud)}` : ""}`);
         if (myToken !== pickToken) return; // a newer tab/cap tap superseded this response
@@ -225,7 +230,7 @@ import { activePeople, personDotsHTML, personTogglesHTML, readToggles } from "./
                 ${currentPick.certification ? `<div><span class="cert-badge">${esc(currentPick.certification)}</span></div>` : ""}
                 ${currentPick.genres && currentPick.genres.length > 0 ? `<div class="movie-night-genres">${currentPick.genres.map(g => `<span class="genre-tag">${esc(g)}</span>`).join(" ")}</div>` : ""}
                 ${currentPick.collection_name ? `<div class="movie-night-collection">${esc(currentPick.collection_name)}</div>` : ""}
-                ${seenByHTML(currentPick)}
+                ${seenByHTML(currentPick, res.audience)}
                 <div class="movie-night-reason">${esc(currentPick.reason || currentPick.recommendation_reason || "Curated pick")}</div>
               </div>
             </div>
@@ -245,13 +250,14 @@ import { activePeople, personDotsHTML, personTogglesHTML, readToggles } from "./
         }
       } catch (err) {
         if (myToken !== pickToken) return;
-        // A saved audience the server no longer accepts: once per open, quietly go back to Everyone.
+        // A saved audience the server no longer accepts: once per open, quietly go back to Everyone, which
+        // sends no audience at all (today's request), and remember Everyone.
         if (aud && err.status === 400 && !fellBack) {
           fellBack = true;
           audience = "everyone";
           syncAudienceUI();
           saveAudience();
-          fetchPick(true);
+          fetchPick();
           return;
         }
         content.innerHTML = `<div class="movie-night-empty movie-night-animated"><p>Failed to load recommendation: ${esc(err.message || String(err))}</p></div>`;

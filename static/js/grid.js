@@ -1,10 +1,39 @@
 // Matinee — poster grid, search and filters (7.2).
-import { api, esc, getChipClass, isAdmin, state } from "./core.js";
+import { api, esc, getChipClass, isAdmin, state, toast } from "./core.js";
 import { activePeople } from "./people.js";
 import { getChipIcon, icon } from "./icons.js";
 
+  // The editor-only people filters (spec 2026-11-11-per-person §6.4): /api answers 400 for either one.
+  const PEOPLE_FILTERS = ["unseen_by", "attendance"];
+
+  function hasPeopleFilter(query) {
+    return PEOPLE_FILTERS.some((k) => query.has(k));
+  }
+
+  // A location hash ("#/?unseen_by=kids&sort=year") without the people filters ("#/?sort=year").
+  function hashWithoutPeopleFilters(hash) {
+    const raw = String(hash || "").replace(/^#/, "");
+    const [path, query] = raw.split("?");
+    const q = new URLSearchParams(query || "");
+    PEOPLE_FILTERS.forEach((k) => q.delete(k));
+    const qStr = q.toString();
+    return `#${path || "/"}${qStr ? `?${qStr}` : ""}`;
+  }
+
+  // Drop the people filters from the current route and the address bar, without a new history entry or a
+  // hashchange (the caller renders straight away).
+  function dropPeopleFilters() {
+    const hash = hashWithoutPeopleFilters(location.hash || "#/");
+    history.replaceState(history.state, "", hash);
+    PEOPLE_FILTERS.forEach((k) => state.route.query.delete(k));
+    state.grid.lastHash = hash;
+  }
+
   // ================================================================= 7.2 Poster Grid
-  async function renderGrid(container) {
+  async function renderGrid(container, { retried = false } = {}) {
+    // A visitor cannot use the people filters (an editor's shared link, or Public View from a filtered grid):
+    // drop them rather than let /api answer 400 with no way back.
+    if (!isAdmin && hasPeopleFilter(state.route.query)) dropPeopleFilters();
     const q = state.route.query.get("q") || "";
     const mediumStr = state.route.query.get("medium") || "";
     const qualityStr = state.route.query.get("quality") || "";
@@ -123,6 +152,13 @@ import { getChipIcon, icon } from "./icons.js";
         window.scrollTo({ top: state.grid.scrollY, behavior: "instant" });
       }
     } catch (err) {
+      // An editor's people filter the server rejects (a deleted person, or nobody set up): retry once without it.
+      if (isAdmin && !retried && err.status === 400 && hasPeopleFilter(state.route.query)) {
+        dropPeopleFilters();
+        toast(err.message || "That people filter no longer applies.");
+        await renderGrid(container, { retried: true });
+        return;
+      }
       const gridContainer = document.getElementById("grid-container");
       if (gridContainer) {
         gridContainer.innerHTML = `
@@ -339,12 +375,12 @@ import { getChipIcon, icon } from "./icons.js";
           ${showWho ? `
           <div class="popover-heading">Unseen by</div>
           ${[["everyone", "Everyone"], ["adults", "Adults"], ["kids", "Kids"], ...activePeople().map((p) => [String(p.id), p.name])].map(([v, label]) => `
-          <label class="popover-item">
+          <label class="popover-item popover-item-who">
             <input type="checkbox" data-facet="unseen_by" data-val="${esc(v)}" ${unseenBy === v ? "checked" : ""}>
             <span>${esc(label)}</span>
           </label>`).join("")}
           <div class="popover-heading">Old watches</div>
-          <label class="popover-item">
+          <label class="popover-item popover-item-who">
             <input type="checkbox" data-facet="attendance" data-val="unknown" ${attendance === "unknown" ? "checked" : ""}>
             <span>Who watched: unknown</span>
           </label>` : ""}
@@ -657,4 +693,4 @@ import { getChipIcon, icon } from "./icons.js";
     `;
   }
 
-export { renderGrid };
+export { hashWithoutPeopleFilters, renderGrid };
