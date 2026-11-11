@@ -622,6 +622,21 @@ Matinee is the family's own collection of physical discs and digital copies.
 # For build_server(writes=False): the remote read-only service has no log_watch or rate_movie to point at.
 READONLY_INSTRUCTIONS = SERVER_INSTRUCTIONS.replace(
     " After watching: call log_watch, then rate_movie if the user gives a rating.", "")
+# Said at the levels that lack tools, in words that name none of them.
+_NO_WRITES_NOTE = ("- This connection is read-only: it cannot log watches, rate movies or add titles. "
+                   "For those, tell the user to use the Matinee app.\n")
+_LOG_ONLY_NOTE = ("- This connection can log watches and ratings but cannot add movies or copies; "
+                  "a title they do not own has to be added in the Matinee app.\n")
+
+
+def instructions_for(writes) -> str:
+    """Server instructions that only mention tools registered at this write level."""
+    level = _level(writes)
+    if level == "all":
+        return SERVER_INSTRUCTIONS
+    if level == "log":
+        return SERVER_INSTRUCTIONS + _LOG_ONLY_NOTE
+    return READONLY_INSTRUCTIONS + _NO_WRITES_NOTE
 
 
 def _make_server(instructions: str = SERVER_INSTRUCTIONS):
@@ -637,6 +652,24 @@ def _make_server(instructions: str = SERVER_INSTRUCTIONS):
 _default_client = MatineeClient()
 
 WRITE_TOOLS = ("rate_movie", "log_watch", "add_movie")
+# Which write tools each level registers. "log" is what the phone needs to log a movie night: it can record a
+# watch and a rating but cannot import titles (add_movie spends TMDB quota and adds copies).
+WRITE_LEVELS: Dict[str, Tuple[str, ...]] = {
+    "none": (),
+    "log": ("rate_movie", "log_watch"),
+    "all": WRITE_TOOLS,
+}
+
+
+def _level(writes) -> str:
+    """Normalize build_server's `writes`: True is "all", False is "none", or one of WRITE_LEVELS."""
+    if writes is True:
+        return "all"
+    if writes is False:
+        return "none"
+    if isinstance(writes, str) and writes in WRITE_LEVELS:
+        return writes
+    raise ValueError(f"writes must be True, False or one of {sorted(WRITE_LEVELS)}, not {writes!r}")
 
 
 def search_collection(
@@ -786,26 +819,29 @@ def prompt_log_movie_night(movie_title: str = "") -> str:
     )
 
 
-def build_server(*, writes: bool = True):
-    """Build a MCP server with every tool; writes=False leaves out WRITE_TOOLS.
+def build_server(*, writes=True):
+    """Build a MCP server. `writes` is True (all nine tools), False (the six read tools) or a level from
+    WRITE_LEVELS: "none", "log" (adds rate_movie and log_watch) or "all". Anything else raises ValueError.
 
     Tool functions are module-level and read _default_client at call time.
     """
-    server = _make_server(SERVER_INSTRUCTIONS if writes else READONLY_INSTRUCTIONS)
+    level = _level(writes)
+    server = _make_server(instructions_for(level))
     if not server:
         return None
+
     def register(fn):
         server.tool(**_annotation_kwargs(FastMCP, fn.__name__))(fn)
 
     for fn in (search_collection, get_movie, where_is, get_recommendations, get_collection_stats, search_tmdb):
         register(fn)
-    if writes:
-        for fn in (rate_movie, log_watch, add_movie):
+    for fn in (rate_movie, log_watch, add_movie):
+        if fn.__name__ in WRITE_LEVELS[level]:
             register(fn)
     server.resource("matinee://stats")(resource_stats)
     server.resource("matinee://recommendations")(resource_recommendations)
     server.prompt("what_to_watch")(prompt_what_to_watch)
-    if writes:
+    if level != "none":  # log_movie_night names rate_movie and log_watch
         server.prompt("log_movie_night")(prompt_log_movie_night)
     return server
 
