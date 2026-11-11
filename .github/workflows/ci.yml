@@ -34,6 +34,47 @@ jobs:
         run: |
           ruff check .
 
+  ui-smoke:
+    name: UI smoke (Playwright + Chromium, 412 px)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: "pip"
+          cache-dependency-path: "requirements-dev.txt"
+
+      # Playwright is installed here only: the Python matrix and the Alpine job skip tests/test_ask_ui.py.
+      - name: Install dependencies and Chromium
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt playwright
+          python -m playwright install --with-deps chromium
+
+      - name: Run the Ask UI smoke test
+        run: |
+          python -m pytest -v -rs --junitxml=ui-smoke.xml tests/test_ask_ui.py
+
+      # importorskip and the "Chromium won't launch" skip would otherwise let this job pass without rendering anything.
+      - name: Fail if any smoke test was skipped
+        run: |
+          python - <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+
+          root = ET.parse("ui-smoke.xml").getroot()
+          suite = root if root.tag == "testsuite" else root.find("testsuite")
+          tests, skipped = int(suite.get("tests")), int(suite.get("skipped"))
+          print(f"tests={tests} skipped={skipped}")
+          if tests == 0 or skipped:
+              sys.exit("ui-smoke must run every test in tests/test_ask_ui.py; none may be skipped")
+          PY
+
   test-python:
     name: Python ${{ matrix.python-version }} on Ubuntu
     runs-on: ubuntu-latest
