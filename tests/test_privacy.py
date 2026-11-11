@@ -112,7 +112,9 @@ ATTENDANCE_NAMES = {"attendees", "attendance", "seen_by", "watch_attendance", "t
                     "SEEN_CTE", "watch_people", "PRIVATE_WATCH"}
 # Shared helpers that legitimately branch on `private`: function -> the branch every use must sit in
 # ("private" = inside `if private:`, "public" = inside `if not private:`, the PRIVATE_WATCH strip).
-PRIVATE_BRANCHING = {"title_detail": "private", "watch_out": "public"}
+# list_titles reads unseen_by / attendance (and SEEN_CTE) only inside `if private:`; a public request that names
+# them is answered 400 by people_params_refused(), which refers to them through PEOPLE_PARAMS alone.
+PRIVATE_BRANCHING = {"title_detail": "private", "watch_out": "public", "list_titles": "private"}
 
 
 def _app_tree():

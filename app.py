@@ -29,8 +29,8 @@ from pathlib import Path
 from flask import Flask, abort, g, jsonify, make_response, redirect, request, send_from_directory, has_app_context
 from werkzeug.wrappers import Response as WerkzeugResponse
 
-from recommend import (CERT_VALUES, FORMAT_ORDER, SEEN_CTE, ParamError, attendance_of, find_person, parse_params,
-                       recommend, sorted_formats, unknown_person_message)
+from recommend import (CERT_VALUES, FORMAT_ORDER, SEEN_CTE, ParamError, attendance_of, find_person, has_people,
+                       parse_params, recommend, resolve_audience, sorted_formats, unknown_person_message)
 
 APP_NAME = "Matinee"
 APP_DIR = Path(__file__).resolve().parent
@@ -1271,9 +1271,27 @@ def title_cards(con, ids):
     return [dict(_card(rows[i]), copies=copies.get(i, [])) for i in ids if i in rows]
 
 
+# Query parameters that pick for specific people. Editors only: a public request that carries one gets a 400
+# rather than a silently unfiltered list, which would look as if it had worked. The key alone is enough, even
+# with an empty value, and the check runs before any other validation.
+PEOPLE_PARAMS = ("audience", "unseen_by", "attendance")
+PEOPLE_PARAMS_PUBLIC_ERROR = "Sign in to pick for specific people."
+
+
+def people_params_refused(private):
+    """The 400 a public request gets when it names a people parameter; None otherwise."""
+    if not private and any(k in request.args for k in PEOPLE_PARAMS):
+        return make_err(400, PEOPLE_PARAMS_PUBLIC_ERROR)
+    return None
+
+
 def list_titles(private):
+    refused = people_params_refused(private)
+    if refused:
+        return refused
     a = request.args
     where, args = ["EXISTS (SELECT 1 FROM copies c WHERE c.title_id=t.id)"], []
+    cte = ""
     for w in words(a.get("q")):
         where.append("t.search_text LIKE ? ESCAPE '\\'")
         args.append(f"%{like_escape(w)}%")
@@ -1369,9 +1387,30 @@ def list_titles(private):
         except (ValueError, TypeError):
             pass
 
+    if private:  # people filters are editor-only (people_params_refused already answered a public request)
+        if "unseen_by" in a:
+            if not a["unseen_by"].strip():
+                return make_err(400, "unseen_by is empty.")
+            try:
+                audience = resolve_audience(db(), a["unseen_by"])
+            except ParamError as e:
+                return make_err(400, str(e))
+            id_q = ",".join("?" * len(audience["people"]))
+            where.append(f"NOT EXISTS (SELECT 1 FROM seen s WHERE s.title_id=t.id AND s.person_id IN ({id_q}))")
+            args += [x["id"] for x in audience["people"]]
+            cte = f"WITH {SEEN_CTE} "
+        if "attendance" in a:
+            if a["attendance"] != "unknown":
+                return make_err(400, "attendance must be unknown.")
+            if has_people(db()):
+                where.append("EXISTS (SELECT 1 FROM watches w WHERE w.title_id=t.id AND NOT EXISTS "
+                             "(SELECT 1 FROM watch_people x WHERE x.watch_id=w.id))")
+            else:
+                where.append("0=1")
+
     sort = a.get("sort") if a.get("sort") in SORTS else "title"
     rows = db().execute(
-        f"""{CARD_SELECT} WHERE {' AND '.join(where)} ORDER BY {SORTS[sort]}""", args).fetchall()
+        f"""{cte}{CARD_SELECT} WHERE {' AND '.join(where)} ORDER BY {SORTS[sort]}""", args).fetchall()
     titles = [_card(r) for r in rows]
     return jsonify(titles=titles, count=len(titles), sort=sort)
 
@@ -1560,11 +1599,16 @@ def export_csv_route():
 
 
 def recommendations(private=False):
+    refused = people_params_refused(private)
+    if refused:
+        return refused
+    if "audience" in request.args and not request.args["audience"].strip():
+        return make_err(400, "audience is empty.")
     try:
         p = parse_params(request.args)
+        out = recommend(db(), p)  # resolves `audience` against the people table, so it can raise too
     except ParamError as e:
         return make_err(400, str(e))
-    out = recommend(db(), p)
     for r in out["results"]:
         r["poster_url"] = image_url(r["poster_file"], r.pop("fetched_at"))
     return jsonify(**out)
