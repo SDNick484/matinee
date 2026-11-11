@@ -1,5 +1,6 @@
 // Matinee — poster grid, search and filters (7.2).
 import { api, esc, getChipClass, isAdmin, state } from "./core.js";
+import { activePeople } from "./people.js";
 import { getChipIcon, icon } from "./icons.js";
 
   // ================================================================= 7.2 Poster Grid
@@ -39,6 +40,8 @@ import { getChipIcon, icon } from "./icons.js";
     state.grid.genre = genre;
     state.grid.rating = rating;
     state.grid.watched = watched;
+    state.grid.unseen_by = state.route.query.get("unseen_by") || "";
+    state.grid.attendance = state.route.query.get("attendance") || "";
     state.grid.location_id = locationId;
     state.grid.kind = kind;
     state.grid.both = both;
@@ -108,6 +111,7 @@ import { getChipIcon, icon } from "./icons.js";
         api(`${apiPrefix}/titles?${state.route.query.toString()}`),
       ]);
 
+      if (isAdmin && state.peopleReady) await state.peopleReady;   // the Watched popover names people
       state.grid.facets = facetsData;
       state.grid.titles = titlesData.titles;
 
@@ -167,11 +171,23 @@ import { getChipIcon, icon } from "./icons.js";
     return `Genre (${genre.length})`;
   }
 
-  function getWatchedLabel(watched) {
-    if (!watched) return "Watched: All";
-    if (watched === "watched") return "Watched: Seen";
-    if (watched === "unwatched") return "Watched: Unseen";
-    return `Watched: ${watched}`;
+  function unseenByLabel(val) {
+    if (val === "everyone" || val === "adults" || val === "kids") return val.charAt(0).toUpperCase() + val.slice(1);
+    const names = String(val).split(",").map((t) => {
+      const p = (state.people || []).find((x) => String(x.id) === t.trim());
+      return p ? p.name : t.trim();
+    });
+    return names.join(", ");
+  }
+
+  function getWatchedLabel(watched, unseenBy = "", attendance = "") {
+    const parts = [];
+    if (watched === "watched") parts.push("Seen");
+    else if (watched === "unwatched") parts.push("Unseen");
+    else if (watched) parts.push(watched);
+    if (unseenBy) parts.push(`Unseen by ${unseenByLabel(unseenBy)}`);
+    if (attendance === "unknown") parts.push("Who watched: unknown");
+    return parts.length ? `Watched: ${parts.join(" · ")}`.replace(/^Watched: (Unseen by|Who watched)/, "$1") : "Watched: All";
   }
 
   function getRatingLabel(rating) {
@@ -191,9 +207,14 @@ import { getChipIcon, icon } from "./icons.js";
     const genre = state.grid.genre || [];
     const rating = state.grid.rating || "";
     const watched = state.grid.watched || "";
+    const unseenBy = state.grid.unseen_by || "";
+    const attendance = state.grid.attendance || "";
+    const showWho = isAdmin && activePeople().length > 0;   // editor-only: both filters need people
+    const whoActive = Boolean(unseenBy) || Boolean(attendance);
     const locationId = state.grid.location_id || "";
 
     const hasFilters =
+      whoActive ||
       medium.length > 0 ||
       quality.length > 0 ||
       genre.length > 0 ||
@@ -208,7 +229,7 @@ import { getChipIcon, icon } from "./icons.js";
     const mediumLabel = getMediumLabel(medium);
     const qualityLabel = getQualityLabel(quality);
     const genreLabel = getGenreLabel(genre);
-    const watchedLabel = getWatchedLabel(watched);
+    const watchedLabel = getWatchedLabel(watched, unseenBy, attendance);
     const ratingLabel = getRatingLabel(rating);
 
     let locationLabel = "All Locations";
@@ -298,7 +319,7 @@ import { getChipIcon, icon } from "./icons.js";
 
       <!-- Watched Dropdown -->
       <div class="filter-popover" id="popover-watched">
-        <button type="button" class="filter-btn ${watched ? "active" : ""}" data-toggle="popover" aria-expanded="false" aria-haspopup="true">
+        <button type="button" class="filter-btn ${watched || whoActive ? "active" : ""}" data-toggle="popover" aria-expanded="false" aria-haspopup="true">
           <span>${esc(watchedLabel)}</span>
           <span class="caret">▾</span>
         </button>
@@ -315,6 +336,18 @@ import { getChipIcon, icon } from "./icons.js";
             <input type="checkbox" data-facet="watched" data-val="unwatched" ${watched === "unwatched" ? "checked" : ""}>
             <span>Unwatched (Never seen)</span>
           </label>
+          ${showWho ? `
+          <div class="popover-heading">Unseen by</div>
+          ${[["everyone", "Everyone"], ["adults", "Adults"], ["kids", "Kids"], ...activePeople().map((p) => [String(p.id), p.name])].map(([v, label]) => `
+          <label class="popover-item">
+            <input type="checkbox" data-facet="unseen_by" data-val="${esc(v)}" ${unseenBy === v ? "checked" : ""}>
+            <span>${esc(label)}</span>
+          </label>`).join("")}
+          <div class="popover-heading">Old watches</div>
+          <label class="popover-item">
+            <input type="checkbox" data-facet="attendance" data-val="unknown" ${attendance === "unknown" ? "checked" : ""}>
+            <span>Who watched: unknown</span>
+          </label>` : ""}
         </div>
       </div>
 
@@ -473,6 +506,10 @@ import { getChipIcon, icon } from "./icons.js";
           } else {
             q.set("watched", val);
           }
+        } else if (facet === "unseen_by" || facet === "attendance") {
+          const key = facet;
+          if (!val || (val === state.grid[key] && !checked)) q.delete(key);
+          else q.set(key, val);
         } else if (facet === "rating") {
           if (!val || (val === state.grid.rating && !checked)) {
             q.delete("rating");
@@ -504,6 +541,8 @@ import { getChipIcon, icon } from "./icons.js";
       q.delete("genre");
       q.delete("rating");
       q.delete("watched");
+      q.delete("unseen_by");
+      q.delete("attendance");
       q.delete("kind");
       q.delete("both");
       q.delete("format");
@@ -529,6 +568,8 @@ import { getChipIcon, icon } from "./icons.js";
         (state.grid.genre && state.grid.genre.length > 0) ||
         Boolean(state.grid.rating) ||
         Boolean(state.grid.watched) ||
+        Boolean(state.grid.unseen_by) ||
+        Boolean(state.grid.attendance) ||
         state.grid.kind ||
         state.grid.both ||
         state.grid.format ||

@@ -451,3 +451,27 @@ def test_person_toggle_off_state_text_is_ink_2():
     base = _rule(".person-toggle")
     assert "color: var(--ink-2)" in base
     assert "var(--page)" in _rule('.person-toggle[aria-pressed="true"]')
+
+
+# --- Movie Night audience and grid filters (people) ---------------------------------------------------------
+
+GRID_JS = (STATIC / "js" / "grid.js").read_text(encoding="utf-8")
+NIGHT_JS = (STATIC / "js" / "movie-night.js").read_text(encoding="utf-8")
+
+
+def test_movie_night_audience_row_is_editor_only_and_guarded():
+    assert "if (isAdmin && state.peopleReady) await state.peopleReady;" in NIGHT_JS
+    assert re.search(r"const showAudience = isAdmin && activePeople\(\)\.length > 0;", NIGHT_JS)
+    assert re.search(r"\$\{showAudience \? audienceRowHTML\(\) : \"\"\}", NIGHT_JS)
+    assert "matinee.movieNight.audience" in NIGHT_JS and 'role="radiogroup"' in NIGHT_JS
+    assert "Who's watching" in NIGHT_JS
+    # the param is only appended when the row is shown, and never blank
+    assert re.search(r'const aud = showAudience \? \(forceEveryone === true \? "everyone" : audienceParam\(\)\) : "";', NIGHT_JS)
+    assert "min-height: 44px" in _rule(".movie-night-audience-option")
+
+
+def test_grid_unseen_by_and_attendance_are_editor_only():
+    assert re.search(r"const showWho = isAdmin && activePeople\(\)\.length > 0;", GRID_JS)
+    assert GRID_JS.index("const showWho") < GRID_JS.index('data-facet="unseen_by"') < GRID_JS.index('data-facet="attendance"')
+    for key in ("unseen_by", "attendance"):
+        assert f'q.delete("{key}")' in GRID_JS, key

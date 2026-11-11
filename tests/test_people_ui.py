@@ -261,3 +261,224 @@ def test_expanded_row_keeps_its_place_after_cancel_and_save(server, browser):
     assert puts == [("titles/1/watches/12/attendees", {"attendees": [1, 2, 3]})]
     assert row.is_visible() and row.locator(".person-dot").count() == 3
     assert errors == []
+
+
+# --- Task 9: Movie Night audience and grid filters ---------------------------------------------------------
+
+AUDIENCE_KEY = "matinee.movieNight.audience"
+PICK = {"id": 7, "title": "Paddington 2", "year": 2017, "runtime": 104, "formats": ["Blu-ray"], "genres": [],
+        "certification": "PG", "reason": "Nobody in the audience has seen it", "seen_by": ["Nick", "Lauren"]}
+
+
+def _wait(page, cond, what="condition"):
+    """Poll a python-side condition without a fixed sleep (the same loop as _settled)."""
+    for _ in range(250):
+        if cond():
+            return
+        page.wait_for_timeout(20)
+    raise AssertionError(f"timed out waiting for {what}")
+
+
+def _open_grid(browser, server, people, stored=None, rec=None, width=412, anonymous_me=None):
+    """Open the grid with stubbed APIs. `rec(n, url)` returns (status, body) for the n-th recommendations call."""
+    page = browser.new_page(viewport={"width": width, "height": 915})
+    errors, recs, titles = [], [], []
+    page.on("pageerror", lambda e: errors.append(str(e)))
+    if stored is not None:
+        page.add_init_script(f"try {{ localStorage.setItem({AUDIENCE_KEY!r}, {stored!r}); }} catch (e) {{}}")
+    page.route("**/admin/api/me", lambda r: _json(r, ME))
+    page.route("**/admin/api/people", lambda r: _json(r, {"people": people}))
+    page.route("**/admin/api/facets", lambda r: _json(r, {}))
+
+    def on_titles(route):
+        titles.append(route.request.url)
+        _json(route, {"titles": []})
+
+    def on_rec(route):
+        recs.append(route.request.url)
+        status, body = rec(len(recs), route.request.url) if rec else (200, {"results": [PICK]})
+        _json(route, body, status)
+
+    page.route("**/admin/api/titles?*", on_titles)
+    page.route("**/admin/api/recommendations?*", on_rec)
+    page.goto(f"{server}/admin#/")
+    page.wait_for_selector("#btn-header-movie-night")
+    return page, recs, titles, errors
+
+
+def _open_picker(page, recs, n=1):
+    page.click("#btn-header-movie-night")
+    _wait(page, lambda: len(recs) >= n, f"{n} recommendations call(s)")
+
+
+def test_movie_night_audience_kids_custom_and_no_overflow(server, browser):
+    page, recs, _, errors = _open_grid(browser, server, PEOPLE)
+    _open_picker(page, recs)
+    assert "audience=" not in recs[0]                           # Everyone is the default and sends nothing
+    row = page.locator('[aria-label="Who\'s watching"]')
+    assert [row.locator('[role="radio"]').nth(i).inner_text() for i in range(4)] == ["Everyone", "Adults", "Kids", "Custom"]
+    assert page.locator('#modal-root [aria-label="Rating cap"]').bounding_box()["y"] > row.bounding_box()["y"]
+    assert all(row.locator('[role="radio"]').nth(i).bounding_box()["height"] >= 44 for i in range(4))
+
+    row.locator('[data-audience="kids"]').click()
+    _wait(page, lambda: len(recs) == 2, "kids request")
+    assert recs[1].startswith("http") and "/admin/api/recommendations?" in recs[1] and "audience=kids" in recs[1]
+    page.wait_for_selector(".movie-night-seen-by .person-dot")             # Nick and Lauren have seen it
+    assert page.locator(".movie-night-seen-by .person-dot").count() == 2
+    assert page.evaluate(f"localStorage.getItem({AUDIENCE_KEY!r})") == "kids"
+
+    row.locator('[data-audience="custom"]').click()
+    _wait(page, lambda: len(recs) == 3, "custom request")
+    toggles = page.locator("#movie-night-audience-custom .person-toggle")
+    assert toggles.count() == 5 and all(toggles.nth(i).bounding_box()["height"] >= 44 for i in range(5))
+    assert "audience=1%2C2%2C3%2C4%2C5" in recs[2] or "audience=1,2,3,4,5" in recs[2]
+    toggles.nth(0).click()                                                    # Nick off -> 2,3,4,5
+    _wait(page, lambda: len(recs) == 4, "custom edit request")
+    assert "audience=2%2C3%2C4%2C5" in recs[3] or "audience=2,3,4,5" in recs[3]
+    assert page.evaluate(f"localStorage.getItem({AUDIENCE_KEY!r})") == "2,3,4,5"
+
+    # every dot off: the pick button is disabled and nothing blank goes out
+    for i in (1, 2, 3, 4):
+        toggles.nth(i).click()
+    page.wait_for_function("document.getElementById('btn-movie-night-roll').disabled")
+    assert page.is_disabled("#btn-movie-night-view")
+    page.wait_for_timeout(100)
+    assert len(recs) == 4 or all("audience=&" not in u and not u.endswith("audience=") for u in recs)
+    assert not any(u.endswith("audience=") or "audience=&" in u for u in recs)
+
+    widths = {}
+    for w in (412, 360):
+        page.set_viewport_size({"width": w, "height": 915})
+        page.wait_for_timeout(50)
+        widths[w] = page.evaluate("document.documentElement.scrollWidth")
+        widths[f"dialog@{w}"] = page.evaluate("document.querySelector('.movie-night-dialog').scrollWidth")
+        assert widths[w] <= w and widths[f"dialog@{w}"] <= w, widths
+    print(f"movie night scrollWidth: {widths}")
+    assert errors == []
+
+
+def test_movie_night_stale_audience_falls_back(server, browser):
+    """A stored audience the server rejects (here: the first call answers 400 Unknown person) falls back once."""
+    def rec(n, url):
+        if n == 1:
+            return 400, {"error": "Unknown person: 99. People: Nick, Lauren, Midge, Alice, Paige."}
+        return 200, {"results": [PICK]}
+
+    # "3" is an active person locally, but the server (stub) no longer knows the audience it names
+    page, recs, _, errors = _open_grid(browser, server, PEOPLE, stored="3", rec=rec)
+    _open_picker(page, recs, 2)
+    assert "audience=3" in recs[0] and "audience=everyone" in recs[1]
+    page.wait_for_selector(".movie-night-title")
+    assert page.locator('[data-audience="everyone"]').get_attribute("aria-checked") == "true"
+    text = page.locator("#movie-night-content").inner_text()
+    assert "Unknown person" not in text and "Failed to load" not in text
+    assert page.evaluate(f"localStorage.getItem({AUDIENCE_KEY!r})") == "everyone"
+    assert errors == []
+
+
+def test_movie_night_stale_audience_with_inactive_id_is_filtered(server, browser):
+    people = [dict(p, active=p["id"] != 5) for p in PEOPLE]        # Paige is deactivated
+    page, recs, _, errors = _open_grid(browser, server, people, stored="4,5")
+    _open_picker(page, recs)
+    assert "audience=4" in recs[0] and "5" not in recs[0].split("audience=")[1]    # only Alice goes out
+    toggles = page.locator("#movie-night-audience-custom .person-toggle")
+    assert toggles.count() == 4                                    # no resurrected Paige
+    # nothing left after filtering: Everyone
+    page.close()
+    page, recs, _, errors = _open_grid(browser, server, people, stored="5")
+    _open_picker(page, recs)
+    assert "audience=" not in recs[0]
+    assert page.locator('[data-audience="everyone"]').get_attribute("aria-checked") == "true"
+    assert errors == []
+
+
+def test_movie_night_second_400_is_shown(server, browser):
+    def rec(n, url):
+        return 400, {"error": "No people are set up yet. Add them first."}
+
+    page, recs, _, errors = _open_grid(browser, server, PEOPLE, stored="3", rec=rec)
+    _open_picker(page, recs, 2)
+    page.wait_for_function("document.getElementById('movie-night-content').innerText.includes('No people are set up yet')")
+    assert len(recs) == 2 and "audience=3" in recs[0] and "audience=everyone" in recs[1]
+    # a further 400 after the one allowed fallback: still a visible error, no third request
+    page.click('[data-audience="kids"]')
+    page.wait_for_function("document.getElementById('movie-night-content').innerText.includes('No people are set up yet')")
+    assert len(recs) == 3 and "audience=kids" in recs[2]
+    assert errors == []
+
+
+def test_movie_night_unchanged_without_people_or_for_anonymous(server, browser):
+    page, recs, _, errors = _open_grid(browser, server, [])
+    _open_picker(page, recs)
+    assert page.locator('[aria-label="Who\'s watching"]').count() == 0 and "audience" not in recs[0]
+    assert page.locator(".movie-night-seen-by").count() == 0
+    page.close()
+
+    anon = browser.new_page(viewport={"width": 412, "height": 915})
+    urls = []
+    anon.route("**/api/me", lambda r: _json(r, {"editor": False}))
+    anon.route("**/admin/api/**", lambda r: _json(r, {"error": "no"}, 401))
+    anon.route("**/api/titles?*", lambda r: _json(r, {"titles": []}))
+    anon.route("**/api/facets", lambda r: _json(r, {}))
+
+    def on_rec(route):
+        urls.append(route.request.url)
+        _json(route, {"results": [PICK]})
+
+    anon.route("**/api/recommendations?*", on_rec)
+    anon.goto(f"{server}/")
+    anon.wait_for_selector("#btn-header-movie-night")
+    anon.click("#btn-header-movie-night")
+    _wait(anon, lambda: urls, "anonymous request")
+    assert "audience" not in urls[0] and "/admin/" not in urls[0]
+    assert anon.locator('[aria-label="Who\'s watching"]').count() == 0
+    assert errors == []
+
+
+def test_grid_unseen_by_and_unknown_attendance_filters(server, browser):
+    page, _, titles, errors = _open_grid(browser, server, PEOPLE)
+    _wait(page, lambda: titles, "first grid load")
+    assert not any("unseen_by" in u for u in titles)
+    page.click("#popover-watched .filter-btn")
+    group = page.locator("#popover-watched")
+    labels = [t.strip() for t in group.locator('input[data-facet="unseen_by"] + span').all_inner_texts()]
+    assert labels == ["Everyone", "Adults", "Kids", "Nick", "Lauren", "Midge", "Alice", "Paige"]
+    assert group.locator('input[data-facet="attendance"]').count() == 1
+    assert all(group.locator(".popover-item").nth(i).bounding_box()["height"] >= 44
+               for i in range(group.locator(".popover-item").count()))
+
+    n = len(titles)
+    page.click('#popover-watched label:has(input[data-val="kids"]) span')
+    _wait(page, lambda: len(titles) > n, "unseen_by request")
+    assert "/admin/api/titles?" in titles[-1] and "unseen_by=kids" in titles[-1]
+    assert page.evaluate("location.hash") == "#/?unseen_by=kids"
+    assert "Unseen by Kids" in page.locator("#popover-watched .filter-btn").inner_text()
+    assert "active" in page.locator("#popover-watched .filter-btn").get_attribute("class")
+
+    n = len(titles)
+    page.wait_for_selector("#popover-watched.open")                       # the popover stays open across the re-render
+    page.click('#popover-watched label:has(input[data-facet="attendance"]) span')
+    _wait(page, lambda: len(titles) > n, "attendance request")
+    assert "unseen_by=kids" in titles[-1] and "attendance=unknown" in titles[-1]
+    assert "Who watched: unknown" in page.locator("#popover-watched .filter-btn").inner_text()
+
+    # reload straight from the hash: the state round-trips
+    page.reload()
+    page.wait_for_selector("#filter-bar .filter-btn")
+    assert "Unseen by Kids" in page.locator("#popover-watched .filter-btn").inner_text()
+
+    n = len(titles)
+    page.click("#filter-reset-btn")
+    _wait(page, lambda: len(titles) > n, "reset request")
+    assert "unseen_by" not in titles[-1] and "attendance" not in titles[-1]
+    assert page.evaluate("document.documentElement.scrollWidth") <= 412
+    assert errors == []
+
+
+def test_grid_watched_popover_unchanged_without_people(server, browser):
+    page, _, titles, errors = _open_grid(browser, server, [])
+    page.click("#popover-watched .filter-btn")
+    assert page.locator('#popover-watched input[data-facet="unseen_by"]').count() == 0
+    assert page.locator('#popover-watched input[data-facet="attendance"]').count() == 0
+    assert page.locator("#popover-watched .popover-item").count() == 3
+    assert errors == []

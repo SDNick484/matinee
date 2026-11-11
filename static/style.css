@@ -1920,6 +1920,62 @@ main#view {
   color: #fff;
   border-color: var(--accent);
 }
+.movie-night-audience {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: var(--s3);
+}
+.movie-night-audience-option {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 44px;
+  padding: 8px 6px;
+  border-radius: 9999px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  color: var(--ink-2);
+  cursor: pointer;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  touch-action: manipulation;
+}
+.movie-night-audience-option:hover {
+  color: var(--ink);
+  border-color: var(--ink-3);
+}
+.movie-night-audience-option[aria-checked="true"] {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+.movie-night-audience-custom {
+  margin-bottom: var(--s3);
+}
+.movie-night-audience-custom[hidden] {
+  display: none;
+}
+.movie-night-seen-by {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--s2);
+  font-size: var(--fs-xs);
+  color: var(--ink-3);
+}
+.popover-heading {
+  padding: var(--s2) var(--s3) var(--s1);
+  border-top: 1px solid var(--line);
+  margin-top: var(--s1);
+  font-size: var(--fs-xs);
+  color: var(--ink-3);
+}
+#popover-watched .popover-item {
+  min-height: 44px;
+}
 .movie-night-collection {
   font-size: var(--fs-xs);
   color: var(--ink-3);

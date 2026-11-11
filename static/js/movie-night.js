@@ -1,12 +1,17 @@
 // Matinee — Movie Night recommender modal.
-import { api, esc, isAdmin } from "./core.js";
+import { api, esc, isAdmin, state } from "./core.js";
 import { icon } from "./icons.js";
 import { closeModal } from "./forms.js";
+import { activePeople, personDotsHTML, personTogglesHTML, readToggles } from "./people.js";
 
   // ================================================================= Movie Night Modal
   async function openMovieNightModal() {
     const modalRoot = document.getElementById("modal-root");
     if (!modalRoot) return;
+
+    // The audience row is for editors who have people set up (spec 7.4); everyone else gets the plain picker.
+    if (isAdmin && state.peopleReady) await state.peopleReady;
+    const showAudience = isAdmin && activePeople().length > 0;
 
     let currentMode = "forgotten_gems";
     let currentPick = null;
@@ -16,6 +21,51 @@ import { closeModal } from "./forms.js";
       const saved = localStorage.getItem(CAP_KEY);
       if (["G", "PG", "PG-13"].includes(saved)) currentCap = saved;
     } catch (e) { /* storage unavailable: default to Any */ }
+
+    // Audience: "everyone" | "adults" | "kids" | "custom" (customIds). Stored as a word or a comma-separated id list.
+    const AUDIENCE_KEY = "matinee.movieNight.audience";
+    let audience = "everyone";
+    let customIds = [];
+    if (showAudience) {
+      let saved = "";
+      try { saved = localStorage.getItem(AUDIENCE_KEY) || ""; } catch (e) { /* storage unavailable: Everyone */ }
+      if (saved === "adults" || saved === "kids") {
+        audience = saved;
+      } else if (/^\d+(,\d+)*$/.test(saved)) {
+        // Deactivated or deleted people must not come back through the toggles.
+        const live = new Set(activePeople().map((p) => p.id));
+        customIds = saved.split(",").map(Number).filter((n) => live.has(n));
+        if (customIds.length) audience = "custom";
+      }
+    }
+    let fellBack = false;   // the stale-audience fallback runs at most once per modal open
+
+    function audienceValue() {
+      return audience === "custom" ? customIds.join(",") : audience;
+    }
+
+    // "" means send no audience param: Everyone (today's request), or a Custom audience with nobody picked.
+    function audienceParam() {
+      if (audience === "everyone" || (audience === "custom" && !customIds.length)) return "";
+      return audienceValue();
+    }
+
+    function saveAudience() {
+      if (audience === "custom" && !customIds.length) return;   // never store a blank audience
+      try { localStorage.setItem(AUDIENCE_KEY, audienceValue()); } catch (e) { /* remembered per device when storage allows */ }
+    }
+
+    function audienceRowHTML() {
+      const opt = (key, label) => `<button type="button" role="radio" aria-checked="${audience === key}" class="movie-night-audience-option" data-audience="${key}">${label}</button>`;
+      return `
+        <div class="movie-night-cap-label">Who's watching</div>
+        <div class="movie-night-audience" role="radiogroup" aria-label="Who's watching">
+          ${opt("everyone", "Everyone")}${opt("adults", "Adults")}${opt("kids", "Kids")}${opt("custom", "Custom")}
+        </div>
+        <div class="movie-night-audience-custom" id="movie-night-audience-custom" ${audience === "custom" ? "" : "hidden"}>
+          ${personTogglesHTML(customIds, "Custom audience")}
+        </div>`;
+    }
 
     function renderModalSkeleton() {
       modalRoot.innerHTML = `
@@ -33,6 +83,7 @@ import { closeModal } from "./forms.js";
               <button type="button" role="tab" aria-selected="${currentMode === "start_franchise"}" class="movie-night-tab ${currentMode === "start_franchise" ? "active" : ""}" data-mode="start_franchise">Start a Series</button>
               <button type="button" role="tab" aria-selected="${currentMode === "genre_mood"}" class="movie-night-tab ${currentMode === "genre_mood" ? "active" : ""}" data-mode="genre_mood">Surprise Me</button>
             </div>
+            ${showAudience ? audienceRowHTML() : ""}
             <div class="movie-night-cap-label" id="movie-night-cap-label">Rating cap</div>
             <div class="movie-night-cap" role="radiogroup" aria-label="Rating cap">
               <button type="button" role="radio" aria-checked="${currentCap === ""}" class="movie-night-cap-option" data-cert="">Any</button>
@@ -78,6 +129,26 @@ import { closeModal } from "./forms.js";
         });
       });
 
+      modalRoot.querySelectorAll(".movie-night-audience-option").forEach(opt => {
+        opt.addEventListener("click", () => {
+          audience = opt.dataset.audience;
+          // First time on Custom: start with everyone on, so the pick button is usable straight away.
+          if (audience === "custom" && !customIds.length) customIds = activePeople().map((p) => p.id);
+          syncAudienceUI();
+          saveAudience();
+          fetchPick();
+        });
+      });
+      const customBox = document.getElementById("movie-night-audience-custom");
+      customBox?.addEventListener("click", (e) => {
+        const btn = e.target.closest(".person-toggle");
+        if (!btn) return;
+        btn.setAttribute("aria-pressed", btn.getAttribute("aria-pressed") === "true" ? "false" : "true");
+        customIds = readToggles(customBox);
+        saveAudience();
+        fetchPick();
+      });
+
       document.getElementById("btn-movie-night-close")?.addEventListener("click", closeModal);
       document.getElementById("btn-movie-night-cancel")?.addEventListener("click", closeModal);
       document.getElementById("modal-overlay")?.addEventListener("click", (e) => {
@@ -92,8 +163,27 @@ import { closeModal } from "./forms.js";
       });
     }
 
+    // Reflect `audience` / `customIds` in the radios and the Custom toggles (no re-render of the dialog).
+    function syncAudienceUI() {
+      modalRoot.querySelectorAll(".movie-night-audience-option").forEach((o) => {
+        o.setAttribute("aria-checked", String(o.dataset.audience === audience));
+      });
+      const box = document.getElementById("movie-night-audience-custom");
+      if (!box) return;
+      box.hidden = audience !== "custom";
+      box.innerHTML = personTogglesHTML(customIds, "Custom audience");
+    }
+
+    // Display dots for the people outside the audience who have seen this film (seen_by holds names).
+    function seenByHTML(pick) {
+      const names = showAudience && Array.isArray(pick.seen_by) ? pick.seen_by : [];
+      const ids = (state.people || []).filter((p) => names.includes(p.name)).map((p) => p.id);
+      return ids.length ? `<div class="movie-night-seen-by"><span class="movie-night-seen-label">Seen by</span> ${personDotsHTML(ids)}</div>` : "";
+    }
+
     let pickToken = 0;
-    async function fetchPick() {
+    // `forceEveryone` is the stale-audience retry: ask for audience=everyone explicitly.
+    async function fetchPick(forceEveryone = false) {
       const content = document.getElementById("movie-night-content");
       const viewBtn = document.getElementById("btn-movie-night-view");
       if (!content) return;
@@ -102,8 +192,19 @@ import { closeModal } from "./forms.js";
       if (viewBtn) viewBtn.disabled = true;
 
       const apiPrefix = isAdmin ? "/admin/api" : "/api";
+      // Custom with nobody picked: nothing to ask for. Never send a blank audience.
+      if (showAudience && audience === "custom" && !customIds.length) {
+        currentPick = null;
+        content.innerHTML = `<div class="movie-night-empty movie-night-animated"><p class="movie-night-hint">Pick at least one person to choose a movie for.</p></div>`;
+        const rollBtn = document.getElementById("btn-movie-night-roll");
+        if (rollBtn) rollBtn.disabled = true;
+        return;
+      }
+      const rollBtn = document.getElementById("btn-movie-night-roll");
+      if (rollBtn) rollBtn.disabled = false;
+      const aud = showAudience ? (forceEveryone === true ? "everyone" : audienceParam()) : "";
       try {
-        const res = await api(`${apiPrefix}/recommendations?mode=${encodeURIComponent(currentMode)}&limit=1&random=1${currentCap ? `&max_cert=${encodeURIComponent(currentCap)}` : ""}`);
+        const res = await api(`${apiPrefix}/recommendations?mode=${encodeURIComponent(currentMode)}&limit=1&random=1${currentCap ? `&max_cert=${encodeURIComponent(currentCap)}` : ""}${aud ? `&audience=${encodeURIComponent(aud)}` : ""}`);
         if (myToken !== pickToken) return; // a newer tab/cap tap superseded this response
         if (res && res.results && res.results.length > 0) {
           currentPick = res.results[0];
@@ -124,6 +225,7 @@ import { closeModal } from "./forms.js";
                 ${currentPick.certification ? `<div><span class="cert-badge">${esc(currentPick.certification)}</span></div>` : ""}
                 ${currentPick.genres && currentPick.genres.length > 0 ? `<div class="movie-night-genres">${currentPick.genres.map(g => `<span class="genre-tag">${esc(g)}</span>`).join(" ")}</div>` : ""}
                 ${currentPick.collection_name ? `<div class="movie-night-collection">${esc(currentPick.collection_name)}</div>` : ""}
+                ${seenByHTML(currentPick)}
                 <div class="movie-night-reason">${esc(currentPick.reason || currentPick.recommendation_reason || "Curated pick")}</div>
               </div>
             </div>
@@ -143,6 +245,15 @@ import { closeModal } from "./forms.js";
         }
       } catch (err) {
         if (myToken !== pickToken) return;
+        // A saved audience the server no longer accepts: once per open, quietly go back to Everyone.
+        if (aud && err.status === 400 && !fellBack) {
+          fellBack = true;
+          audience = "everyone";
+          syncAudienceUI();
+          saveAudience();
+          fetchPick(true);
+          return;
+        }
         content.innerHTML = `<div class="movie-night-empty movie-night-animated"><p>Failed to load recommendation: ${esc(err.message || String(err))}</p></div>`;
         if (viewBtn) viewBtn.disabled = true;
       }
