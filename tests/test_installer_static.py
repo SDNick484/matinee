@@ -191,13 +191,15 @@ def test_final_banner_warns_when_allowed_emails_is_empty(tmp_path, value, warns)
     assert ("MCP_ALLOWED_EMAILS is empty" in out) is warns
 
 
-def test_mcp_setup_states_what_the_api_key_adds_to_reads():
-    # Security framing: the key is not just for search_tmdb; /admin/api also returns copies' added_by
-    # (the editor's Access email). Pinned by test_rest_get_movie_added_by_only_with_key.
-    row = next(l for l in (ROOT / "docs" / "mcp-setup.md").read_text(encoding="utf-8").splitlines()
-               if l.startswith("| `MATINEE_API_KEY` |"))
-    assert "search_tmdb" in row and "added_by" in row
-    assert "adds only `search_tmdb`" not in row
+def test_mcp_setup_states_what_the_read_key_adds_to_reads():
+    # Security framing: through /admin/api the read-only service sees watch notes, search_tmdb and copies'
+    # added_by (the editor's Access email), which /api does not serve. Pinned by
+    # test_rest_get_movie_added_by_only_with_key and tests/test_privacy.py.
+    lines = (ROOT / "docs" / "mcp-setup.md").read_text(encoding="utf-8").splitlines()
+    row = next(l for l in lines if l.startswith("| `MATINEE_READ_KEY` | *(generated"))
+    assert "search_tmdb" in row and "added_by" in row and "watch notes" in row and "cannot write" in row
+    api = next(l for l in lines if l.startswith("| `MATINEE_API_KEY` | *(empty)*"))
+    assert "MATINEE_MCP_READONLY=0" in api
 
 
 def test_lan_hosts_setting_is_written_and_exported():
