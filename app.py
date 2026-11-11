@@ -186,7 +186,7 @@ CREATE TABLE IF NOT EXISTS omdb_ratings (
 );
 CREATE INDEX IF NOT EXISTS omdb_ratings_fetched ON omdb_ratings(fetched_at);
 """
-SCHEMA_VERSION = "8"
+SCHEMA_VERSION = "9"
 
 # Checked in the app (not the schema) so a new format or service needs no table rebuild.
 FORMATS = {"physical": ["4K UHD", "Blu-ray", "3D Blu-ray", "DVD", "VHS"],
@@ -358,6 +358,25 @@ def migrate(con):
       status TEXT NOT NULL              -- ok | capped | api_error | timeout | error
     );
     CREATE INDEX IF NOT EXISTS ask_log_ts ON ask_log(ts);
+    """)
+
+    # v9: people and watch attendance (no rows written)
+    con.executescript("""
+    CREATE TABLE IF NOT EXISTS people (
+      id INTEGER PRIMARY KEY,
+      name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+      kind TEXT NOT NULL CHECK (kind IN ('adult', 'kid')),
+      color TEXT NOT NULL,                       -- palette key: green | blue | red | pink | purple
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS watch_people (
+      watch_id  INTEGER NOT NULL REFERENCES watches(id) ON DELETE CASCADE,
+      person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE RESTRICT,
+      PRIMARY KEY (watch_id, person_id)
+    ) WITHOUT ROWID;
+    CREATE INDEX IF NOT EXISTS watch_people_person ON watch_people(person_id);
     """)
 
 
@@ -1814,6 +1833,133 @@ def delete_location(loc_id):
     con.execute("DELETE FROM locations WHERE id=?", (loc_id,))
     con.commit()
     return jsonify(ok=True, deleted_id=loc_id)
+
+
+# ----------------------------------------------------------------------------- people (editor-only)
+PERSON_KINDS = ("adult", "kid")
+PERSON_COLORS = ("green", "blue", "red", "pink", "purple")  # --p-user1 .. --p-user5 in the CSS
+MAX_ACTIVE_PEOPLE = 8
+RESERVED_PERSON_NAMES = ("everyone", "adults", "kids")  # words the audience grammar uses
+
+
+def person_out(row):
+    return {"id": row["id"], "name": row["name"], "kind": row["kind"], "color": row["color"],
+            "sort_order": row["sort_order"], "active": bool(row["active"]), "watch_count": row["watch_count"]}
+
+
+PERSON_SELECT = """SELECT p.*, (SELECT count(*) FROM watch_people wp WHERE wp.person_id = p.id) AS watch_count
+                   FROM people p"""
+
+
+def list_people(con, active_only=False):
+    where = " WHERE p.active = 1" if active_only else ""
+    return [person_out(r) for r in con.execute(f"{PERSON_SELECT}{where} ORDER BY p.sort_order, p.id")]
+
+
+def get_person(con, person_id):
+    row = con.execute(f"{PERSON_SELECT} WHERE p.id = ?", (person_id,)).fetchone()
+    return person_out(row) if row else None
+
+
+def person_name_arg(con, raw, person_id=None):
+    name = clean(raw)
+    if not name or len(name) > 40:
+        abort(make_err(400, "A name is required (up to 40 characters)."))
+    if name.lower() in RESERVED_PERSON_NAMES or "," in name or name.isdigit():
+        abort(make_err(400, "That name can't be used. Pick a name without commas that isn't everyone, adults or kids."))
+    other = con.execute("SELECT id, name FROM people WHERE name = ? AND id IS NOT ?", (name, person_id)).fetchone()
+    if other:  # the column is COLLATE NOCASE, so this is case-insensitive
+        abort(make_err(400, f"A person named {other['name']} already exists."))
+    return name
+
+
+def person_kind_arg(raw):
+    if raw not in PERSON_KINDS:
+        abort(make_err(400, "kind must be adult or kid."))
+    return raw
+
+
+def person_color_arg(raw):
+    if raw not in PERSON_COLORS:
+        abort(make_err(400, f"color must be one of {', '.join(PERSON_COLORS)}."))
+    return raw
+
+
+def person_sort_arg(raw):
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        abort(make_err(400, "sort_order must be a whole number."))
+    return raw
+
+
+def check_active_room(con, person_id=None):
+    """Refuse when making one more person active would pass MAX_ACTIVE_PEOPLE."""
+    n = con.execute("SELECT count(*) FROM people WHERE active = 1 AND id IS NOT ?", (person_id,)).fetchone()[0]
+    if n >= MAX_ACTIVE_PEOPLE:
+        abort(make_err(400, f"At most {MAX_ACTIVE_PEOPLE} active people."))
+
+
+@app.get("/admin/api/people")
+@editor_required
+def api_people():
+    return jsonify(people=list_people(db()))
+
+
+@app.post("/admin/api/people")
+@editor_required
+def add_person():
+    data = request.get_json(silent=True) or {}
+    con = db()
+    name = person_name_arg(con, data.get("name"))
+    kind = person_kind_arg(data.get("kind"))
+    color = person_color_arg(data.get("color"))
+    if "sort_order" in data:
+        sort_order = person_sort_arg(data["sort_order"])
+    else:
+        sort_order = con.execute("SELECT coalesce(max(sort_order) + 1, 0) FROM people").fetchone()[0]
+    check_active_room(con)
+    pid = con.execute("INSERT INTO people (name, kind, color, sort_order) VALUES (?, ?, ?, ?)",
+                      (name, kind, color, sort_order)).lastrowid
+    con.commit()
+    return jsonify(ok=True, person=get_person(con, pid))
+
+
+@app.put("/admin/api/people/<int:person_id>")
+@editor_required
+def edit_person(person_id):
+    con = db()
+    cur = con.execute("SELECT * FROM people WHERE id = ?", (person_id,)).fetchone()
+    if not cur:
+        abort(make_err(404, "No such person"))
+    data = request.get_json(silent=True) or {}
+    name = person_name_arg(con, data["name"], person_id) if "name" in data else cur["name"]
+    kind = person_kind_arg(data["kind"]) if "kind" in data else cur["kind"]
+    color = person_color_arg(data["color"]) if "color" in data else cur["color"]
+    sort_order = person_sort_arg(data["sort_order"]) if "sort_order" in data else cur["sort_order"]
+    active = cur["active"]
+    if "active" in data:
+        if not isinstance(data["active"], bool):
+            abort(make_err(400, "active must be true or false."))
+        active = int(data["active"])
+        if active and not cur["active"]:
+            check_active_room(con, person_id)
+    con.execute("UPDATE people SET name=?, kind=?, color=?, sort_order=?, active=? WHERE id=?",
+                (name, kind, color, sort_order, active, person_id))
+    con.commit()
+    return jsonify(ok=True, person=get_person(con, person_id))
+
+
+@app.delete("/admin/api/people/<int:person_id>")
+@editor_required
+def delete_person(person_id):
+    con = db()
+    person = get_person(con, person_id)
+    if not person:
+        abort(make_err(404, "No such person"))
+    if person["watch_count"]:
+        abort(make_err(400, f"{person['name']} is on {person['watch_count']} watches. Deactivate them instead."))
+    con.execute("DELETE FROM people WHERE id = ?", (person_id,))
+    con.commit()
+    return jsonify(ok=True, deleted_id=person_id)
 
 
 @app.post("/admin/api/copies")
