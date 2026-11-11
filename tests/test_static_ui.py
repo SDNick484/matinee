@@ -7,9 +7,11 @@ layout rules that stop horizontal overflow stay in place.
 import re
 from pathlib import Path
 
+from conftest import frontend_js
+
 STATIC = Path(__file__).resolve().parent.parent / "static"
 CSS = (STATIC / "style.css").read_text(encoding="utf-8")
-JS = (STATIC / "app.js").read_text(encoding="utf-8")
+JS = frontend_js()   # every module in static/js/, in app.js section order
 
 
 def _root_block():
@@ -123,7 +125,7 @@ def test_no_color_emoji_in_frontend():
     # Color emoji need an OS emoji font; Linux desktops without one show empty boxes.
     html = (STATIC / "index.html").read_text(encoding="utf-8")
     pattern = re.compile(r"[\U0001F000-\U0001FFFF]|[☁⚠✏✂]️?")
-    for name, text in (("app.js", JS), ("index.html", html)):
+    for name, text in (("static/js/*.js", JS), ("index.html", html)):
         found = sorted({m.group() for m in pattern.finditer(text)})
         assert not found, f"{name} still uses emoji {found}; use icon(...) instead"
 
@@ -201,7 +203,7 @@ def test_movie_night_ignores_stale_responses():
 
 def _ask_js():
     m = re.search(r"// =+ Ask view\n(.*?)\n  // =+ ", JS, re.S)
-    assert m, "Ask view section not found in app.js"
+    assert m, "Ask view section not found in static/js/"
     return m.group(1)
 
 

@@ -203,7 +203,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 .form-select {
   width: 100%;
 }
-/* Inline styles in app.js set 14px on some fields; 16px stops Android's
+/* Inline styles in static/js/ set 14px on some fields; 16px stops Android's
    zoom-on-focus and keeps text legible on phones. */
 @media (max-width: 899px) {
   .form-input,
@@ -2319,7 +2319,7 @@ main#view {
   height: 14px;
 }
 
-/* Inline SVG icons (see ICONS in app.js): sized to the text, colored by it */
+/* Inline SVG icons (see ICONS in static/js/icons.js): sized to the text, colored by it */
 .ico {
   width: 1.15em;
   height: 1.15em;

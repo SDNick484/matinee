@@ -579,7 +579,7 @@ def editor_required(fn):
 
 @app.after_request
 def security_headers(resp):
-    """Baseline headers on every response. No script-src/style-src policy: app.js renders inline
+    """Baseline headers on every response. No script-src/style-src policy: static/js/ renders inline
     onclick/onerror handlers and style="" attributes, which a strict CSP would block."""
     resp.headers.setdefault("X-Content-Type-Options", "nosniff")
     resp.headers.setdefault("Referrer-Policy", "same-origin")
@@ -596,20 +596,21 @@ def who():
 _asset_version_cache = {"mtime": 0.0, "version": ""}
 
 
+def _asset_files():
+    """style.css plus every ES module under static/js/."""
+    static = APP_DIR / "static"
+    files = [static / "style.css"] + sorted((static / "js").glob("*.js"))
+    return [f for f in files if f.is_file()]
+
+
 def get_asset_version():
     try:
-        mtimes = []
-        for name in ("style.css", "app.js"):
-            f = APP_DIR / "static" / name
-            if f.is_file():
-                mtimes.append(f.stat().st_mtime)
-        curr_mtime = max(mtimes) if mtimes else 0.0
+        files = _asset_files()
+        curr_mtime = max((f.stat().st_mtime for f in files), default=0.0)
         if curr_mtime != _asset_version_cache["mtime"]:
             h = hashlib.sha256()
-            for name in ("style.css", "app.js"):
-                f = APP_DIR / "static" / name
-                if f.is_file():
-                    h.update(f.read_bytes())
+            for f in files:
+                h.update(f.read_bytes())
             _asset_version_cache["mtime"] = curr_mtime
             _asset_version_cache["version"] = h.hexdigest()[:10]
         return _asset_version_cache["version"]
@@ -622,7 +623,7 @@ def render_index():
     try:
         html = (APP_DIR / "static" / "index.html").read_text(encoding="utf-8")
         html = re.sub(r'href="/static/style\.css(?:\?v=[^"]*)?"', f'href="/static/style.css?v={v}"', html)
-        html = re.sub(r'src="/static/app\.js(?:\?v=[^"]*)?"', f'src="/static/app.js?v={v}"', html)
+        html = re.sub(r'src="/static/js/main\.js(?:\?v=[^"]*)?"', f'src="/static/js/main.js?v={v}"', html)
         resp = make_response(html)
         resp.headers["Content-Type"] = "text/html; charset=utf-8"
         resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"

@@ -214,7 +214,7 @@ def test_lan_edit_off_still_wins(client, monkeypatch):
 
 
 # ------------------------------------------------------------------- response headers
-@pytest.mark.parametrize("path", ["/", "/admin", "/api/titles", "/admin/api/me", "/healthz", "/static/app.js"])
+@pytest.mark.parametrize("path", ["/", "/admin", "/api/titles", "/admin/api/me", "/healthz", "/static/js/main.js"])
 def test_security_headers_on_every_response(client, path):
     r = client.get(path)
     assert r.headers["X-Content-Type-Options"] == "nosniff"

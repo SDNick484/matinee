@@ -9,6 +9,18 @@ if "DATA_DIR" not in os.environ or not os.environ["DATA_DIR"]:
 
 FIXTURES_TMDB = Path(__file__).parent / "fixtures" / "tmdb"
 
+# The SPA's ES modules in static/js/, in the order of the app.js sections they were cut from
+# (constants and state first, initialization last). tests/test_js_modules.py checks this list is complete.
+JS_DIR = Path(__file__).resolve().parent.parent / "static" / "js"
+JS_MODULES = ["core.js", "icons.js", "router.js", "grid.js", "detail.js", "add.js", "forms.js", "stats.js",
+              "about.js", "ask.js", "movie-night.js", "locations.js", "main.js"]
+
+
+def frontend_js():
+    """Every frontend module's source, joined in JS_MODULES order: what static checks read now that
+    static/app.js is split."""
+    return "\n".join((JS_DIR / name).read_text(encoding="utf-8") for name in JS_MODULES)
+
 
 def seed_title(con, tmdb_id, *, copies=("Blu-ray",), digital=(), watched=(), rating=None):
     """Insert a title from tests/fixtures/tmdb/movie-<id>.json with physical copies (and optional `digital` copies),

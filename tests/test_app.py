@@ -196,12 +196,12 @@ def test_access_jwt_audience_and_allow_list(monkeypatch):
 def test_pages_public_and_private(monkeypatch):
     assert c.get("/").status_code == 200 and c.get("/admin").status_code == 200
     r_index = c.get("/")
-    assert b"/static/style.css?v=" in r_index.data and b"/static/app.js?v=" in r_index.data
+    assert b"/static/style.css?v=" in r_index.data and b"/static/js/main.js?v=" in r_index.data
     assert "no-cache" in r_index.headers.get("Cache-Control", "")
     assert b"footer-links" in r_index.data
 
     r_admin = c.get("/admin")
-    assert b"/static/style.css?v=" in r_admin.data and b"/static/app.js?v=" in r_admin.data
+    assert b"/static/style.css?v=" in r_admin.data and b"/static/js/main.js?v=" in r_admin.data
     assert "no-cache" in r_admin.headers.get("Cache-Control", "")
 
     r_css_v = c.get("/static/style.css?v=test12345")
@@ -212,9 +212,10 @@ def test_pages_public_and_private(monkeypatch):
     assert r_css.status_code == 200 and b"--chip-4k" in r_css.data and b"Figtree" in r_css.data
     assert "max-age=60" in r_css.headers.get("Cache-Control", "")
 
-    r_js = c.get("/static/app.js")
+    r_js = c.get("/static/js/router.js")
     assert r_js.status_code == 200 and b"parseHash" in r_js.data and b"renderDetail" in r_js.data
     assert b"btn-header-signin" in r_js.data
+    assert "javascript" in r_js.headers.get("Content-Type", "")   # module scripts need a JS MIME type
     r_svg = c.get("/static/tmdb.svg")
     assert r_svg.status_code == 200 and b"<svg" in r_svg.data
     monkeypatch.setattr(matinee, "PUBLIC_VIEW", False)
@@ -909,7 +910,8 @@ def test_stats_watched_and_rating():
 
 
 def test_static_app_js_no_undefined_escapeHtml():
-    js = (matinee.APP_DIR / "static" / "app.js").read_text(encoding="utf-8")
+    from conftest import frontend_js
+    js = frontend_js()
     if "escapeHtml(" in js:
         assert "function escapeHtml" in js or "const escapeHtml" in js or "let escapeHtml" in js
 
