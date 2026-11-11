@@ -923,6 +923,7 @@ def write_omdb_ratings(con, title_id, imdb_id, ratings):
 
 # ======================================================================= serializers
 PRIVATE_COPY = ("added_by",)
+PRIVATE_WATCH = ("notes",)  # family diary text: editors only; dates and counts stay public
 TITLE_COLS = ("tmdb_id", "imdb_id", "title", "sort_title", "search_text", "year", "release_date", "runtime",
               "overview", "certification", "collection_tmdb_id", "collection_name", "tmdb_vote", "tmdb_votes",
               "poster_path", "backdrop_path", "poster_file", "backdrop_file", "fetched_at")
@@ -1036,6 +1037,14 @@ def copy_out(r, private, loc_map=None):
     return d
 
 
+def watch_out(r, private):
+    d = dict(r)
+    if not private:
+        for k in PRIVATE_WATCH:
+            d.pop(k, None)
+    return d
+
+
 def title_detail(title_id, private):
     con = db()
     t = con.execute("SELECT * FROM titles WHERE id=?", (title_id,)).fetchone()
@@ -1067,7 +1076,7 @@ def title_detail(title_id, private):
     d["user_rating"] = rating_row["rating"] if rating_row else None
     watches = con.execute("SELECT id, watched_date, notes, date_bucket, created_at FROM watches WHERE title_id=? ORDER BY watched_date DESC, id DESC",
                           (title_id,)).fetchall()
-    d["watches"] = [dict(w) for w in watches]
+    d["watches"] = [watch_out(w, private) for w in watches]
     d["last_watched"] = watches[0]["watched_date"] if watches else None
     d["watch_count"] = len(watches)
     omdb_row = con.execute("SELECT imdb_id, imdb_rating, imdb_votes, rotten_tomatoes_score, metacritic_score, fetched_at FROM omdb_ratings WHERE title_id=?", (title_id,)).fetchone()
