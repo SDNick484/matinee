@@ -20,6 +20,10 @@ A Title with no Copies stays in the database but is hidden from the public grid.
 
 **Packages were considered and dropped.** The original brief and the phase-1 OpenSpec config described a third entity, a Package: one UPC product holding many Titles, such as a trilogy box set. The family handles discs individually, so a package record would add bookkeeping nobody uses. A box set is added as a separate Copy of each Title, and scanning a multi-title UPC returns several TMDB candidates for the editor to choose from.
 
+## People
+
+Editors can list the people in the household (Nick, Lauren, Midge, Alice, Paige), each an adult or a kid with a color. Every watch then records who was in the room, so "have *we* seen it?" becomes "has *Alice* seen it?". Movie Night, the MCP tools and Ask can pick for an audience (`everyone`, `adults`, `kids`, or names), and the grid can show what a group has not seen. Watches logged before people existed are treated as seen by everyone, or by adults only when they are over ten years old, until an editor fixes them. The feature stays dormant until the first person is added.
+
 ## Principles
 
 1. **Small footprint.** One Flask file, one SQLite file, a vanilla JS single-page app. No framework, no bundler, no npm build step.
@@ -27,7 +31,7 @@ A Title with no Copies stays in the database but is hidden from the public grid.
 3. **Upgrades never need a manual step.** The installer is idempotent and keeps data and config. Schema changes go through an idempotent `migrate()`.
 4. **Rule-based recommendations.** Picks come from plain SQLite rules (forgotten gems, an unwatched backlog, quick weeknight picks, genre and mood matching, an optional runtime cap), so they are explainable and instant.
 5. **No scraping.** Metadata comes from documented APIs only: TMDB (with attribution, refreshing cached data older than about 6 months), OMDb (1,000 requests a day), and the UPCitemdb trial endpoint (100 lookups a day, cached).
-6. **Explicit access boundaries.** Reads under `/api/` are public when `PUBLIC_VIEW=1`. Writes live under `/admin/api/` and need an editor. Personal data is public or editor-only by deliberate choice.
+6. **Explicit access boundaries.** Reads under `/api/` are public when `PUBLIC_VIEW=1`. Writes live under `/admin/api/` and need an editor. Personal data is public or editor-only by deliberate choice. Who watched what is editor-only: people, attendance and audience picks answer only to editors, and the public `/api` refuses them.
 7. **Phone-first, home-theater look.** A dark palette, WCAG AA contrast on every text and chip pair, and no page-level horizontal scroll at 412 px.
 8. **Consistent with the sibling apps.** Matinee follows the conventions of Roasted and Cookbook Collection, and notes why when it diverges.
 
