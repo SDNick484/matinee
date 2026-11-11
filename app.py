@@ -29,7 +29,8 @@ from pathlib import Path
 from flask import Flask, abort, g, jsonify, make_response, redirect, request, send_from_directory, has_app_context
 from werkzeug.wrappers import Response as WerkzeugResponse
 
-from recommend import CERT_VALUES, FORMAT_ORDER, ParamError, parse_params, recommend, sorted_formats
+from recommend import (CERT_VALUES, FORMAT_ORDER, SEEN_CTE, ParamError, attendance_of, find_person, parse_params,
+                       recommend, sorted_formats, unknown_person_message)
 
 APP_NAME = "Matinee"
 APP_DIR = Path(__file__).resolve().parent
@@ -996,7 +997,7 @@ def write_omdb_ratings(con, title_id, imdb_id, ratings):
 
 # ======================================================================= serializers
 PRIVATE_COPY = ("added_by",)
-PRIVATE_WATCH = ("notes",)  # family diary text: editors only; dates and counts stay public
+PRIVATE_WATCH = ("notes", "attendance", "attendees")  # family diary text and who was there: editors only; dates and counts stay public
 TITLE_COLS = ("tmdb_id", "imdb_id", "title", "sort_title", "search_text", "year", "release_date", "runtime",
               "overview", "certification", "collection_tmdb_id", "collection_name", "tmdb_vote", "tmdb_votes",
               "poster_path", "backdrop_path", "poster_file", "backdrop_file", "fetched_at")
@@ -1118,6 +1119,37 @@ def watch_out(r, private):
     return d
 
 
+def watch_attendance(con, watches):
+    """{watch_id: {"attendance", "attendees"}} for watch rows (needing id, watched_date, date_bucket). A watch with
+    watch_people rows lists exactly those people; an unresolved one lists who recommend.SEEN_CTE counts for it:
+    every person, or every adult when attendance_of says assumed_adults. Active or not, in sort_order, id order."""
+    people = con.execute("SELECT id, kind FROM people ORDER BY sort_order, id").fetchall()
+    order = {p["id"]: i for i, p in enumerate(people)}
+    recorded = {}
+    ids = [w["id"] for w in watches]
+    if ids:
+        for r in con.execute(f"SELECT watch_id, person_id FROM watch_people WHERE watch_id IN ({','.join('?' * len(ids))})", ids):
+            recorded.setdefault(r["watch_id"], []).append(r["person_id"])
+    out = {}
+    for w in watches:
+        mine = recorded.get(w["id"])
+        kind = attendance_of(w, bool(mine))
+        if mine:
+            who = sorted(mine, key=order.__getitem__)
+        else:
+            who = [p["id"] for p in people if kind == "assumed_everyone" or p["kind"] == "adult"]
+        out[w["id"]] = {"attendance": kind, "attendees": who}
+    return out
+
+
+def title_seen_by(con, title_id):
+    """Ids of everyone with a `seen` row for the title (recommend.SEEN_CTE), active or not, in people order."""
+    return [r[0] for r in con.execute(
+        f"""WITH {SEEN_CTE}
+            SELECT DISTINCT p.id FROM seen s JOIN people p ON p.id = s.person_id
+            WHERE s.title_id = ? ORDER BY p.sort_order, p.id""", (title_id,))]
+
+
 def title_detail(title_id, private):
     con = db()
     t = con.execute("SELECT * FROM titles WHERE id=?", (title_id,)).fetchone()
@@ -1149,7 +1181,12 @@ def title_detail(title_id, private):
     d["user_rating"] = rating_row["rating"] if rating_row else None
     watches = con.execute("SELECT id, watched_date, notes, date_bucket, created_at FROM watches WHERE title_id=? ORDER BY watched_date DESC, id DESC",
                           (title_id,)).fetchall()
-    d["watches"] = [watch_out(w, private) for w in watches]
+    if private:
+        extra = watch_attendance(con, watches)
+        d["watches"] = [watch_out({**dict(w), **extra[w["id"]]}, True) for w in watches]
+        d["seen_by"] = title_seen_by(con, title_id)
+    else:
+        d["watches"] = [watch_out(w, False) for w in watches]
     d["last_watched"] = watches[0]["watched_date"] if watches else None
     d["watch_count"] = len(watches)
     omdb_row = con.execute("SELECT imdb_id, imdb_rating, imdb_votes, rotten_tomatoes_score, metacritic_score, fetched_at FROM omdb_ratings WHERE title_id=?", (title_id,)).fetchone()
@@ -1962,6 +1999,38 @@ def delete_person(person_id):
     return jsonify(ok=True, deleted_id=person_id)
 
 
+def resolve_people(con, items):
+    """Person ids or names (any case, active or not) -> ids, in request order, without duplicates. 400 on an
+    unknown person or an empty list."""
+    if not isinstance(items, list):
+        abort(make_err(400, "attendees must be a list of person ids or names."))
+    if not items:
+        abort(make_err(400, "A watch needs at least one person."))
+    ids = []
+    for item in items:
+        token = item if isinstance(item, (int, str)) and not isinstance(item, bool) else repr(item)
+        row = find_person(con, token)
+        if row is None:
+            abort(make_err(400, unknown_person_message(con, item)))
+        if row["id"] not in ids:
+            ids.append(row["id"])
+    return ids
+
+
+def set_attendees(con, watch_id, person_ids):
+    """Replace a watch's attendance. The caller commits."""
+    con.execute("DELETE FROM watch_people WHERE watch_id = ?", (watch_id,))
+    con.executemany("INSERT INTO watch_people (watch_id, person_id) VALUES (?, ?)",
+                    [(watch_id, pid) for pid in person_ids])
+
+
+def watch_response(con, watch_id, title_id):
+    w = con.execute("SELECT id, title_id, watched_date, notes, date_bucket FROM watches WHERE id = ?",
+                    (watch_id,)).fetchone()
+    return {"id": w["id"], "title_id": title_id, "watched_date": w["watched_date"], "notes": w["notes"],
+            "date_bucket": w["date_bucket"], **watch_attendance(con, [w])[watch_id]}
+
+
 @app.post("/admin/api/copies")
 @editor_required
 def add_copy():
@@ -2112,16 +2181,36 @@ def add_watch(title_id):
         watched_date = estimated_date.isoformat()
 
     notes = clean(data.get("notes"))
-    cur = con.execute("INSERT INTO watches(title_id, watched_date, notes, date_bucket) VALUES (?, ?, ?, ?)",
-                      (title_id, watched_date, notes, date_bucket))
-    con.commit()
-    return jsonify(ok=True, watch={
-        "id": cur.lastrowid,
-        "title_id": title_id,
-        "watched_date": watched_date,
-        "notes": notes,
-        "date_bucket": date_bucket
-    })
+    if "attendees" in data:
+        attendees = resolve_people(con, data["attendees"])  # validated before anything is written
+    else:  # the default is everyone active; with nobody set up that is no rows, as before people existed
+        attendees = [p["id"] for p in list_people(con, active_only=True)]
+    try:
+        cur = con.execute("INSERT INTO watches(title_id, watched_date, notes, date_bucket) VALUES (?, ?, ?, ?)",
+                          (title_id, watched_date, notes, date_bucket))
+        set_attendees(con, cur.lastrowid, attendees)
+        con.commit()
+    except Exception:
+        con.rollback()
+        raise
+    return jsonify(ok=True, watch=watch_response(con, cur.lastrowid, title_id))
+
+
+@app.put("/admin/api/titles/<int:title_id>/watches/<int:watch_id>/attendees")
+@editor_required
+def put_watch_attendees(title_id, watch_id):
+    con = db()
+    if not con.execute("SELECT 1 FROM watches WHERE id=? AND title_id=?", (watch_id, title_id)).fetchone():
+        abort(make_err(404, "No such watch entry"))
+    data = request.get_json(silent=True) or {}
+    attendees = resolve_people(con, data.get("attendees"))
+    try:
+        set_attendees(con, watch_id, attendees)
+        con.commit()
+    except Exception:
+        con.rollback()
+        raise
+    return jsonify(ok=True, watch=watch_response(con, watch_id, title_id))
 
 
 @app.delete("/admin/api/titles/<int:title_id>/watches/<int:watch_id>")

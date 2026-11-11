@@ -141,6 +141,21 @@ def has_people(con) -> bool:
     return con.execute("SELECT 1 FROM people LIMIT 1").fetchone() is not None
 
 
+def find_person(con, token):
+    """The (id, name) row of the person a token names (an id, or a name in any case; active or not), or None."""
+    token = str(token).strip()
+    if token.isascii() and token.isdigit():  # str.isdigit alone accepts "²", which int() rejects
+        n = int(token)
+        return con.execute("SELECT id, name FROM people WHERE id = ?", (n,)).fetchone() if n <= _MAX_ROWID else None
+    # `name` is COLLATE NOCASE, so this match ignores case
+    return con.execute("SELECT id, name FROM people WHERE name = ?", (token,)).fetchone()
+
+
+def unknown_person_message(con, token) -> str:
+    everyone = [r[0] for r in con.execute("SELECT name FROM people ORDER BY sort_order, id")]
+    return f"Unknown person: {token}. People: {', '.join(everyone)}."
+
+
 def resolve_audience(con, raw: str) -> dict:
     """Resolve `everyone` / `adults` / `kids` (active people, in sort order) or a comma list of names or ids
     (active or not, in the order given, deduplicated) to {"label", "people": [{"id", "name"}]}."""
@@ -163,14 +178,9 @@ def resolve_audience(con, raw: str) -> dict:
 
     people, seen_ids = [], set()
     for token in tokens:
-        if token.isascii() and token.isdigit():  # str.isdigit alone accepts "²", which int() rejects
-            n = int(token)
-            row = con.execute("SELECT id, name FROM people WHERE id = ?", (n,)).fetchone() if n <= _MAX_ROWID else None
-        else:  # `name` is COLLATE NOCASE, so this match ignores case
-            row = con.execute("SELECT id, name FROM people WHERE name = ?", (token,)).fetchone()
+        row = find_person(con, token)
         if row is None:
-            everyone = [r[0] for r in con.execute("SELECT name FROM people ORDER BY sort_order, id")]
-            raise ParamError(f"Unknown person: {token}. People: {', '.join(everyone)}.")
+            raise ParamError(unknown_person_message(con, token))
         if row[0] not in seen_ids:
             seen_ids.add(row[0])
             people.append({"id": row[0], "name": row[1]})
