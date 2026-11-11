@@ -1,7 +1,7 @@
 # People and watch attendance ("who has seen it") — design
 
 **Date:** 2026-11-11
-**Branch:** `feat/per-person` (spec and plan in a draft PR; the build is a later session)
+**Branch:** spec and plan merged from `feat/per-person` (PR #28); the build is on `feat/people-attendance`
 **Schema:** v8 → v9 (two new tables, no change to an existing table, column or row)
 **Status:** Approved by Nick on 2026-11-11 (design, spec and plan). No implementation has started.
 **Verified against:** `matinee` `main` @ `b2f0fe3` (merge of PR #27), `python -m pytest -q` → 842 passed, 13 skipped.

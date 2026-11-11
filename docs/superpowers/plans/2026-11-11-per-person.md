@@ -23,7 +23,7 @@
 - Error bodies are `{"error": "<message>"}` with the exact strings in spec §5 and §6.
 - No new runtime dependency, no new setting, no build step. New JS follows CLAUDE.md rule 1 (one `export { … };` at the end; `core.js` and `icons.js` import nothing).
 - Tap targets ≥ 44 px; no horizontal scroll at 412 px or 360 px; dot color pairs meet spec §7.6.
-- Commits: Conventional Commits, one per task, author `SDNick484 <SDNick484@users.noreply.github.com>`, on `feat/per-person`. `python -m pytest -q` is green after every task.
+- Commits: Conventional Commits, one per task, author `SDNick484 <SDNick484@users.noreply.github.com>`, on a new branch `feat/people-attendance` cut from `main` after the spec and plan PR (#28) has merged. `python -m pytest -q` is green after every task.
 
 ## Review Focus
 
@@ -370,7 +370,7 @@ def test_people_code_has_no_browser_storage(): ...       # people.js has no loca
 
 - [ ] **Step 1:** `docs/vision.md`: add the People paragraph and the principle 6 note (spec §11). `README.md`: a "People and who watched" section (what it is, that it is editor-only, how old watches are treated, the audience values). No personal hostname, address or email. Commit: `docs: people, watch attendance and audiences`.
 - [ ] **Step 2:** Whole-branch review against the spec (subagent-driven-development's final review, or one fresh reviewer for native execution). Fix findings in follow-up commits.
-- [ ] **Step 3:** Run and report the Definition of done from `CLAUDE.md`: `python -m pytest -q`; `for f in static/js/*.js; do node --check "$f"; done`; `sh installer/build.sh && sh -n dist/setup-matinee.sh`. Push `feat/per-person` and mark the draft PR ready. Do not merge; Nick merges. Wait for CI (Python 3.10–3.13, Alpine, lint, UI smoke).
+- [ ] **Step 3:** Run and report the Definition of done from `CLAUDE.md`: `python -m pytest -q`; `for f in static/js/*.js; do node --check "$f"; done`; `sh installer/build.sh && sh -n dist/setup-matinee.sh`. Push `feat/people-attendance` and open a PR against `main` whose body has a summary, the test results and the manual steps below. Do not merge; Nick merges. Wait for CI (Python 3.10–3.13, Alpine, lint, UI smoke).
 - [ ] **Step 4 (Nick, after merge): deploy.** Back up first (`sh /etc/periodic/daily/matinee-backup`), run `setup-matinee.sh`, then check:
   - `sqlite3 /var/lib/matinee/matinee.db "SELECT v FROM meta WHERE k='schema'"` → `9`;
   - `sqlite3 /var/lib/matinee/matinee.db "SELECT count(*) FROM watches; SELECT count(*) FROM user_ratings"` matches the counts taken before the upgrade;
