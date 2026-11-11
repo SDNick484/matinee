@@ -76,6 +76,20 @@ add_setting() {  # add_setting FILE KEY VALUE COMMENT — only if KEY isn't ther
 gen_key() {  # 43 URL-safe characters (256 bits) for a new API key
   python3 -c 'import secrets; print(secrets.token_urlsafe(32))'
 }
+conf_val() { sed -n "s/^$1=//p" "$CONF" | head -n1 | tr -d "\"'"; }
+mcp_level() {  # mcp_level READONLY WRITES -> none, log or all; mirrors mcp_http.write_level()
+  _ro=$(printf '%s' "$1" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]')
+  _w=$(printf '%s' "$2" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]')
+  case "$_ro" in
+    ""|0|false|no|off) ;;
+    *) echo none; return 0 ;;
+  esac
+  case "$_w" in
+    none|log|all) echo "$_w" ;;
+    "") case "$_ro" in 0|false|no|off) echo all ;; *) echo none ;; esac ;;
+    *) echo none ;;
+  esac
+}
 
 if [ ! -f "$CONF" ]; then
   echo "==> Writing $CONF"
@@ -99,7 +113,10 @@ add_setting "$CONF" ANTHROPIC_SEARCH_KEY "" "Anthropic API key for Ask (AI searc
 add_setting "$CONF" ANTHROPIC_SEARCH_MODEL "claude-haiku-5-5" "Model Ask uses"
 add_setting "$CONF" ASK_DAILY_LIMIT "200" "Ask questions per day across all editors"
 # Remote MCP (matinee-mcp). MCP_HTTP_BIND must be this host's LAN address because cloudflared runs in Docker.
-add_setting "$CONF" MATINEE_MCP_READONLY 1 "1 = the Claude app can only read; 0 = it may also rate, log watches and add titles"
+add_setting "$CONF" MATINEE_MCP_READONLY 1 "1 = the Claude app can only read (MATINEE_MCP_WRITES is ignored); 0 = MATINEE_MCP_WRITES decides what it may write"
+# A host that already runs with writes on (READONLY=0) keeps all nine tools; every other host starts at none.
+MCP_WRITES_DEFAULT=$(mcp_level "$(conf_val MATINEE_MCP_READONLY)" "")
+add_setting "$CONF" MATINEE_MCP_WRITES "$MCP_WRITES_DEFAULT" "none, log (adds rate_movie and log_watch) or all (adds add_movie); only used while MATINEE_MCP_READONLY=0"
 add_setting "$CONF" MCP_HTTP_BIND "$IP" "Address matinee-mcp listens on (cloudflared reaches it here)"
 add_setting "$CONF" MCP_HTTP_PORT 8719 "Port matinee-mcp listens on"
 add_setting "$CONF" MCP_HTTP_PATH /matinee/mcp "URL path of the MCP endpoint (the tunnel route is ^/matinee/)"
@@ -168,14 +185,27 @@ description="Matinee MCP server (Streamable HTTP, behind Cloudflare Access)"
 [ -r /etc/conf.d/matinee ] && . /etc/conf.d/matinee
 : ${PORT:=8771}
 : ${MATINEE_URL:=http://127.0.0.1:${PORT}}
+mcp_level() {  # mcp_level READONLY WRITES -> none, log or all; mirrors mcp_http.write_level()
+  _ro=$(printf '%s' "$1" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]')
+  _w=$(printf '%s' "$2" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]')
+  case "$_ro" in
+    ""|0|false|no|off) ;;
+    *) echo none; return 0 ;;
+  esac
+  case "$_w" in
+    none|log|all) echo "$_w" ;;
+    "") case "$_ro" in 0|false|no|off) echo all ;; *) echo none ;; esac ;;
+    *) echo none ;;
+  esac
+}
 # Only what this service needs: TMDB_READ_TOKEN and OMDB_API_KEY deliberately stay out of its environment,
-# and it gets one Matinee key: the GET-only MATINEE_READ_KEY while read-only (mirrors mcp_http.readonly()),
-# MATINEE_API_KEY only when MATINEE_MCP_READONLY is 0/false/no/off.
-case "$(printf '%s' "${MATINEE_MCP_READONLY:-}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]')" in
-  0|false|no|off) unset MATINEE_READ_KEY; export MATINEE_API_KEY ;;
-  *) unset MATINEE_API_KEY; export MATINEE_READ_KEY ;;
+# and it gets one Matinee key: the GET-only MATINEE_READ_KEY at write level none (mirrors
+# mcp_http.write_level()), MATINEE_API_KEY at log and all.
+case "$(mcp_level "${MATINEE_MCP_READONLY:-}" "${MATINEE_MCP_WRITES:-}")" in
+  none) unset MATINEE_API_KEY; export MATINEE_READ_KEY ;;
+  *) unset MATINEE_READ_KEY; export MATINEE_API_KEY ;;
 esac
-export MATINEE_URL MATINEE_MCP_READONLY MCP_HTTP_BIND MCP_HTTP_PORT MCP_HTTP_PATH MCP_PUBLIC_HOSTS CF_ACCESS_TEAM_DOMAIN CF_ACCESS_AUD MCP_ALLOWED_EMAILS CF_TEAM_DOMAIN
+export MATINEE_URL MATINEE_MCP_READONLY MATINEE_MCP_WRITES MCP_HTTP_BIND MCP_HTTP_PORT MCP_HTTP_PATH MCP_PUBLIC_HOSTS CF_ACCESS_TEAM_DOMAIN CF_ACCESS_AUD MCP_ALLOWED_EMAILS CF_TEAM_DOMAIN
 supervisor="supervise-daemon"
 respawn_delay=5
 respawn_max=10
@@ -237,13 +267,13 @@ done
 echo "==> Taking a first backup"
 /etc/periodic/daily/matinee-backup || echo "    (backup reported a problem; see /var/log/ops.log)"
 
-conf_val() { sed -n "s/^$1=//p" "$CONF" | head -n1 | tr -d "\"'"; }
-mcp_key_name() {  # the key matinee-mcp needs in its configured mode (same rule as its init script)
-  case "$(conf_val MATINEE_MCP_READONLY | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]')" in
-    0|false|no|off) echo MATINEE_API_KEY ;;
-    *) echo MATINEE_READ_KEY ;;
+mcp_key_name() {  # the key matinee-mcp needs at its write level (same rule as its init script)
+  case "$(mcp_level "$(conf_val MATINEE_MCP_READONLY)" "$(conf_val MATINEE_MCP_WRITES)")" in
+    none) echo MATINEE_READ_KEY ;;
+    *) echo MATINEE_API_KEY ;;
   esac
 }
+MCP_LEVEL=$(mcp_level "$(conf_val MATINEE_MCP_READONLY)" "$(conf_val MATINEE_MCP_WRITES)")
 MCP_STATE=off
 if [ "${MCP_OK:-0}" = 1 ] && [ -n "$(conf_val CF_ACCESS_AUD)" ] && [ -n "$(conf_val MCP_PUBLIC_HOSTS)" ] && [ -n "$(conf_val "$(mcp_key_name)")" ]; then
   echo "==> Starting matinee-mcp"
@@ -275,7 +305,7 @@ grep -q '^CF_AUD=$' "$CONF" && echo "  - Set CF_AUD in $CONF after creating the 
 [ -f "$OPS_CONF" ] || echo "  - No $OPS_CONF: backups still run nightly into /var/backups/matinee"
 echo "  - Tunnel: <your-domain> -> http://$IP:$PORT"
 case "$MCP_STATE" in
-  up) echo "Matinee MCP is running (read-only unless MATINEE_MCP_READONLY=0): http://$(conf_val MCP_HTTP_BIND):$(conf_val MCP_HTTP_PORT)/healthz" ;;
+  up) echo "Matinee MCP is running (write level: $MCP_LEVEL): http://$(conf_val MCP_HTTP_BIND):$(conf_val MCP_HTTP_PORT)/healthz" ;;
   failed) echo "Matinee MCP did not come up: see /var/log/matinee-mcp.log" ;;
   *)
     echo "Matinee MCP (remote access from the Claude app) was NOT started:"

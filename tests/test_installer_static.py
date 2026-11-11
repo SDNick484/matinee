@@ -37,7 +37,7 @@ def test_init_script_contents():
         assert needle in s, needle
     export = next(l for l in s.splitlines() if l.startswith("export "))
     assert "TMDB_READ_TOKEN" not in export and "OMDB_API_KEY" not in export
-    for key in ("MATINEE_URL", "MATINEE_MCP_READONLY", "MCP_HTTP_BIND", "CF_ACCESS_AUD"):
+    for key in ("MATINEE_URL", "MATINEE_MCP_READONLY", "MATINEE_MCP_WRITES", "MCP_HTTP_BIND", "CF_ACCESS_AUD"):
         assert key in export, key
     # the keys are exported by the per-mode case below, never unconditionally
     assert "MATINEE_API_KEY" not in export and "MATINEE_READ_KEY" not in export
@@ -143,7 +143,7 @@ def test_health_checks_added_once_and_matinee_does_not_hide_matinee_mcp(tmp_path
 
 
 # ------------------------------------------------------------------ docs
-NEW_KEYS = ["MATINEE_MCP_READONLY", "MCP_HTTP_PORT", "MCP_HTTP_BIND", "MCP_HTTP_PATH", "MCP_PUBLIC_HOSTS",
+NEW_KEYS = ["MATINEE_MCP_READONLY", "MATINEE_MCP_WRITES", "MCP_HTTP_PORT", "MCP_HTTP_BIND", "MCP_HTTP_PATH", "MCP_PUBLIC_HOSTS",
             "CF_ACCESS_AUD", "MCP_ALLOWED_EMAILS"]
 
 
@@ -253,10 +253,13 @@ def test_matinee_service_gets_both_keys():
 
 
 def _mcp_key_case():
+    """The init script's mcp_level function and its key-selection case, ready to run in sh."""
     s = _init_script()
+    fn = re.search(r"^mcp_level\(\) \{.*?^\}$", s, re.S | re.M)
+    assert fn, "matinee-mcp init script has no mcp_level function"
     m = re.search(r"^case .*?^esac$", s, re.S | re.M)
     assert m, "matinee-mcp init script has no key-selection case"
-    return m.group(0)
+    return fn.group(0) + "\n" + m.group(0)
 
 
 @pytest.mark.parametrize("value,mode", READONLY_CASES)
@@ -283,7 +286,7 @@ def test_installer_picks_the_key_matinee_mcp_needs(tmp_path, value, mode):
     conf = tmp_path / "matinee"
     conf.write_text("" if value is None else f"MATINEE_MCP_READONLY={value}\n")
     conf_val = next(l for l in HEAD.splitlines() if l.startswith("conf_val()"))
-    out = subprocess.run(["sh", "-c", f'CONF="{conf}"\n{conf_val}\n{_fn("mcp_key_name")}\nmcp_key_name'],
+    out = subprocess.run(["sh", "-c", f'CONF="{conf}"\n{conf_val}\n{_fn("mcp_level")}\n{_fn("mcp_key_name")}\nmcp_key_name'],
                          capture_output=True, text=True, check=True).stdout.strip()
     assert out == ("MATINEE_READ_KEY" if mode == "read" else "MATINEE_API_KEY")
 
@@ -368,3 +371,128 @@ def test_logrotate_second_run_is_a_no_op(tmp_path):
     r2 = subprocess.run(["/bin/sh", "-c", script], capture_output=True, text=True,
                         env={"PATH": f"{bindir}:/usr/bin:/bin", "LOGROTATE_D": str(d), "LOGROTATE_CONF": str(tmp_path / "logrotate.conf")})
     assert r2.returncode == 0 and f.read_text() == first and "Added" not in r2.stdout
+
+
+# ------------------------------------------------------------------ MATINEE_MCP_WRITES: none | log | all
+# (MATINEE_MCP_READONLY, MATINEE_MCP_WRITES, level): the table in the tiered-writes spec, section 3.
+# tests/test_mcp_http.py has the same rows for mcp_http.write_level(); test_mcp_level_matches_python_resolver
+# runs the shell function against that resolver directly.
+LEVEL_CASES = [
+    (None, None, "none"), ("", "", "none"), ("1", None, "none"), ("true", "none", "none"),
+    (" yes ", "", "none"), ("garbage", None, "none"),
+    ("1", "log", "none"), ("true", "all", "none"), ("garbage", "log", "none"), ("1", "none", "none"),
+    ("0", None, "all"), ("false", "", "all"), ("No", "  ", "all"), (" off ", None, "all"),
+    ("0", "none", "none"), ("0", "log", "log"), ("0", " ALL ", "all"), ("0", "Log", "log"),
+    ("0", "rw", "none"), ("0", "1", "none"), ("0", "yes", "none"),
+    (None, "log", "log"), ("", "all", "all"), (None, "rw", "none"),
+]
+
+
+def _sh_level(fn_text, ro, w):
+    return subprocess.run(["sh", "-c", fn_text + '\nmcp_level "$1" "$2"', "sh", ro or "", w or ""],
+                          capture_output=True, text=True, check=True).stdout.strip()
+
+
+def test_mcp_level_is_defined_identically_in_installer_and_init_script():
+    defs = re.findall(r"^mcp_level\(\) \{.*?^\}$", HEAD, re.S | re.M)
+    assert len(defs) == 2, "expected one definition for the installer and one inside the init script heredoc"
+    assert defs[0] == defs[1]
+    assert defs[0] in _init_script()
+
+
+@pytest.mark.parametrize("ro,w,level", LEVEL_CASES)
+def test_mcp_level_shell_function(ro, w, level):
+    assert _sh_level(_fn("mcp_level"), ro, w) == level
+
+
+def test_mcp_level_matches_python_resolver():
+    pytest.importorskip("mcp.server.mcpserver")
+    import mcp_http
+    for ro, w, _ in LEVEL_CASES:
+        env = {}
+        if ro is not None:
+            env["MATINEE_MCP_READONLY"] = ro
+        if w is not None:
+            env["MATINEE_MCP_WRITES"] = w
+        assert _sh_level(_fn("mcp_level"), ro, w) == mcp_http.write_level(env), (ro, w)
+
+
+@pytest.mark.parametrize("ro,w,level", LEVEL_CASES)
+def test_mcp_init_script_exports_one_key_per_level(ro, w, level):
+    setv = ("" if ro is None else f"MATINEE_MCP_READONLY='{ro}'\n") + ("" if w is None else f"MATINEE_MCP_WRITES='{w}'\n")
+    script = f"MATINEE_API_KEY=w-key\nMATINEE_READ_KEY=r-key\n{setv}{_mcp_key_case()}\nenv\n"
+    out = subprocess.run(["env", "-i", "PATH=/usr/bin:/bin", "sh", "-c", script],
+                         capture_output=True, text=True, check=True).stdout.splitlines()
+    if level == "none":
+        assert "MATINEE_READ_KEY=r-key" in out and not any(l.startswith("MATINEE_API_KEY=") for l in out)
+    else:
+        assert "MATINEE_API_KEY=w-key" in out and not any(l.startswith("MATINEE_READ_KEY=") for l in out)
+
+
+@pytest.mark.parametrize("ro,w,level", [c for c in LEVEL_CASES if c[2] == "none"])
+def test_mcp_init_script_unsets_an_inherited_write_key_at_none(ro, w, level):
+    setv = ("" if ro is None else f"MATINEE_MCP_READONLY='{ro}'\n") + ("" if w is None else f"MATINEE_MCP_WRITES='{w}'\n")
+    script = f"MATINEE_READ_KEY=r-key\n{setv}{_mcp_key_case()}\nenv\n"
+    out = subprocess.run(["env", "-i", "PATH=/usr/bin:/bin", "MATINEE_API_KEY=inherited", "sh", "-c", script],
+                         capture_output=True, text=True, check=True).stdout
+    assert "MATINEE_API_KEY" not in out
+
+
+@pytest.mark.parametrize("ro,w,level", LEVEL_CASES)
+def test_installer_picks_the_key_for_the_level(tmp_path, ro, w, level):
+    conf = tmp_path / "matinee"
+    conf.write_text("".join(f"{k}={v}\n" for k, v in
+                            (("MATINEE_MCP_READONLY", ro), ("MATINEE_MCP_WRITES", w)) if v is not None))
+    conf_val = next(l for l in HEAD.splitlines() if l.startswith("conf_val()"))
+    out = subprocess.run(["sh", "-c", f'CONF="{conf}"\n{conf_val}\n{_fn("mcp_level")}\n{_fn("mcp_key_name")}\nmcp_key_name'],
+                         capture_output=True, text=True, check=True).stdout.strip()
+    assert out == ("MATINEE_READ_KEY" if level == "none" else "MATINEE_API_KEY")
+
+
+def _writes_default_script(conf):
+    default = re.search(r"^MCP_WRITES_DEFAULT=.*$", HEAD, re.M)
+    add = re.search(r'^add_setting "\$CONF" MATINEE_MCP_WRITES "\$MCP_WRITES_DEFAULT" ".+"$', HEAD, re.M)
+    assert default and add, "installer must derive MCP_WRITES_DEFAULT and add MATINEE_MCP_WRITES with it"
+    conf_val = next(l for l in HEAD.splitlines() if l.startswith("conf_val()"))
+    return f'CONF="{conf}"\n{_fn("add_setting")}\n{conf_val}\n{_fn("mcp_level")}\n{default.group(0)}\n{add.group(0)}\n'
+
+
+@pytest.mark.parametrize("existing,expected", [
+    ("MATINEE_MCP_READONLY=1\n", "none"),       # a read-only host stays at none
+    ("MATINEE_MCP_READONLY=0\n", "all"),        # a host that already has writes keeps all nine tools
+    ("MATINEE_MCP_READONLY=OFF\n", "all"),
+    ("MATINEE_MCP_READONLY=garbage\n", "none"),
+    ("", "none"),                                # no READONLY line at all
+])
+def test_installer_derives_the_writes_default_from_readonly(tmp_path, existing, expected):
+    conf = tmp_path / "matinee"
+    conf.write_text(existing)
+    subprocess.run(["sh", "-c", _writes_default_script(conf)], check=True)
+    text = conf.read_text()
+    assert text.count("MATINEE_MCP_WRITES=") == 1 and f"\nMATINEE_MCP_WRITES={expected}\n" in text
+
+
+def test_installer_keeps_an_edited_writes_value(tmp_path):
+    conf = tmp_path / "matinee"
+    conf.write_text("MATINEE_MCP_READONLY=0\nMATINEE_MCP_WRITES=log\n")
+    script = _writes_default_script(conf)
+    subprocess.run(["sh", "-c", script], check=True)
+    subprocess.run(["sh", "-c", script], check=True)  # a re-run too
+    assert conf.read_text() == "MATINEE_MCP_READONLY=0\nMATINEE_MCP_WRITES=log\n"
+
+
+def test_writes_setting_comes_after_readonly_in_the_installer():
+    lines = HEAD.splitlines()
+    ro = next(i for i, l in enumerate(lines) if l.startswith('add_setting "$CONF" MATINEE_MCP_READONLY'))
+    default = next(i for i, l in enumerate(lines) if l.startswith("MCP_WRITES_DEFAULT="))
+    add = next(i for i, l in enumerate(lines) if l.startswith('add_setting "$CONF" MATINEE_MCP_WRITES'))
+    assert ro < default < add  # the default is derived from a READONLY line that is already in the file
+
+
+def test_env_example_writes_default_is_none():
+    assert re.search(r"^MATINEE_MCP_WRITES=none$", (ROOT / ".env.example").read_text(encoding="utf-8"), re.M)
+
+
+def test_banner_prints_the_write_level():
+    assert re.search(r"^\s*MCP_LEVEL=\$\(mcp_level ", HEAD, re.M)
+    assert "write level: $MCP_LEVEL" in HEAD
