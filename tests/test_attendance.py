@@ -331,3 +331,37 @@ def test_other_logs_still_default_to_everyone(client, princess_bride, people, bo
 def test_ten_plus_years_with_no_people_writes_no_rows(client, princess_bride):
     w = log_bucket(client, princess_bride, "over_10_years").get_json()["watch"]
     assert rows_for(w["id"]) == [] and w["attendees"] == []
+
+
+# ------------------------------------------------------------------ decision D2: an old explicit date counts too
+# The default follows recommend.attendance_of: a "10+ Years" bucket or a date before today minus ten years.
+
+
+def test_explicit_date_over_ten_years_back_records_the_active_adults(client, princess_bride, people):
+    w = log(client, princess_bride, watched_date=years_ago(12)).get_json()["watch"]
+    assert w["attendees"] == [people["Nick"], people["Lauren"]]
+    assert seen_by_names(client, princess_bride) == ["Nick", "Lauren"]
+
+
+def test_explicit_date_inside_ten_years_records_everyone(client, princess_bride, people):
+    w = log(client, princess_bride, watched_date=years_ago(9)).get_json()["watch"]
+    assert w["attendees"] == [people[n] for n in ("Nick", "Lauren", "Midge", "Alice", "Paige")]
+
+
+def test_old_explicit_date_with_attendees_is_stored_as_sent(client, princess_bride, people):
+    sent = [people["Nick"], people["Midge"]]
+    w = log(client, princess_bride, watched_date=years_ago(12), attendees=sent).get_json()["watch"]
+    assert w["attendees"] == sent
+
+
+def test_new_default_matches_the_read_time_rule(client, princess_bride, people):
+    """Every way of logging gets the default an unrecorded watch with the same date and bucket would read as."""
+    import recommend
+    cases = [{"watched_date": years_ago(12)}, {"watched_date": years_ago(9)}, {"date_bucket": "over_10_years"},
+             {"date_bucket": "5_10_years"}, {"date_bucket": "unknown"}, {"watched_date": None}]
+    adults, everyone = [people["Nick"], people["Lauren"]], [people[n] for n in ("Nick", "Lauren", "Midge", "Alice",
+                                                                                "Paige")]
+    for body in cases:
+        w = client.post(f"/admin/api/titles/{princess_bride}/watches", json=body).get_json()["watch"]
+        expected = adults if recommend.attendance_of(w, False) == "assumed_adults" else everyone
+        assert w["attendees"] == expected, body

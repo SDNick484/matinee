@@ -29,9 +29,9 @@ from pathlib import Path
 from flask import Flask, abort, g, jsonify, make_response, redirect, request, send_from_directory, has_app_context
 from werkzeug.wrappers import Response as WerkzeugResponse
 
-from recommend import (CERT_VALUES, FORMAT_ORDER, SEEN_CTE, ParamError, find_person, has_people, parse_params,
-                       recommend, resolve_audience, sorted_formats, title_seen_by, unknown_person_message,
-                       watch_attendance)
+from recommend import (CERT_VALUES, FORMAT_ORDER, SEEN_CTE, ParamError, attendance_of, find_person, has_people,
+                       parse_params, recommend, resolve_audience, sorted_formats, title_seen_by,
+                       unknown_person_message, watch_attendance)
 
 APP_NAME = "Matinee"
 APP_DIR = Path(__file__).resolve().parent
@@ -2040,14 +2040,14 @@ def resolve_people(con, items):
     return ids
 
 
-def default_attendees(con, date_bucket):
-    """Who a log without `attendees` records: every active person, or only the active adults for a "10+ Years"
-    watch (ruling R21, the same rule as an old unrecorded watch). With nobody to record (no people, or no active
-    adult for an old watch) it is no rows, so the watch reads as assumed, as before people existed."""
+def default_attendees(con, watched_date, date_bucket):
+    """Who a log without `attendees` records: every active person, or only the active adults for a watch more than
+    ten years old: the "10+ Years" bucket (ruling R21) or a date before today minus ten years (decision D2). That is
+    recommend.attendance_of, the rule an old unrecorded watch is read with. With nobody to record (no people, or no
+    active adult for an old watch) it is no rows, so the watch reads as assumed, as before people existed."""
     active = list_people(con, active_only=True)
-    if date_bucket == "over_10_years":
-        return [p["id"] for p in active if p["kind"] == "adult"]
-    return [p["id"] for p in active]
+    old = attendance_of({"watched_date": watched_date, "date_bucket": date_bucket}, False) == "assumed_adults"
+    return [p["id"] for p in active if not old or p["kind"] == "adult"]
 
 
 def set_attendees(con, watch_id, person_ids):
@@ -2217,7 +2217,7 @@ def add_watch(title_id):
     if "attendees" in data:
         attendees = resolve_people(con, data["attendees"])  # validated before anything is written
     else:
-        attendees = default_attendees(con, date_bucket)
+        attendees = default_attendees(con, watched_date, date_bucket)
     try:
         cur = con.execute("INSERT INTO watches(title_id, watched_date, notes, date_bucket) VALUES (?, ?, ?, ?)",
                           (title_id, watched_date, notes, date_bucket))

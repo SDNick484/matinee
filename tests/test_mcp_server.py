@@ -1174,3 +1174,16 @@ def test_log_watch_schema_offers_the_buckets():
     text = json.dumps(schema)
     for bucket in ("past_year", "1_2_years", "2_5_years", "5_10_years", "over_10_years", "unknown"):
         assert bucket in text
+
+
+def test_log_watch_old_date_defaults_to_the_adults(test_env, monkeypatch):
+    """Decision D2: log_watch with a date more than ten years back and no attendees records the adults."""
+    import datetime as dt
+    people, *_ = _seed_family(test_env)
+    pb = _princess_bride()
+    client = _admin_rest_client(monkeypatch)
+    today = dt.date.today()
+    old = today.replace(year=today.year - 15, day=min(today.day, 28)).isoformat()
+    res = client.log_watch(pb, watched_date=old)
+    assert res["watch"]["attendees"] == [people["Nick"], people["Lauren"]]
+    assert "Paige" in client.get_movie(pb)["not_seen_by"]

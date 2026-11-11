@@ -576,15 +576,21 @@ import {
         const none = !!whoRow && readToggles(whoRow).length === 0;
         logButtons().forEach((b) => { b.disabled = none; });
       };
-      // Who a log records when the page sends no attendees (app.default_attendees, ruling R21): every active person,
-      // or only the active adults for "10+ Years". The page sends `attendees` only when the toggles differ from
-      // that default, so an untouched row leaves the choice to the server; absent entirely when no people exist.
-      const defaultIds = (bucket) => people
-        .filter((p) => bucket !== "over_10_years" || p.kind === "adult").map((p) => p.id);
-      const attendeesBody = (bucket) => {
+      // Who a log records when the page sends no attendees (app.default_attendees): every active person, or only
+      // the active adults for a watch over ten years old, the "10+ Years" bucket (ruling R21) or a date before
+      // today minus ten years (decision D2). The page sends `attendees` only when the toggles differ from that
+      // default, so an untouched row leaves the choice to the server; absent entirely when no people exist.
+      // The cutoff uses the UTC date, as the server does.
+      const tenYearsAgo = (() => {
+        const [y, m, d] = new Date().toISOString().slice(0, 10).split("-");
+        return m === "02" && d === "29" ? `${Number(y) - 10}-03-01` : `${Number(y) - 10}-${m}-${d}`;
+      })();
+      const isOld = ({ bucket, date } = {}) => bucket === "over_10_years" || Boolean(date && date < tenYearsAgo);
+      const defaultIds = (when) => people.filter((p) => !isOld(when) || p.kind === "adult").map((p) => p.id);
+      const attendeesBody = (when) => {
         if (!whoRow) return {};
         const picked = readToggles(whoRow);
-        const def = defaultIds(bucket);
+        const def = defaultIds(when);
         const same = picked.length === def.length && def.every((id) => picked.includes(id));
         return same ? {} : { attendees: picked };
       };
@@ -606,13 +612,23 @@ import {
           const todayIso = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
           await api(`${apiPrefix}/titles/${titleId}/watches`, {
             method: "POST",
-            body: { watched_date: todayIso, ...attendeesBody(null) },
+            body: { watched_date: todayIso, ...attendeesBody({ date: todayIso }) },
           });
           toast("Marked as watched today!");
           await renderDetail(container, titleId);
         } catch (e) {
           toast(e.message || "Failed to mark as watched");
         }
+      });
+
+      // Picking a date more than ten years back switches the kids off (decision D2); back inside ten years, everyone.
+      // The toggles are reset only when that changes, so a correction made for one recent date survives another.
+      let dateIsOld = false;
+      inputWatchDate?.addEventListener("input", () => {
+        const old = isOld({ date: inputWatchDate.value });
+        if (old === dateIsOld) return;
+        dateIsOld = old;
+        setToggles(defaultIds({ date: inputWatchDate.value }));
       });
 
       btnLogWatch?.addEventListener("click", async () => {
@@ -624,7 +640,7 @@ import {
         try {
           await api(`${apiPrefix}/titles/${titleId}/watches`, {
             method: "POST",
-            body: { watched_date: val, ...attendeesBody(null) },
+            body: { watched_date: val, ...attendeesBody({ date: val }) },
           });
           toast(`Logged watch date: ${val}`);
           await renderDetail(container, titleId);
@@ -638,7 +654,7 @@ import {
         try {
           await api(`${apiPrefix}/titles/${titleId}/watches`, {
             method: "POST",
-            body: { date_bucket: bucket, ...attendeesBody(bucket) },
+            body: { date_bucket: bucket, ...attendeesBody({ bucket }) },
           });
           toast(`Logged watch: ${label}`);
           await renderDetail(container, titleId);
@@ -661,7 +677,7 @@ import {
           container.querySelectorAll(".btn-watch-bucket").forEach((b) => {
             b.setAttribute("aria-pressed", b.dataset.bucket === chosenBucket ? "true" : "false");
           });
-          setToggles(defaultIds(chosenBucket));
+          setToggles(defaultIds({ bucket: chosenBucket }));
           if (btnLogBucket) {
             btnLogBucket.hidden = !chosenBucket;
             btnLogBucket.textContent = chosenBucket ? `Log ${BUCKET_LABELS[chosenBucket] || chosenBucket}` : "Log";

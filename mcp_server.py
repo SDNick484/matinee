@@ -733,7 +733,8 @@ class MatineeClient:
     ) -> Dict[str, Any]:
         """Record a watch event for a title with date, optional notes, optional attendees (names) and an optional
         date bucket for an undated watch. No `attendees` key is sent when None: the server then records everyone,
-        or only the adults for date_bucket "over_10_years" (ruling R21). An empty list is sent as is."""
+        or only the adults for a watch over ten years old (date_bucket "over_10_years" or an older date). An empty
+        list is sent as is."""
         date_val = watched_date if watched_date is not None else watched_at
         payload: Dict[str, Any] = {"watched_date": date_val}
         if notes:
@@ -944,8 +945,8 @@ def log_watch(
 ) -> Dict[str, Any]:
     """Record a watch event with an optional ISO date (YYYY-MM-DD; omit or pass null for dateless/historical watch) and optional notes.
     date_bucket: for a watch with no exact date, roughly how long ago ("over_10_years" = more than ten years ago).
-    attendees: names of who watched; omit it when everyone did. With date_bucket="over_10_years" and no attendees,
-    only the adults are recorded."""
+    attendees: names of who watched; omit it when everyone did. For a watch over ten years ago (date_bucket=
+    "over_10_years", or a watched_date more than ten years back) with no attendees, only the adults are recorded."""
     return _default_client.log_watch(title_id, watched_date=watched_date, notes=notes, watched_at=watched_at,
                                      attendees=attendees, date_bucket=date_bucket)
 

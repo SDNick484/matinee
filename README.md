@@ -195,7 +195,7 @@ See [docs/mcp-setup.md](docs/mcp-setup.md) for full configuration blocks and pro
 
 ## People and who watched
 
-Editors can keep a short list of people (for example Nick, Lauren, Midge, Alice and Paige) under **People** in the admin view. Each person is an adult or a kid, has one of five colors (green, blue, red, pink, purple), and at most 8 can be active at once. Every watch then records who was there: logging a watch defaults to everyone, except a "10+ Years" watch, which defaults to the adults (the kids were too young; switch any of them back on before tapping **Log 10+ Years**), and the title view shows a colored dot per attendee. Nothing changes until the first person is added.
+Editors can keep a short list of people (for example Nick, Lauren, Midge, Alice and Paige) under **People** in the admin view. Each person is an adult or a kid, has one of five colors (green, blue, red, pink, purple), and at most 8 can be active at once. Every watch then records who was there: logging a watch defaults to everyone, except a watch more than ten years ago (the "10+ Years" bucket, or a date that far back), which defaults to the adults (the kids were too young; switch any of them back on before tapping **Log 10+ Years** or **Log Date**), and the title view shows a colored dot per attendee. Nothing changes until the first person is added.
 
 **Editor-only.** People and attendance are never public. The public `/api` has no people route, shows watch dates only, and answers 400 `Sign in to pick for specific people.` to any request carrying `audience`, `unseen_by` or `attendance`. The read key may read them, as it can already read watch notes.
 

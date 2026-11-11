@@ -749,3 +749,38 @@ def test_people_modal_close_leaves_views_without_people_alone(server, browser, h
     if hash_ == "#/add":
         assert page.input_value("#tmdb-search-input") == "paddington"
     assert errors == []
+
+
+def test_an_old_date_switches_the_kids_off_like_ten_plus_years(server, browser):
+    """Decision D2: a date more than ten years back defaults to the adults, as "10+ Years" does. Picking it in the
+    date field switches the kids off; Log Date then sends only the date unless someone was switched back on."""
+    import datetime as dt
+    today = dt.date.today()
+    old = today.replace(year=today.year - 12, day=min(today.day, 28)).isoformat()
+    recent = today.replace(year=today.year - 2, day=min(today.day, 28)).isoformat()
+    page, posts, puts, errors = _open(browser, server, PEOPLE)
+    toggles = page.locator("#who-watched-row .person-toggle")
+    pressed = lambda: [toggles.nth(i).get_attribute("aria-pressed") for i in range(5)]  # noqa: E731
+
+    page.fill("#input-watch-date", old)
+    assert pressed() == ["true", "true", "false", "false", "false"]
+    _mark_stale(page)
+    page.click("#btn-log-watch")
+    _settled(page, posts, 1)
+    assert posts[-1] == {"watched_date": old}
+
+    page.fill("#input-watch-date", old)
+    page.click('#who-watched-row .person-toggle[data-person-id="3"]')     # Midge was there after all
+    _mark_stale(page)
+    page.click("#btn-log-watch")
+    _settled(page, posts, 2)
+    assert posts[-1] == {"watched_date": old, "attendees": [1, 2, 3]}
+
+    page.fill("#input-watch-date", old)
+    page.fill("#input-watch-date", recent)                                # back inside ten years: everyone
+    assert pressed() == ["true"] * 5
+    _mark_stale(page)
+    page.click("#btn-log-watch")
+    _settled(page, posts, 3)
+    assert posts[-1] == {"watched_date": recent}
+    assert errors == []
