@@ -92,9 +92,34 @@ def test_log_unknown_person_400_and_writes_nothing(client, tk, people):
     assert db().execute("SELECT count(*) FROM watch_people").fetchone()[0] == 0
 
 
-def test_log_attendees_not_a_list_400(client, tk, people):
-    res = log(client, tk, attendees="Nick")
-    assert res.status_code == 400 and count_watches() == 0
+NOT_A_LIST = {"error": "attendees must be a list of person ids or names."}
+
+
+@pytest.mark.parametrize("value", ["Nick", None, 1, {"id": 1}])
+def test_log_attendees_not_a_list_400(client, tk, people, value):
+    res = log(client, tk, attendees=value)
+    assert res.status_code == 400 and res.get_json() == NOT_A_LIST
+    assert count_watches() == 0
+
+
+@pytest.mark.parametrize("body", [{}, {"attendees": None}, {"attendees": "Nick"}])
+def test_put_attendees_not_a_list_400(client, tk, people, body):
+    wid = log(client, tk, attendees=["Nick"]).get_json()["watch"]["id"]
+    res = client.put(f"/admin/api/titles/{tk}/watches/{wid}/attendees", json=body)
+    assert res.status_code == 400 and res.get_json() == NOT_A_LIST
+    assert rows_for(wid) == [people["Nick"]]
+
+
+def test_log_with_everyone_inactive_writes_no_rows(client, tk, people):
+    """R9: people exist but all are inactive, so 'all active people' is nobody: no rows, and the watch reads as
+    unresolved, assumed for every person."""
+    for pid in people.values():
+        assert client.put(f"/admin/api/people/{pid}", json={"active": False}).status_code == 200
+    res = log(client, tk)
+    assert res.status_code == 200
+    w = res.get_json()["watch"]
+    assert rows_for(w["id"]) == []
+    assert w["attendance"] == "assumed_everyone" and w["attendees"] == list(people.values())
 
 
 def test_log_duplicates_are_collapsed(client, tk, people):
