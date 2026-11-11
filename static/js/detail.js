@@ -12,6 +12,7 @@ import {
 
   // ================================================================= 7.3 Detail Page
   async function renderDetail(container, titleId) {
+    const seq = state.routeSeq;   // see core.js: stop after an await once the user has navigated away
     window.scrollTo({ top: 0, behavior: "instant" });
     container.innerHTML = `
       <div style="text-align:center;padding:48px 16px;color:var(--ink-2)">Loading movie details…</div>
@@ -22,6 +23,7 @@ import {
     try {
       title = await api(`${apiPrefix}/titles/${titleId}`);
     } catch (err) {
+      if (seq !== state.routeSeq) return;
       if (err.status === 404) {
         container.innerHTML = `
           <div class="empty-state">
@@ -101,6 +103,7 @@ import {
 
     // "Who watched" (editors only, and only once a person exists): otherwise this view is exactly as before.
     if (isAdmin && state.peopleReady) await state.peopleReady;   // started once by router.js
+    if (seq !== state.routeSeq) return;
     const people = isAdmin ? activePeople() : [];
     const showWho = people.length > 0;
     const whoLabel = "Who watched";
@@ -145,6 +148,7 @@ import {
         state.grid.titles = [];
       }
     }
+    if (seq !== state.routeSeq) return;
 
     const titlesList = state.grid.titles || [];
     const currentId = Number(titleId);

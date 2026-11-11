@@ -179,3 +179,33 @@ def test_modules_load_versioned_once_and_every_view_renders(server, browser):
     assert set(names) == expected, names
     assert all("?v=" in u for u in modules), f"unversioned module request: {modules}"
     assert errors == []
+
+
+@pytest.mark.parametrize("slow_hash,slow_url", [("#/stats", "**/admin/api/stats"),
+                                                ("#/t/1", "**/admin/api/titles/1"),
+                                                ("#/", "**/admin/api/titles?*")])
+def test_a_late_response_never_overwrites_the_next_view(server, browser, slow_hash, slow_url):
+    """Review F1: handleRoute had no route token, so a view whose fetch landed after the user moved on (Stats, a
+    title, the grid) overwrote the new view. The response is held until About is on screen, then released."""
+    page = browser.new_page(viewport={"width": 412, "height": 915})
+    errors = []
+    page.on("pageerror", lambda e: errors.append(str(e)))
+    page.route("**/admin/api/me", _fulfil(ME))
+    page.goto(f"{server}/admin#/about")
+    page.wait_for_selector(".about-view")
+    held = []
+    page.route(slow_url, lambda r: held.append(r))
+    page.evaluate(f"location.hash = '{slow_hash}'")
+    page.wait_for_function("() => !document.querySelector('.about-view')")
+    for _ in range(200):
+        if held:
+            break
+        page.wait_for_timeout(10)
+    assert held, f"{slow_url} was never requested"
+    page.evaluate("location.hash = '#/about'")
+    page.wait_for_selector(".about-view")
+    for r in held:
+        r.continue_()
+    page.wait_for_timeout(400)
+    assert page.locator(".about-view").count() == 1, page.inner_text("#view")[:120]
+    assert errors == []
