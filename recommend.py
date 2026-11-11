@@ -64,7 +64,7 @@ def parse_params(m: Mapping[str, Any]) -> dict:
     if max_cert is not None and max_cert not in CERT_ORDER:
         raise ParamError("max_cert must be one of " + ", ".join(CERT_ORDER))
 
-    return {
+    out = {
         "mode": mode,
         "limit": limit,
         "genre": _clean(m.get("genre")),
@@ -74,6 +74,130 @@ def parse_params(m: Mapping[str, Any]) -> dict:
         "max_cert": max_cert,
         "random": str(m.get("random") or "").strip().lower() in ("1", "true", "yes"),
     }
+    # `audience` is resolved against the database by recommend(); here it is only cleaned. The key is
+    # present only when given, so the no-audience params are exactly what they were before people existed.
+    audience = _clean(m.get("audience"))
+    if audience is not None:
+        out["audience"] = audience
+    return out
+
+
+# --- people and attendance (spec 2026-11-11-per-person §4.1, §5) ---------------
+
+# One row per (title, person, watch date): who has seen what. A watch with watch_people rows counts for
+# exactly those people; an unresolved watch counts for everyone, or for adults only when it is ten or more
+# years old (bucket over_10_years, or dated before today minus ten years). attendance_of() is the same rule.
+SEEN_CTE = """seen(title_id, person_id, watched_date) AS (
+  SELECT w.title_id, wp.person_id, w.watched_date
+    FROM watches w JOIN watch_people wp ON wp.watch_id = w.id
+  UNION ALL
+  SELECT w.title_id, p.id, w.watched_date
+    FROM watches w CROSS JOIN people p
+   WHERE NOT EXISTS (SELECT 1 FROM watch_people x WHERE x.watch_id = w.id)
+     AND (p.kind = 'adult'
+          OR NOT (COALESCE(w.date_bucket, '') = 'over_10_years'
+                  OR (w.watched_date IS NOT NULL AND w.watched_date < date('now', '-10 years'))))
+)"""
+
+ATTENDANCE = ("recorded", "assumed_everyone", "assumed_adults")
+AUDIENCE_KEYWORDS = {"everyone": None, "adults": "adult", "kids": "kid"}
+_NO_PEOPLE = "No people are set up yet. Add them under People in the admin view."
+
+
+def _field(row, key):
+    try:
+        return row[key]
+    except (KeyError, IndexError):
+        return None
+
+
+def _ten_years_before(today: dt.date) -> str:
+    """SQLite's date(today, '-10 years'): the same month and day ten years back, with Feb 29 rolling over to
+    Mar 1 (SQLite normalises the impossible date forward rather than raising)."""
+    try:
+        return today.replace(year=today.year - 10).isoformat()
+    except ValueError:
+        return dt.date(today.year - 10, 3, 1).isoformat()
+
+
+def attendance_of(watch_row, has_attendees: bool, today: "dt.date | None" = None) -> str:
+    """'recorded', 'assumed_everyone' or 'assumed_adults' for one watch, by the same rule as SEEN_CTE.
+    `watch_row` needs `watched_date` and `date_bucket` (a dict or sqlite3.Row). Dates compare as text, as
+    SQLite compares them."""
+    if has_attendees:
+        return "recorded"
+    cutoff = _ten_years_before(today or dt.date.today())
+    day = _field(watch_row, "watched_date")
+    if (_field(watch_row, "date_bucket") or "") == "over_10_years" or (day is not None and day < cutoff):
+        return "assumed_adults"
+    return "assumed_everyone"
+
+
+def has_people(con) -> bool:
+    """False for a database older than schema v9 (no `people` table) or one where nobody is set up yet."""
+    if con.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'people'").fetchone() is None:
+        return False
+    return con.execute("SELECT 1 FROM people LIMIT 1").fetchone() is not None
+
+
+def resolve_audience(con, raw: str) -> dict:
+    """Resolve `everyone` / `adults` / `kids` (active people, in sort order) or a comma list of names or ids
+    (active or not, in the order given, deduplicated) to {"label", "people": [{"id", "name"}]}."""
+    tokens = [t.strip() for t in str(raw or "").split(",")]
+    tokens = [t for t in tokens if t]
+    if not tokens:
+        raise ParamError("audience is empty.")
+    if not has_people(con):
+        raise ParamError(_NO_PEOPLE)
+
+    if len(tokens) == 1 and tokens[0].lower() in AUDIENCE_KEYWORDS:
+        keyword = tokens[0].lower()
+        kind = AUDIENCE_KEYWORDS[keyword]
+        rows = con.execute(
+            "SELECT id, name FROM people WHERE active = 1 AND (? IS NULL OR kind = ?) ORDER BY sort_order, id",
+            (kind, kind)).fetchall()
+        if not rows:
+            raise ParamError(f"No {keyword} are set up." if kind else _NO_PEOPLE)
+        return {"label": keyword, "people": [{"id": r[0], "name": r[1]} for r in rows]}
+
+    people, seen_ids = [], set()
+    for token in tokens:
+        if token.isdigit():
+            row = con.execute("SELECT id, name FROM people WHERE id = ?", (int(token),)).fetchone()
+        else:  # `name` is COLLATE NOCASE, so this match ignores case
+            row = con.execute("SELECT id, name FROM people WHERE name = ?", (token,)).fetchone()
+        if row is None:
+            everyone = [r[0] for r in con.execute("SELECT name FROM people ORDER BY sort_order, id")]
+            raise ParamError(f"Unknown person: {token}. People: {', '.join(everyone)}.")
+        if row[0] not in seen_ids:
+            seen_ids.add(row[0])
+            people.append({"id": row[0], "name": row[1]})
+    return {"label": ", ".join(p["name"] for p in people), "people": people}
+
+
+def _in_ids(ids) -> str:
+    """`IN (…)` over person ids. They come from the people table (ints), so they are inlined rather than bound,
+    which keeps the positional `?` arguments of the shared filter fragments in order."""
+    return "IN (" + ",".join(str(int(i)) for i in ids) + ")"
+
+
+def _and_join(names) -> str:
+    names = list(names)
+    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+
+
+def _seen_by(con, title_ids) -> dict:
+    """{title_id: [names]} of everyone with a `seen` row (active or not), in people order."""
+    if not title_ids:
+        return {}
+    out = {tid: [] for tid in title_ids}
+    rows = con.execute(f"""WITH {SEEN_CTE}
+        SELECT DISTINCT s.title_id, p.name, p.sort_order, p.id FROM seen s JOIN people p ON p.id = s.person_id
+        WHERE s.title_id {_in_ids(title_ids)}
+        ORDER BY p.sort_order, p.id""").fetchall()
+    for r in rows:
+        out[r[0]].append(r[1])
+    return out
 
 
 FRANCHISE_MODES = ("next_in_franchise", "start_franchise")
@@ -89,6 +213,17 @@ _STARTED_CTE = """WITH started AS (
           GROUP BY t.collection_tmdb_id
         )"""
 
+# start_franchise's `ranked`, after whichever `started` applies (household or audience).
+_START_RANKED = f""", ranked AS (
+          SELECT t.*,
+                 ROW_NUMBER() OVER (PARTITION BY t.collection_tmdb_id ORDER BY {_PICK_ORDER}) AS rn,
+                 COUNT(*) OVER (PARTITION BY t.collection_tmdb_id) AS owned_n
+          FROM titles t
+          WHERE t.collection_tmdb_id IS NOT NULL
+            AND t.collection_tmdb_id NOT IN (SELECT collection_tmdb_id FROM started)
+            AND EXISTS (SELECT 1 FROM copies c WHERE c.title_id = t.id)
+        )"""
+
 _FRANCHISE_CTE = {
     # Owned, unwatched titles of started collections.
     "next_in_franchise": _STARTED_CTE + f""", ranked AS (
@@ -99,16 +234,37 @@ _FRANCHISE_CTE = {
             AND NOT EXISTS (SELECT 1 FROM watches w WHERE w.title_id = t.id)
         )""",
     # Owned titles of collections with no watch at all; owned_n counts the owned titles.
-    "start_franchise": _STARTED_CTE + f""", ranked AS (
-          SELECT t.*,
-                 ROW_NUMBER() OVER (PARTITION BY t.collection_tmdb_id ORDER BY {_PICK_ORDER}) AS rn,
-                 COUNT(*) OVER (PARTITION BY t.collection_tmdb_id) AS owned_n
-          FROM titles t
-          WHERE t.collection_tmdb_id IS NOT NULL
-            AND t.collection_tmdb_id NOT IN (SELECT collection_tmdb_id FROM started)
-            AND EXISTS (SELECT 1 FROM copies c WHERE c.title_id = t.id)
-        )""",
+    "start_franchise": _STARTED_CTE + _START_RANKED,
 }
+
+
+def _started_cte(ids=None) -> str:
+    """`started` for the household (ids None: today's text) or for audience `ids` (a collection is started
+    when someone in the audience has seen any title in it). With ids it opens the WITH chain with `seen`."""
+    if ids is None:
+        return _STARTED_CTE
+    return f"""WITH {SEEN_CTE}, started AS (
+          SELECT t.collection_tmdb_id, MAX(s.watched_date) AS last_watch
+          FROM titles t JOIN seen s ON s.title_id = t.id
+          WHERE t.collection_tmdb_id IS NOT NULL AND s.person_id {_in_ids(ids)}
+          GROUP BY t.collection_tmdb_id
+        )"""
+
+
+def _franchise_cte(mode, ids=None) -> str:
+    if ids is None:
+        return _FRANCHISE_CTE[mode]
+    started = _started_cte(ids)
+    if mode == "next_in_franchise":
+        return started + f""", ranked AS (
+          SELECT t.*, s.last_watch,
+                 ROW_NUMBER() OVER (PARTITION BY t.collection_tmdb_id ORDER BY {_PICK_ORDER}) AS rn
+          FROM titles t JOIN started s ON s.collection_tmdb_id = t.collection_tmdb_id
+          WHERE EXISTS (SELECT 1 FROM copies c WHERE c.title_id = t.id)
+            AND NOT EXISTS (SELECT 1 FROM seen x WHERE x.title_id = t.id AND x.person_id {_in_ids(ids)})
+        )"""
+    return started + _START_RANKED
+
 
 _FRANCHISE_ORDER = {
     "next_in_franchise": "t.last_watch IS NULL, t.last_watch DESC, t.collection_name",
@@ -127,21 +283,27 @@ _FILTERED_HINTS = {
 }
 
 
-def _franchise_candidates(con, mode) -> bool:
+def _franchise_candidates(con, mode, ids=None) -> bool:
     """True when the mode had something to offer before the user filters (so an empty result
     means the filters emptied it): any started collection, or any unstarted one with 2+ owned."""
     if mode == "next_in_franchise":
-        return con.execute(_STARTED_CTE + " SELECT 1 FROM started LIMIT 1").fetchone() is not None
-    return con.execute(_FRANCHISE_CTE[mode] + " SELECT 1 FROM ranked WHERE rn = 1 AND owned_n >= 2 LIMIT 1").fetchone() is not None
+        return con.execute(_started_cte(ids) + " SELECT 1 FROM started LIMIT 1").fetchone() is not None
+    return con.execute(_franchise_cte(mode, ids) + " SELECT 1 FROM ranked WHERE rn = 1 AND owned_n >= 2 LIMIT 1").fetchone() is not None
 
 
-def _next_reason(con, r) -> str:
+def _next_reason(con, r, ids=None) -> str:
     """'Next after <latest earlier watched>' or, failing that, 'Before <earliest later watched> (watched)'.
-    Neighbours are found by the same (release_date, sort_title) order that chose the pick."""
+    Neighbours are found by the same (release_date, sort_title) order that chose the pick; with audience
+    `ids`, a neighbour is a title someone in the audience has seen."""
     key = "(COALESCE(x.release_date, '9999-99-99'), x.sort_title)"
     pick = (r["release_date"] or "9999-99-99", r["sort_title"])
-    base = f"""SELECT x.title FROM titles x
-               WHERE x.collection_tmdb_id = ? AND EXISTS (SELECT 1 FROM watches w WHERE w.title_id = x.id)
+    if ids is None:
+        prefix, watched = "", "EXISTS (SELECT 1 FROM watches w WHERE w.title_id = x.id)"
+    else:
+        prefix = f"WITH {SEEN_CTE} "
+        watched = f"EXISTS (SELECT 1 FROM seen s WHERE s.title_id = x.id AND s.person_id {_in_ids(ids)})"
+    base = prefix + f"""SELECT x.title FROM titles x
+               WHERE x.collection_tmdb_id = ? AND {watched}
                  AND {key} {{op}} (?, ?)
                ORDER BY COALESCE(x.release_date, '9999-99-99') {{dir}}, x.sort_title {{dir}} LIMIT 1"""
     args = (r["collection_tmdb_id"], *pick)
@@ -192,6 +354,8 @@ def recommend(con, p: dict, today: "dt.date | None" = None) -> dict:
     today = today or dt.date.today()
     mode = p["mode"]
     genre = p.get("genre")
+    audience = resolve_audience(con, p["audience"]) if p.get("audience") else None
+    ids = [x["id"] for x in audience["people"]] if audience else None
 
     owned = "EXISTS (SELECT 1 FROM copies c WHERE c.title_id=t.id)"  # plain modes only; the franchise CTEs apply it themselves
     where = []
@@ -203,10 +367,17 @@ def recommend(con, p: dict, today: "dt.date | None" = None) -> dict:
         order_by = _FRANCHISE_ORDER[mode]
     elif mode == "forgotten_gems":
         where.append("(SELECT rating FROM user_ratings r WHERE r.title_id=t.id) >= 8.0")
-        where.append("COALESCE((SELECT MAX(watched_date) FROM watches w WHERE w.title_id=t.id), '0000-00-00') < date('now', '-365 days')")
-        order_by = "user_rating DESC, COALESCE(last_watched, '0000-00-00') ASC, t.sort_title ASC"
+        if ids is None:
+            where.append("COALESCE((SELECT MAX(watched_date) FROM watches w WHERE w.title_id=t.id), '0000-00-00') < date('now', '-365 days')")
+            order_by = "user_rating DESC, COALESCE(last_watched, '0000-00-00') ASC, t.sort_title ASC"
+        else:
+            where.append(f"COALESCE((SELECT MAX(s.watched_date) FROM seen s WHERE s.title_id=t.id AND s.person_id {_in_ids(ids)}), '0000-00-00') < date('now', '-365 days')")
+            order_by = "user_rating DESC, COALESCE(aud_last_watched, '0000-00-00') ASC, t.sort_title ASC"
     elif mode == "never_watched":
-        where.append("NOT EXISTS (SELECT 1 FROM watches w WHERE w.title_id=t.id)")
+        if ids is None:
+            where.append("NOT EXISTS (SELECT 1 FROM watches w WHERE w.title_id=t.id)")
+        else:
+            where.append(f"NOT EXISTS (SELECT 1 FROM seen s WHERE s.title_id=t.id AND s.person_id {_in_ids(ids)})")
         order_by = "COALESCE(t.tmdb_vote, 0) DESC, t.year DESC, t.sort_title ASC"
     elif mode == "quick_picks":
         where.append("t.runtime > 0 AND t.runtime <= ?")
@@ -229,7 +400,15 @@ def recommend(con, p: dict, today: "dt.date | None" = None) -> dict:
         where = ["t.rn = 1"] + (["t.owned_n >= 2"] if mode == "start_franchise" else []) + where
     else:
         where = [owned] + where
-    rows = con.execute(f"""{_FRANCHISE_CTE[mode] if franchise else ""}
+    if ids is None:
+        cte, aud_cols = (_FRANCHISE_CTE[mode] if franchise else ""), ""
+    else:
+        # The audience's own last watch and watch count (forgotten_gems uses them for its filter and reason).
+        cte = _franchise_cte(mode, ids) if franchise else f"WITH {SEEN_CTE}"
+        aud_cols = f""",
+               (SELECT MAX(s.watched_date) FROM seen s WHERE s.title_id=t.id AND s.person_id {_in_ids(ids)}) AS aud_last_watched,
+               (SELECT count(*) FROM seen s WHERE s.title_id=t.id AND s.person_id {_in_ids(ids)}) AS aud_watch_count"""
+    rows = con.execute(f"""{cte}
         SELECT t.id, t.title, t.year, t.runtime, COALESCE(t.custom_poster_file, t.poster_file) AS poster_file,
                t.fetched_at, t.tmdb_vote,
                COALESCE(t.certification_override, t.certification) AS certification,
@@ -240,13 +419,14 @@ def recommend(con, p: dict, today: "dt.date | None" = None) -> dict:
                (SELECT MAX(watched_date) FROM watches w WHERE w.title_id=t.id) AS last_watched,
                (SELECT count(*) FROM watches w WHERE w.title_id=t.id) AS watch_count,
                (SELECT group_concat(DISTINCT c.format) FROM copies c WHERE c.title_id=t.id) AS formats,
-               (SELECT group_concat(g.name, ', ') FROM title_genres tg JOIN genres g ON g.id=tg.genre_id WHERE tg.title_id=t.id) AS genres
+               (SELECT group_concat(g.name, ', ') FROM title_genres tg JOIN genres g ON g.id=tg.genre_id WHERE tg.title_id=t.id) AS genres{aud_cols}
         FROM {'ranked' if franchise else 'titles'} t
         WHERE {' AND '.join(where)}
         ORDER BY {order_by}
         LIMIT ?
     """, args).fetchall()
 
+    seen_by = _seen_by(con, [r["id"] for r in rows]) if audience else {}
     results = []
     for r in rows:
         genres_list = [g.strip() for g in (r["genres"] or "").split(",") if g.strip()]
@@ -254,25 +434,31 @@ def recommend(con, p: dict, today: "dt.date | None" = None) -> dict:
         tmdb_v = r["tmdb_vote"]
         last_w = r["last_watched"]
         runtime = r["runtime"]
+        # The reason speaks for the audience when there is one; the result's own fields stay household facts.
+        reason_last_w = r["aud_last_watched"] if audience else last_w
+        reason_count = r["aud_watch_count"] if audience else r["watch_count"]
 
         if mode == "forgotten_gems":
-            if last_w:
+            if reason_last_w:
                 try:
-                    w_date = dt.date.fromisoformat(last_w)
+                    w_date = dt.date.fromisoformat(reason_last_w)
                     months = max(1, (today - w_date).days // 30)
                     reason = f"Rated {user_r:.1f} ★ · Not watched in {months} months"
                 except (ValueError, TypeError):
                     reason = f"Rated {user_r:.1f} ★ · Not watched recently"
-            elif r["watch_count"] > 0:
+            elif reason_count > 0:
                 reason = f"Rated {user_r:.1f} ★ · Historical watch (Date unknown)"
             else:
                 reason = f"Rated {user_r:.1f} ★ · Never logged as watched"
+        elif mode == "never_watched" and audience:
+            new_to = "New to " + _and_join(x["name"] for x in audience["people"])
+            reason = f"{new_to} · TMDB {tmdb_v:.1f} ★" if tmdb_v else new_to
         elif mode == "never_watched":
             reason = f"Unwatched backlog · TMDB {tmdb_v:.1f} ★" if tmdb_v else "Unwatched backlog"
         elif mode == "quick_picks":
             reason = f"{runtime} mins · Perfect quick watch" if runtime else "Quick watch"
         elif mode == "next_in_franchise":
-            reason = _next_reason(con, r)
+            reason = _next_reason(con, r, ids)
         elif mode == "start_franchise":
             reason = f"Start the {r['collection_name']} · {r['owned_n']} owned"
         elif mode == "genre_mood":
@@ -282,7 +468,7 @@ def recommend(con, p: dict, today: "dt.date | None" = None) -> dict:
         else:
             reason = "Curated collection pick"
 
-        results.append({
+        result = {
             "id": r["id"],
             "title": r["title"],
             "year": r["year"],
@@ -300,12 +486,18 @@ def recommend(con, p: dict, today: "dt.date | None" = None) -> dict:
             "genres": genres_list,
             "recommendation_reason": reason,
             "reason": reason,
-        })
+        }
+        if audience:
+            result["seen_by"] = seen_by[r["id"]]
+        results.append(result)
 
-    out = {"mode": mode, "count": len(results), "results": results}
+    out = {"mode": mode, "count": len(results)}
+    if audience:
+        out["audience"] = audience
+    out["results"] = results
     if not results:
         hint = _EMPTY_HINTS.get(mode, "Nothing matched these filters. Try removing a filter or mode=genre_mood.")
-        if franchise and _franchise_candidates(con, mode):
+        if franchise and _franchise_candidates(con, mode, ids):
             hint = _FILTERED_HINTS[mode]
         if p.get("max_cert"):
             hint += " Unrated films are hidden while max_cert is set."
