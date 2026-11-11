@@ -32,3 +32,13 @@ def test_lint_commands_are_listed():
 def test_people_and_privacy_rule():
     assert "tests/test_privacy.py" in CLAUDE
     assert re.search(r"[Pp]eople and attendance are\s+editor-only", CLAUDE)
+
+
+def test_merged_specs_do_not_say_they_are_unmerged():
+    """Review F7: the 2026-11-11 specs merged in PRs #23-#29 but still said "this PR" / "this branch" /
+    "awaiting merge". A status line names the PR that merged it."""
+    for spec in sorted((ROOT / "docs" / "superpowers" / "specs").glob("2026-11-11-*-design.md")):
+        status = next(line for line in spec.read_text(encoding="utf-8").splitlines() if line.startswith("**Status:**"))
+        for stale in ("this PR", "this branch", "awaiting merge"):
+            assert stale not in status, (spec.name, status)
+        assert re.search(r"PR #\d+", status), (spec.name, status)

@@ -3,7 +3,7 @@
 **Date:** 2026-11-11
 **Branch:** `feat/mcp-tiered-writes` (one PR)
 **Schema:** unchanged (v8). No table, column or row changes.
-**Status:** approved (roadmap 2026-11-10, PR #5); implemented on this branch.
+**Status:** approved (roadmap 2026-11-10, PR #5); implemented and merged in PR #26 (`5362685`).
 **Verified against:** `main` @ `d88916f` (PR #23 `feat/privacy-read-key` merged, so the read-only service already
 holds only `MATINEE_READ_KEY`).
 
