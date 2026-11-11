@@ -733,3 +733,15 @@ def test_main_logs_the_level(served, capsys):
     env.update(MATINEE_MCP_READONLY="0", MATINEE_MCP_WRITES="log", MATINEE_API_KEY=KEY)
     assert mcp_http.main([], env) == 0
     assert "writes: log" in capsys.readouterr().err
+
+
+def test_setup_doc_describes_an_unset_readonly_as_the_code_does():
+    """Review F5: docs/mcp-setup.md said an unset or empty MATINEE_MCP_READONLY keeps the service read-only, but
+    write_level() lets MATINEE_MCP_WRITES decide then (spec 2026-11-11-mcp-tiered-writes §3)."""
+    import mcp_http
+    assert mcp_http.write_level({"MATINEE_MCP_WRITES": "log"}) == "log"
+    assert mcp_http.write_level({"MATINEE_MCP_READONLY": "", "MATINEE_MCP_WRITES": "all"}) == "all"
+    doc = (Path(__file__).resolve().parent.parent / "docs" / "mcp-setup.md").read_text(encoding="utf-8")
+    row = next(line for line in doc.splitlines() if line.startswith("| `MATINEE_MCP_READONLY` |"))
+    assert "including unset and empty" not in row
+    assert "Unset or empty" in row and "`MATINEE_MCP_WRITES` decides" in row

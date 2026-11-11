@@ -144,8 +144,8 @@ The installer adds any missing key and never overwrites one you edited. The file
 
 | Setting | Default | Meaning |
 |---------|---------|---------|
-| `MATINEE_MCP_READONLY` | `1` | The master switch. Anything but `0`, `false`, `no` or `off` (including unset and empty) keeps the service read-only and `MATINEE_MCP_WRITES` is ignored; the service logs a warning when that hides a `log` or `all`. `0` hands the decision to `MATINEE_MCP_WRITES`. |
-| `MATINEE_MCP_WRITES` | `none` (`all` on a host that already had `MATINEE_MCP_READONLY=0`) | Write level, used only while `MATINEE_MCP_READONLY=0`. `none`: the seven read tools. `log`: also `rate_movie` and `log_watch`. `all`: also `add_movie`. An unknown value means `none` (and is logged); unset with `READONLY=0` means `all`, as before. Case and surrounding spaces do not matter. |
+| `MATINEE_MCP_READONLY` | `1` | The master switch. Any value but `0`, `false`, `no` or `off` keeps the service read-only and `MATINEE_MCP_WRITES` is ignored; the service logs a warning when that hides a `log` or `all`. `0` hands the decision to `MATINEE_MCP_WRITES`. Unset or empty: `MATINEE_MCP_WRITES` decides too (`none` when it is also unset), so deleting this line from a host with `WRITES=log` turns writes on. |
+| `MATINEE_MCP_WRITES` | `none` (`all` on a host that already had `MATINEE_MCP_READONLY=0`) | Write level, used only while `MATINEE_MCP_READONLY` is `0` (or unset or empty). `none`: the seven read tools. `log`: also `rate_movie` and `log_watch`. `all`: also `add_movie`. An unknown value means `none` (and is logged); unset with `READONLY=0` means `all`, as before. Case and surrounding spaces do not matter. |
 | `MCP_HTTP_BIND` | the host's LAN IP | Where `matinee-mcp` listens. It must be the address the tunnel route points at, because `cloudflared` runs in Docker (`127.0.0.1` gives HTTP 502). |
 | `MCP_HTTP_PORT` | `8719` | Port. |
 | `MCP_HTTP_PATH` | `/matinee/mcp` | Endpoint path. The tunnel does not strip the prefix. |
