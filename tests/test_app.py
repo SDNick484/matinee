@@ -909,6 +909,69 @@ def test_stats_watched_and_rating():
     assert rs["high_rated_count"] == 1
 
 
+# ------------------------------------------------------------------- ES module cache busting
+JS_FILES = sorted(p.name for p in (matinee.APP_DIR / "static" / "js").glob("*.js"))
+
+
+def _import_map(html):
+    m = re.search(r'<script type="importmap">(.*?)</script>', html, re.S)
+    assert m, "no import map in the page"
+    return json.loads(m.group(1))["imports"]
+
+
+def _module_urls(html):
+    """{file name: URL the browser will fetch}: the import map, plus main.js's script src."""
+    urls = {k.rsplit("/", 1)[1]: v for k, v in _import_map(html).items()}
+    urls["main.js"] = re.search(r'<script type="module" src="([^"]+)"', html).group(1)
+    return urls
+
+
+@pytest.mark.parametrize("path", ["/", "/admin"])
+def test_index_import_map_versions_every_module(path):
+    html = c.get(path).get_data(as_text=True)
+    versions = matinee.asset_versions()
+    imports = _import_map(html)
+    assert set(imports) == {f"/static/js/{f}" for f in JS_FILES if f != "main.js"}
+    for f in JS_FILES:
+        assert re.fullmatch(r"[0-9a-f]{10}", versions[f"js/{f}"]), f
+        if f != "main.js":
+            assert imports[f"/static/js/{f}"] == f"/static/js/{f}?v={versions[f'js/{f}']}"
+    entry = f'<script type="module" src="/static/js/main.js?v={versions["js/main.js"]}"></script>'
+    assert entry in html
+    assert html.index('<script type="importmap">') < html.index(entry)   # a map after the first module is ignored
+    preloads = re.findall(r'<link rel="modulepreload" href="([^"]+)">', html)
+    assert sorted(preloads) == sorted(imports.values())
+    assert f'href="/static/style.css?v={versions["style.css"]}"' in html
+
+
+def test_each_module_url_changes_only_with_its_content(tmp_path, monkeypatch):
+    import shutil
+    shutil.copytree(matinee.APP_DIR / "static", tmp_path / "static")
+    monkeypatch.setattr(matinee, "APP_DIR", tmp_path)
+    before = _module_urls(c.get("/").get_data(as_text=True))
+    assert before == _module_urls(c.get("/").get_data(as_text=True))   # stable while nothing changes
+
+    grid = tmp_path / "static" / "js" / "grid.js"
+    grid.write_text(grid.read_text() + "// The Dark Knight (2008), 4K UHD on Family Room › Media Cabinet › Shelf 1\n")
+    after = _module_urls(c.get("/").get_data(as_text=True))
+    assert after["grid.js"] != before["grid.js"]
+    assert {k: v for k, v in after.items() if k != "grid.js"} == {k: v for k, v in before.items() if k != "grid.js"}
+
+    (tmp_path / "static" / "js" / "lending.js").write_text("export {};\n")   # a new module is mapped at once
+    assert "/static/js/lending.js" in _import_map(c.get("/").get_data(as_text=True))
+
+
+def test_unversioned_module_is_revalidated():
+    r = c.get("/static/js/core.js")
+    assert r.status_code == 200 and "javascript" in r.headers["Content-Type"]
+    assert "no-cache" in r.headers["Cache-Control"] and r.headers.get("ETag")
+    again = c.get("/static/js/core.js", headers={"If-None-Match": r.headers["ETag"]})
+    assert again.status_code == 304
+    versioned = c.get("/static/js/core.js?v=3fa1c09b2e")
+    assert "max-age=31536000" in versioned.headers["Cache-Control"]
+    assert "max-age=60" in c.get("/static/tmdb.svg").headers["Cache-Control"]   # other files: unchanged
+
+
 def test_static_app_js_no_undefined_escapeHtml():
     from conftest import frontend_js
     js = frontend_js()

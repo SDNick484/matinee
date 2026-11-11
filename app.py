@@ -593,7 +593,7 @@ def who():
 
 
 # ============================================================================= pages
-_asset_version_cache = {"mtime": 0.0, "version": ""}
+_asset_cache = {"key": None, "versions": {}}
 
 
 def _asset_files():
@@ -603,27 +603,46 @@ def _asset_files():
     return [f for f in files if f.is_file()]
 
 
-def get_asset_version():
+def asset_versions():
+    """{"style.css": …, "js/<name>.js": …}: the first 10 hex chars of each file's SHA-256. Re-hashed only when a
+    file's mtime or size changes or a module is added or removed."""
     try:
+        static = APP_DIR / "static"
         files = _asset_files()
-        curr_mtime = max((f.stat().st_mtime for f in files), default=0.0)
-        if curr_mtime != _asset_version_cache["mtime"]:
-            h = hashlib.sha256()
-            for f in files:
-                h.update(f.read_bytes())
-            _asset_version_cache["mtime"] = curr_mtime
-            _asset_version_cache["version"] = h.hexdigest()[:10]
-        return _asset_version_cache["version"]
-    except Exception:
-        return "1"
+        key = (str(static),) + tuple((f.name, f.stat().st_mtime_ns, f.stat().st_size) for f in files)
+        if key != _asset_cache["key"]:
+            _asset_cache["versions"] = {f.relative_to(static).as_posix(): hashlib.sha256(f.read_bytes()).hexdigest()[:10]
+                                        for f in files}
+            _asset_cache["key"] = key
+        return dict(_asset_cache["versions"])
+    except OSError:
+        return {}
+
+
+def _module_tags(versions):
+    """The import map, modulepreload links and versioned entry script that replace index.html's
+    <script type="module" src="/static/js/main.js">.
+
+    Modules import each other as "./core.js". The browser resolves that to /static/js/core.js, the import map
+    rewrites it to /static/js/core.js?v=<hash>, and a ?v= URL is cached for a year. So a warm load fetches no
+    module at all, and an edited module is the only one fetched again. The map has to come before the first
+    module script, or the browser ignores it."""
+    url = {k: f"/static/{k}?v={v}" for k, v in sorted(versions.items()) if k.startswith("js/")}
+    deps = {f"/static/{k}": u for k, u in url.items() if k != "js/main.js"}
+    tags = ['<script type="importmap">' + json.dumps({"imports": deps}) + "</script>"]
+    tags += [f'<link rel="modulepreload" href="{u}">' for u in deps.values()]
+    tags.append(f'<script type="module" src="{url.get("js/main.js", "/static/js/main.js")}"></script>')
+    return "\n  ".join(tags)
 
 
 def render_index():
-    v = get_asset_version()
+    versions = asset_versions()
     try:
         html = (APP_DIR / "static" / "index.html").read_text(encoding="utf-8")
-        html = re.sub(r'href="/static/style\.css(?:\?v=[^"]*)?"', f'href="/static/style.css?v={v}"', html)
-        html = re.sub(r'src="/static/js/main\.js(?:\?v=[^"]*)?"', f'src="/static/js/main.js?v={v}"', html)
+        html = re.sub(r'href="/static/style\.css(?:\?v=[^"]*)?"',
+                      f'href="/static/style.css?v={versions.get("style.css", "1")}"', html)
+        html = re.sub(r'<script type="module" src="/static/js/main\.js(?:\?v=[^"]*)?"></script>',
+                      lambda _m: _module_tags(versions), html)
         resp = make_response(html)
         resp.headers["Content-Type"] = "text/html; charset=utf-8"
         resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
@@ -649,8 +668,15 @@ def admin_index():
 
 @app.get("/static/<path:p>")
 def static_files(p):
-    max_age = 31536000 if request.args.get("v") else 60
-    return send_from_directory(APP_DIR / "static", p, max_age=max_age)
+    if request.args.get("v"):
+        return send_from_directory(APP_DIR / "static", p, max_age=31536000)
+    if p.startswith("js/"):
+        # Only a browser without import maps asks for a module with no ?v=. Revalidate every time (ETag, 304)
+        # so it can never run an old module beside a new one.
+        resp = send_from_directory(APP_DIR / "static", p, max_age=0)
+        resp.cache_control.no_cache = True
+        return resp
+    return send_from_directory(APP_DIR / "static", p, max_age=60)
 
 
 @app.get("/images/<path:p>")
