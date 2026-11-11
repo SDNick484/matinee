@@ -9,6 +9,7 @@ import glob
 import json
 import os
 import threading
+from pathlib import Path
 
 import pytest
 
@@ -147,3 +148,34 @@ def test_ask_no_retry_on_429(server, browser):
     page.wait_for_selector(".ask-error")
     assert "limit" in page.inner_text(".ask-error")
     assert page.locator("#ask-retry").count() == 0
+
+
+def test_modules_load_versioned_once_and_every_view_renders(server, browser):
+    """static/js/ is loaded through the import map: every module URL carries ?v=, each module is fetched once,
+    and walking the views and modals (which cross module seams: closeModal, navigate, icon) raises nothing."""
+    page = browser.new_page(viewport={"width": 412, "height": 915})
+    errors, modules = [], []
+    page.on("pageerror", lambda e: errors.append(str(e)))
+    page.on("request", lambda r: "/static/js/" in r.url and modules.append(r.url.split("/static/js/", 1)[1]))
+    page.route("**/admin/api/me", _fulfil(ME))
+
+    page.goto(f"{server}/admin#/")
+    page.wait_for_function("!document.getElementById('view').textContent.includes('Loading collection')")
+    page.click("#btn-header-movie-night")
+    page.wait_for_selector(".movie-night-dialog")
+    page.keyboard.press("Escape")                       # forms.js's global keydown listener → closeModal
+    page.wait_for_selector(".movie-night-dialog", state="detached")
+    page.click("#btn-header-locations")
+    page.click("#btn-modal-close")
+    page.wait_for_selector("#modal-overlay", state="detached")
+    for hash_, sel in (("#/stats", ".stats-view"), ("#/about", ".about-view"), ("#/add", ".add-view"),
+                       ("#/ask", ".ask-view")):
+        page.evaluate(f"location.hash = '{hash_}'")
+        page.wait_for_selector(sel)
+
+    names = [u.split("?", 1)[0] for u in modules]
+    assert sorted(names) == sorted({n for n in names}), f"a module was fetched twice: {modules}"
+    expected = {p.name for p in (Path(__file__).resolve().parent.parent / "static" / "js").glob("*.js")}
+    assert set(names) == expected, names
+    assert all("?v=" in u for u in modules), f"unversioned module request: {modules}"
+    assert errors == []

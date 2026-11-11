@@ -196,12 +196,12 @@ def test_access_jwt_audience_and_allow_list(monkeypatch):
 def test_pages_public_and_private(monkeypatch):
     assert c.get("/").status_code == 200 and c.get("/admin").status_code == 200
     r_index = c.get("/")
-    assert b"/static/style.css?v=" in r_index.data and b"/static/app.js?v=" in r_index.data
+    assert b"/static/style.css?v=" in r_index.data and b"/static/js/main.js?v=" in r_index.data
     assert "no-cache" in r_index.headers.get("Cache-Control", "")
     assert b"footer-links" in r_index.data
 
     r_admin = c.get("/admin")
-    assert b"/static/style.css?v=" in r_admin.data and b"/static/app.js?v=" in r_admin.data
+    assert b"/static/style.css?v=" in r_admin.data and b"/static/js/main.js?v=" in r_admin.data
     assert "no-cache" in r_admin.headers.get("Cache-Control", "")
 
     r_css_v = c.get("/static/style.css?v=test12345")
@@ -212,9 +212,10 @@ def test_pages_public_and_private(monkeypatch):
     assert r_css.status_code == 200 and b"--chip-4k" in r_css.data and b"Figtree" in r_css.data
     assert "max-age=60" in r_css.headers.get("Cache-Control", "")
 
-    r_js = c.get("/static/app.js")
+    r_js = c.get("/static/js/router.js")
     assert r_js.status_code == 200 and b"parseHash" in r_js.data and b"renderDetail" in r_js.data
     assert b"btn-header-signin" in r_js.data
+    assert "javascript" in r_js.headers.get("Content-Type", "")   # module scripts need a JS MIME type
     r_svg = c.get("/static/tmdb.svg")
     assert r_svg.status_code == 200 and b"<svg" in r_svg.data
     monkeypatch.setattr(matinee, "PUBLIC_VIEW", False)
@@ -908,8 +909,72 @@ def test_stats_watched_and_rating():
     assert rs["high_rated_count"] == 1
 
 
+# ------------------------------------------------------------------- ES module cache busting
+JS_FILES = sorted(p.name for p in (matinee.APP_DIR / "static" / "js").glob("*.js"))
+
+
+def _import_map(html):
+    m = re.search(r'<script type="importmap">(.*?)</script>', html, re.S)
+    assert m, "no import map in the page"
+    return json.loads(m.group(1))["imports"]
+
+
+def _module_urls(html):
+    """{file name: URL the browser will fetch}: the import map, plus main.js's script src."""
+    urls = {k.rsplit("/", 1)[1]: v for k, v in _import_map(html).items()}
+    urls["main.js"] = re.search(r'<script type="module" src="([^"]+)"', html).group(1)
+    return urls
+
+
+@pytest.mark.parametrize("path", ["/", "/admin"])
+def test_index_import_map_versions_every_module(path):
+    html = c.get(path).get_data(as_text=True)
+    versions = matinee.asset_versions()
+    imports = _import_map(html)
+    assert set(imports) == {f"/static/js/{f}" for f in JS_FILES if f != "main.js"}
+    for f in JS_FILES:
+        assert re.fullmatch(r"[0-9a-f]{10}", versions[f"js/{f}"]), f
+        if f != "main.js":
+            assert imports[f"/static/js/{f}"] == f"/static/js/{f}?v={versions[f'js/{f}']}"
+    entry = f'<script type="module" src="/static/js/main.js?v={versions["js/main.js"]}"></script>'
+    assert entry in html
+    assert html.index('<script type="importmap">') < html.index(entry)   # a map after the first module is ignored
+    preloads = re.findall(r'<link rel="modulepreload" href="([^"]+)">', html)
+    assert sorted(preloads) == sorted(imports.values())
+    assert f'href="/static/style.css?v={versions["style.css"]}"' in html
+
+
+def test_each_module_url_changes_only_with_its_content(tmp_path, monkeypatch):
+    import shutil
+    shutil.copytree(matinee.APP_DIR / "static", tmp_path / "static")
+    monkeypatch.setattr(matinee, "APP_DIR", tmp_path)
+    before = _module_urls(c.get("/").get_data(as_text=True))
+    assert before == _module_urls(c.get("/").get_data(as_text=True))   # stable while nothing changes
+
+    grid = tmp_path / "static" / "js" / "grid.js"
+    grid.write_text(grid.read_text() + "// The Dark Knight (2008), 4K UHD on Family Room › Media Cabinet › Shelf 1\n")
+    after = _module_urls(c.get("/").get_data(as_text=True))
+    assert after["grid.js"] != before["grid.js"]
+    assert {k: v for k, v in after.items() if k != "grid.js"} == {k: v for k, v in before.items() if k != "grid.js"}
+
+    (tmp_path / "static" / "js" / "lending.js").write_text("export {};\n")   # a new module is mapped at once
+    assert "/static/js/lending.js" in _import_map(c.get("/").get_data(as_text=True))
+
+
+def test_unversioned_module_is_revalidated():
+    r = c.get("/static/js/core.js")
+    assert r.status_code == 200 and "javascript" in r.headers["Content-Type"]
+    assert "no-cache" in r.headers["Cache-Control"] and r.headers.get("ETag")
+    again = c.get("/static/js/core.js", headers={"If-None-Match": r.headers["ETag"]})
+    assert again.status_code == 304
+    versioned = c.get("/static/js/core.js?v=3fa1c09b2e")
+    assert "max-age=31536000" in versioned.headers["Cache-Control"]
+    assert "max-age=60" in c.get("/static/tmdb.svg").headers["Cache-Control"]   # other files: unchanged
+
+
 def test_static_app_js_no_undefined_escapeHtml():
-    js = (matinee.APP_DIR / "static" / "app.js").read_text(encoding="utf-8")
+    from conftest import frontend_js
+    js = frontend_js()
     if "escapeHtml(" in js:
         assert "function escapeHtml" in js or "const escapeHtml" in js or "let escapeHtml" in js
 

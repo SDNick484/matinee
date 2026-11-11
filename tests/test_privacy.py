@@ -3,11 +3,9 @@
 Scenario: The Dark Knight (TMDB 155), rating 9.5, one watch on 2026-11-07 with the note "girls loved it".
 """
 import re
-from pathlib import Path
 
 import pytest
 
-import app as matinee
 from app import app, db, init_db
 from conftest import seed_title
 
@@ -69,9 +67,10 @@ def test_no_other_public_response_carries_notes(client, dark_knight, path):
 
 def test_public_view_guards_every_notes_use():
     """The public title view must render when a watch has no notes key at all."""
-    js = (Path(matinee.APP_DIR) / "static" / "app.js").read_text()
+    from conftest import frontend_js
+    js = frontend_js()
     uses = [m.start() for m in re.finditer(r"\.notes\b", js)]
-    assert uses, "app.js no longer renders notes; update this test"
+    assert uses, "static/js/ no longer renders notes; update this test"
     for i in uses:
         line = js[js.rfind("\n", 0, i) + 1: js.find("\n", i)]
         assert "w.notes ?" in line, line.strip()
