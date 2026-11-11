@@ -70,7 +70,7 @@ pct exec <CT_ID> -- sh /root/setup-matinee.sh --uninstall
 Settings are stored in `/etc/conf.d/matinee`:
 
 ```sh
-PORT=8769
+PORT=8771
 DATA_DIR=/var/lib/matinee
 CF_TEAM_DOMAIN=<your-team>.cloudflareaccess.com
 CF_AUD=<cloudflare-access-application-audience-tag>
@@ -90,11 +90,11 @@ rc-service matinee restart
 
 ## LAN Editing
 
-With `LAN_EDIT=1` (the default), a browser on your home network can edit at `http://<server-ip>:8769/admin`
+With `LAN_EDIT=1` (the default), a browser on your home network can edit at `http://<server-ip>:8771/admin`
 without signing in. Two checks keep that from being usable by other websites:
 
 - **Host check.** A request only counts as a LAN editor when its `Host` header is an IP address
-  (`192.168.1.50:8769`, `[fd00::50]:8769`), `localhost`, or a name listed in `LAN_HOSTS`. This blocks DNS
+  (`192.168.1.50:8771`, `[fd00::50]:8771`), `localhost`, or a name listed in `LAN_HOSTS`. This blocks DNS
   rebinding: a page on `evil.example.com` that re-points its own name at your server still sends
   `Host: evil.example.com` and is treated as "not an editor" (401).
 - **Cross-site check.** Every editor route (`/admin/api/...`) refuses a browser request whose `Origin` is a
@@ -124,7 +124,7 @@ not set, because the UI still uses inline event handlers and `style` attributes.
 
 ## Cloudflare Setup
 
-1. **Tunnel**: Route `movies.example.com` to your container's internal IP at port `8769`.
+1. **Tunnel**: Route `movies.example.com` to your container's internal IP at port `8771`.
 2. **Access Application**:
    - Protect path `/admin*` with Cloudflare Access.
    - Authentication policy: One-Time PIN (OTP) restricted to emails listed in `ADMIN_EMAILS`.
@@ -134,7 +134,7 @@ not set, because the UI still uses inline event handlers and `style` attributes.
 
 ## Adding a Movie
 
-1. Navigate to `https://movies.example.com/admin` (or `http://<server-ip>:8769/admin` on local LAN).
+1. Navigate to `https://movies.example.com/admin` (or `http://<server-ip>:8771/admin` on local LAN).
 2. Tap **Add Movie** in the top navigation.
 3. Search by title (optionally include a 4-digit release year, e.g. "Dune 1984").
 4. Select the matching movie card from the search results.

@@ -509,9 +509,9 @@ def lan_host():
     A DNS-rebinding page is served from its own name (Host: evil.example.com) even after that name
     resolves to this box, so a name we don't know never earns the "lan" identity."""
     host = (request.host or "").strip().lower()
-    if host.startswith("["):                      # [fd00::50]:8769
+    if host.startswith("["):                      # [fd00::50]:8771
         name = host[1:host.find("]")] if "]" in host else ""
-    elif host.count(":") == 1:                    # 192.168.1.50:8769, matinee.lan:8769
+    elif host.count(":") == 1:                    # 192.168.1.50:8771, matinee.lan:8771
         name = host.rsplit(":", 1)[0]
     else:                                         # 192.168.1.50, matinee.lan
         name = host
@@ -2013,7 +2013,7 @@ def delete_title(title_id):
 
 if __name__ == "__main__":
     import app as _real  # import as a module so ask.py registers onto the same app
-    _real.app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8769)), debug=False)
+    _real.app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8771)), debug=False)
 else:
     import ask  # noqa: E402,F401 -- AI search
     init_db()

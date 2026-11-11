@@ -98,7 +98,7 @@ class MatineeError(RuntimeError, ToolError):
         self.status = status
 
 
-MATINEE_URL = os.environ.get("MATINEE_URL", "http://127.0.0.1:8769").rstrip("/")
+MATINEE_URL = os.environ.get("MATINEE_URL", "http://127.0.0.1:8771").rstrip("/")
 MATINEE_API_KEY = os.environ.get("MATINEE_API_KEY", "").strip()
 MATINEE_DB_PATH = os.environ.get("MATINEE_DB_PATH", "").strip()
 

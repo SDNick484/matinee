@@ -15,7 +15,7 @@ from app import app, db, init_db
 from conftest import seed_title
 
 EVIL = {"Origin": "https://evil.example.com", "Sec-Fetch-Site": "cross-site"}
-LAN_IP = "192.168.1.50:8769"
+LAN_IP = "192.168.1.50:8771"
 
 
 def _no_network(*a, **kw):
@@ -178,8 +178,8 @@ def test_tunnel_request_without_jwt_is_still_not_an_editor(client):
 
 # ------------------------------------------------------------------- Host-gated "lan" identity
 @pytest.mark.parametrize("host", [
-    "localhost", "localhost:8769", "127.0.0.1", "127.0.0.1:8769", "192.168.1.50", LAN_IP,
-    "10.0.0.7:8769", "[::1]:8769", "[fd00::50]",
+    "localhost", "localhost:8771", "127.0.0.1", "127.0.0.1:8771", "192.168.1.50", LAN_IP,
+    "10.0.0.7:8771", "[::1]:8771", "[fd00::50]",
 ])
 def test_lan_identity_for_ip_literals_and_localhost(client, host):
     r = client.get("/admin/api/me", headers={"Host": host})
@@ -188,7 +188,7 @@ def test_lan_identity_for_ip_literals_and_localhost(client, host):
 
 
 @pytest.mark.parametrize("host", [
-    "evil.example.com", "evil.example.com:8769", "matinee.lan", "localhost.evil.example.com",
+    "evil.example.com", "evil.example.com:8771", "matinee.lan", "localhost.evil.example.com",
     "192.168.1.50.nip.io", "127.0.0.1.evil.example.com",
 ])
 def test_no_lan_identity_for_other_hosts(client, host):
@@ -196,7 +196,7 @@ def test_no_lan_identity_for_other_hosts(client, host):
     assert client.get("/api/me", headers={"Host": host}).get_json()["editor"] is False
 
 
-@pytest.mark.parametrize("host", ["matinee.lan", "matinee.lan:8769", "MATINEE.LAN", "movies.home.arpa"])
+@pytest.mark.parametrize("host", ["matinee.lan", "matinee.lan:8771", "MATINEE.LAN", "movies.home.arpa"])
 def test_lan_hosts_setting_allows_named_hosts(client, monkeypatch, host):
     monkeypatch.setattr("app.LAN_HOSTS", {"matinee.lan", "movies.home.arpa"})
     r = client.get("/admin/api/me", headers={"Host": host})

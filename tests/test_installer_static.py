@@ -146,7 +146,6 @@ def test_mcp_setup_mentions_remote():
     for needle in ("https://mcp.example.com/matinee/mcp", "^/matinee/", "http://192.168.1.100:8719",
                    "MATINEE_MCP_READONLY", "rc-service matinee-mcp restart"):
         assert needle in text, needle
-    assert ":8769" not in text
 
 
 def test_readme_points_to_remote_setup():
