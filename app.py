@@ -1905,6 +1905,20 @@ def delete_watch(title_id, watch_id):
     return jsonify(ok=True, deleted_id=watch_id)
 
 
+def refresh_from_tmdb(con, title_id, tmdb_id):
+    """Re-fetch one title from TMDB (and its OMDb ratings) and write it; the caller commits.
+    custom_poster_file and certification_override are not in TITLE_COLS, so a refresh never touches them.
+    Raises TmdbError before anything is written, so a failed fetch leaves the row as it was."""
+    t = tmdb_details(tmdb_id)
+    files = fetch_images(t)
+    write_title(con, t, files, title_id)
+    if t.get("imdb_id") and OMDB_API_KEY:
+        ratings = omdb_get(t["imdb_id"])
+        if ratings:
+            write_omdb_ratings(con, title_id, t["imdb_id"], ratings)
+    return t
+
+
 @app.post("/admin/api/titles/<int:title_id>/refresh")
 @editor_required
 def refresh_title(title_id):
@@ -1913,18 +1927,12 @@ def refresh_title(title_id):
     if not row:
         abort(make_err(404, "No such title"))
     try:
-        t = tmdb_details(row["tmdb_id"])
+        refresh_from_tmdb(con, title_id, row["tmdb_id"])
     except TmdbError as e:
         if e.reason == "not_found":
             raise TmdbError("not_found", f"TMDB no longer has movie id {row['tmdb_id']}. "
                                          "The saved details are kept.") from None
         raise
-    files = fetch_images(t)
-    write_title(con, t, files, title_id)
-    if t.get("imdb_id") and OMDB_API_KEY:
-        ratings = omdb_get(t["imdb_id"])
-        if ratings:
-            write_omdb_ratings(con, title_id, t["imdb_id"], ratings)
     con.commit()
     return jsonify(title_detail(title_id, True))
 
