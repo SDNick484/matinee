@@ -31,6 +31,7 @@ import { getChipIcon, icon } from "./icons.js";
 
   // ================================================================= 7.2 Poster Grid
   async function renderGrid(container, { retried = false } = {}) {
+    const seq = state.routeSeq;   // see core.js
     // A visitor cannot use the people filters (an editor's shared link, or Public View from a filtered grid):
     // drop them rather than let /api answer 400 with no way back.
     if (!isAdmin && hasPeopleFilter(state.route.query)) dropPeopleFilters();
@@ -141,6 +142,7 @@ import { getChipIcon, icon } from "./icons.js";
       ]);
 
       if (isAdmin && state.peopleReady) await state.peopleReady;   // the Watched popover names people
+      if (seq !== state.routeSeq) return;   // the user left the grid while it loaded
       state.grid.facets = facetsData;
       state.grid.titles = titlesData.titles;
 
@@ -152,6 +154,7 @@ import { getChipIcon, icon } from "./icons.js";
         window.scrollTo({ top: state.grid.scrollY, behavior: "instant" });
       }
     } catch (err) {
+      if (seq !== state.routeSeq) return;
       // An editor's people filter the server rejects (a deleted person, or nobody set up): retry once without it.
       if (isAdmin && !retried && err.status === 400 && hasPeopleFilter(state.route.query)) {
         dropPeopleFilters();

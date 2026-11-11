@@ -430,12 +430,13 @@ def test_who_watched_renders_only_for_editors_with_people():
     assert "if (!showWho) return \"\";" in DETAIL_JS                                    # the row editor's dots
     assert "if (isAdmin && state.peopleReady) await state.peopleReady;" in DETAIL_JS
     # the body key exists only when the row does
-    assert re.search(r"attendeesBody = \(\) => \(whoRow \? \{ attendees: readToggles\(whoRow\) \} : \{\}\);", DETAIL_JS)
+    assert re.search(r"const attendeesBody = \(when\) => \{\s*if \(!whoRow\) return \{\};", DETAIL_JS)
 
 
 def test_all_three_log_calls_send_attendees():
-    for body in ("{ watched_date: todayIso, ...attendeesBody() }", "{ watched_date: val, ...attendeesBody() }",
-                 "{ date_bucket: bucket, ...attendeesBody() }"):
+    for body in ("{ watched_date: todayIso, ...attendeesBody({ date: todayIso }) }",
+                 "{ watched_date: val, ...attendeesBody({ date: val }) }",
+                 "{ date_bucket: bucket, ...attendeesBody({ bucket }) }"):
         assert body in DETAIL_JS, body
     assert len(re.findall(r"/watches`, \{\s*method: \"POST\"", DETAIL_JS)) == 3
 

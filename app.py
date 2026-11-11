@@ -29,9 +29,9 @@ from pathlib import Path
 from flask import Flask, abort, g, jsonify, make_response, redirect, request, send_from_directory, has_app_context
 from werkzeug.wrappers import Response as WerkzeugResponse
 
-from recommend import (CERT_VALUES, FORMAT_ORDER, SEEN_CTE, ParamError, find_person, has_people, parse_params,
-                       recommend, resolve_audience, sorted_formats, title_seen_by, unknown_person_message,
-                       watch_attendance)
+from recommend import (CERT_VALUES, FORMAT_ORDER, SEEN_CTE, ParamError, attendance_of, find_person, has_people,
+                       parse_params, recommend, resolve_audience, sorted_formats, title_seen_by,
+                       unknown_person_message, watch_attendance)
 
 APP_NAME = "Matinee"
 APP_DIR = Path(__file__).resolve().parent
@@ -1730,6 +1730,14 @@ def api_owned(tmdb_id):
 @app.get("/admin/api/upc/<upc>")
 @editor_required
 def api_upc_lookup(upc):
+    # This GET spends UPCitemdb's 100-a-day trial quota and writes upc_cache, so it is narrower than other reads
+    # (review 2026-11-11, decisions D1 and D3): never the read key, and from a browser only when the browser says
+    # the request comes from Matinee's own page. editor_required has already refused cross-site requests.
+    if g.editor == "read-key":
+        abort(make_err(403, "The read key can't look up barcodes."))
+    if g.editor not in KEY_IDENTITIES and \
+            (request.headers.get("Sec-Fetch-Site") or "").lower() not in ("same-origin", "none"):
+        abort(make_err(403, "Barcode lookups must come from the Matinee page."))
     clean_code = re.sub(r"[^\d]", "", upc or "")
     if not (11 <= len(clean_code) <= 14):
         abort(make_err(400, "Invalid barcode: must be 12 to 14 digits."))
@@ -2032,6 +2040,16 @@ def resolve_people(con, items):
     return ids
 
 
+def default_attendees(con, watched_date, date_bucket):
+    """Who a log without `attendees` records: every active person, or only the active adults for a watch more than
+    ten years old: the "10+ Years" bucket (ruling R21) or a date before today minus ten years (decision D2). That is
+    recommend.attendance_of, the rule an old unrecorded watch is read with. With nobody to record (no people, or no
+    active adult for an old watch) it is no rows, so the watch reads as assumed, as before people existed."""
+    active = list_people(con, active_only=True)
+    old = attendance_of({"watched_date": watched_date, "date_bucket": date_bucket}, False) == "assumed_adults"
+    return [p["id"] for p in active if not old or p["kind"] == "adult"]
+
+
 def set_attendees(con, watch_id, person_ids):
     """Replace a watch's attendance. The caller commits."""
     con.execute("DELETE FROM watch_people WHERE watch_id = ?", (watch_id,))
@@ -2198,8 +2216,8 @@ def add_watch(title_id):
     notes = clean(data.get("notes"))
     if "attendees" in data:
         attendees = resolve_people(con, data["attendees"])  # validated before anything is written
-    else:  # the default is everyone active; with nobody set up that is no rows, as before people existed
-        attendees = [p["id"] for p in list_people(con, active_only=True)]
+    else:
+        attendees = default_attendees(con, watched_date, date_bucket)
     try:
         cur = con.execute("INSERT INTO watches(title_id, watched_date, notes, date_bucket) VALUES (?, ?, ?, ?)",
                           (title_id, watched_date, notes, date_bucket))

@@ -12,6 +12,7 @@ import {
 
   // ================================================================= 7.3 Detail Page
   async function renderDetail(container, titleId) {
+    const seq = state.routeSeq;   // see core.js: stop after an await once the user has navigated away
     window.scrollTo({ top: 0, behavior: "instant" });
     container.innerHTML = `
       <div style="text-align:center;padding:48px 16px;color:var(--ink-2)">Loading movie details…</div>
@@ -22,6 +23,7 @@ import {
     try {
       title = await api(`${apiPrefix}/titles/${titleId}`);
     } catch (err) {
+      if (seq !== state.routeSeq) return;
       if (err.status === 404) {
         container.innerHTML = `
           <div class="empty-state">
@@ -101,6 +103,7 @@ import {
 
     // "Who watched" (editors only, and only once a person exists): otherwise this view is exactly as before.
     if (isAdmin && state.peopleReady) await state.peopleReady;   // started once by router.js
+    if (seq !== state.routeSeq) return;
     const people = isAdmin ? activePeople() : [];
     const showWho = people.length > 0;
     const whoLabel = "Who watched";
@@ -145,6 +148,7 @@ import {
         state.grid.titles = [];
       }
     }
+    if (seq !== state.routeSeq) return;
 
     const titlesList = state.grid.titles || [];
     const currentId = Number(titleId);
@@ -284,6 +288,7 @@ import {
                 <button type="button" class="btn btn-watch-bucket" data-bucket="5_10_years">5–10 Years</button>
                 <button type="button" class="btn btn-watch-bucket" data-bucket="over_10_years">10+ Years</button>
                 <button type="button" class="btn btn-watch-bucket" data-bucket="unknown">Date Unknown</button>
+                ${showWho ? `<button type="button" class="btn btn-sm" id="btn-log-bucket" hidden>Log</button>` : ""}
               </div>
             </div>
           `
@@ -559,18 +564,42 @@ import {
       const inputWatchDate = document.getElementById("input-watch-date");
       const btnLogWatch = document.getElementById("btn-log-watch");
       const whoRow = document.getElementById("who-watched-row");
+      // With the Who watched row a bucket button only chooses a bucket (and resets the toggles), so it stays enabled.
       const logButtons = () => [
         document.getElementById("btn-watched-today"),
         btnLogWatch,
-        ...container.querySelectorAll(".btn-watch-bucket"),
+        document.getElementById("btn-log-bucket"),
+        ...(whoRow ? [] : container.querySelectorAll(".btn-watch-bucket")),
       ].filter(Boolean);
       // With every "Who watched" toggle off there is nobody to log, so every log button is disabled.
       const syncLogButtons = () => {
         const none = !!whoRow && readToggles(whoRow).length === 0;
         logButtons().forEach((b) => { b.disabled = none; });
       };
-      // Sent with every log; absent when no people exist, so the server's default (everyone) is untouched.
-      const attendeesBody = () => (whoRow ? { attendees: readToggles(whoRow) } : {});
+      // Who a log records when the page sends no attendees (app.default_attendees): every active person, or only
+      // the active adults for a watch over ten years old, the "10+ Years" bucket (ruling R21) or a date before
+      // today minus ten years (decision D2). The page sends `attendees` only when the toggles differ from that
+      // default, so an untouched row leaves the choice to the server; absent entirely when no people exist.
+      // The cutoff uses the UTC date, as the server does.
+      const tenYearsAgo = (() => {
+        const [y, m, d] = new Date().toISOString().slice(0, 10).split("-");
+        return m === "02" && d === "29" ? `${Number(y) - 10}-03-01` : `${Number(y) - 10}-${m}-${d}`;
+      })();
+      const isOld = ({ bucket, date } = {}) => bucket === "over_10_years" || Boolean(date && date < tenYearsAgo);
+      const defaultIds = (when) => people.filter((p) => !isOld(when) || p.kind === "adult").map((p) => p.id);
+      const attendeesBody = (when) => {
+        if (!whoRow) return {};
+        const picked = readToggles(whoRow);
+        const def = defaultIds(when);
+        const same = picked.length === def.length && def.every((id) => picked.includes(id));
+        return same ? {} : { attendees: picked };
+      };
+      const setToggles = (ids) => {
+        whoRow?.querySelectorAll(".person-toggle").forEach((t) => {
+          t.setAttribute("aria-pressed", ids.includes(parseInt(t.dataset.personId, 10)) ? "true" : "false");
+        });
+        syncLogButtons();
+      };
       whoRow?.addEventListener("click", (e) => {
         const t = e.target.closest(".person-toggle");
         if (!t) return;
@@ -583,13 +612,23 @@ import {
           const todayIso = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
           await api(`${apiPrefix}/titles/${titleId}/watches`, {
             method: "POST",
-            body: { watched_date: todayIso, ...attendeesBody() },
+            body: { watched_date: todayIso, ...attendeesBody({ date: todayIso }) },
           });
           toast("Marked as watched today!");
           await renderDetail(container, titleId);
         } catch (e) {
           toast(e.message || "Failed to mark as watched");
         }
+      });
+
+      // Picking a date more than ten years back switches the kids off (decision D2); back inside ten years, everyone.
+      // The toggles are reset only when that changes, so a correction made for one recent date survives another.
+      let dateIsOld = false;
+      inputWatchDate?.addEventListener("input", () => {
+        const old = isOld({ date: inputWatchDate.value });
+        if (old === dateIsOld) return;
+        dateIsOld = old;
+        setToggles(defaultIds({ date: inputWatchDate.value }));
       });
 
       btnLogWatch?.addEventListener("click", async () => {
@@ -601,7 +640,7 @@ import {
         try {
           await api(`${apiPrefix}/titles/${titleId}/watches`, {
             method: "POST",
-            body: { watched_date: val, ...attendeesBody() },
+            body: { watched_date: val, ...attendeesBody({ date: val }) },
           });
           toast(`Logged watch date: ${val}`);
           await renderDetail(container, titleId);
@@ -610,21 +649,43 @@ import {
         }
       });
 
+      const logBucket = async (bucket) => {
+        const label = BUCKET_LABELS[bucket] || bucket;
+        try {
+          await api(`${apiPrefix}/titles/${titleId}/watches`, {
+            method: "POST",
+            body: { date_bucket: bucket, ...attendeesBody({ bucket }) },
+          });
+          toast(`Logged watch: ${label}`);
+          await renderDetail(container, titleId);
+        } catch (e) {
+          toast(e.message || "Failed to log watch");
+        }
+      };
+      // Without people a bucket logs on one tap, as before. With the Who watched row a bucket is chosen first: the
+      // toggles switch to that bucket's default (kids off for "10+ Years"), the editor can change them, then Log.
+      const btnLogBucket = document.getElementById("btn-log-bucket");
+      let chosenBucket = null;
       container.querySelectorAll(".btn-watch-bucket").forEach((btn) => {
-        btn.addEventListener("click", async () => {
+        btn.addEventListener("click", () => {
           const bucket = btn.dataset.bucket;
-          const label = BUCKET_LABELS[bucket] || bucket;
-          try {
-            await api(`${apiPrefix}/titles/${titleId}/watches`, {
-              method: "POST",
-              body: { date_bucket: bucket, ...attendeesBody() },
-            });
-            toast(`Logged watch: ${label}`);
-            await renderDetail(container, titleId);
-          } catch (e) {
-            toast(e.message || "Failed to log watch");
+          if (!whoRow) {
+            logBucket(bucket);
+            return;
+          }
+          chosenBucket = chosenBucket === bucket ? null : bucket;
+          container.querySelectorAll(".btn-watch-bucket").forEach((b) => {
+            b.setAttribute("aria-pressed", b.dataset.bucket === chosenBucket ? "true" : "false");
+          });
+          setToggles(defaultIds({ bucket: chosenBucket }));
+          if (btnLogBucket) {
+            btnLogBucket.hidden = !chosenBucket;
+            btnLogBucket.textContent = chosenBucket ? `Log ${BUCKET_LABELS[chosenBucket] || chosenBucket}` : "Log";
           }
         });
+      });
+      btnLogBucket?.addEventListener("click", () => {
+        if (chosenBucket) logBucket(chosenBucket);
       });
 
       // Inline "who watched" editor on a saved watch: tap the dots, adjust, Save (PUT) or Cancel.

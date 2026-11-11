@@ -22,7 +22,9 @@ the code before proposing changes; trust the code over any doc that disagrees.
    and `node --check` on every `static/js/*.js`. `static/js/package.json` (`{"type": "module"}`) is what makes
    Node parse them as modules; without it a broken file passes.
 5. **Auth.** Writes live under `/admin/api/` with `@editor_required`. Reads live under `/api/` and respect
-   `PUBLIC_VIEW`. State whether any new data is public or editor-only.
+   `PUBLIC_VIEW`. State whether any new data is public or editor-only. Watch notes, people and attendance are
+   editor-only: the public `/api` never carries them and answers 400 to `audience`, `unseen_by` and
+   `attendance`. `tests/test_privacy.py` walks every `/api/` rule in `app.url_map`; a new public route must pass it.
 6. **MCP in step.** New data an assistant would want means a new or extended tool in `mcp_server.py`, a test in
    `tests/test_mcp_server.py`, and an update to `docs/mcp-setup.md`.
 7. **Settings.** Every new setting goes in `.env.example` (with a comment line above it), in the installer's
@@ -49,13 +51,20 @@ never placeholders. Each change is independently shippable.
 
 ## Definition of done
 
-Run and report all of these before opening the PR:
+Run and report all of these before opening the PR (CI runs the same):
 
 ```sh
-python -m pytest -q
+python -m pytest -q                       # report the skip count and reasons
 for f in static/js/*.js; do node --check "$f"; done
+ruff check
+shellcheck -s sh installer/setup-head.sh installer/build.sh ops/matinee-backup ops/matinee-refresh ops/matinee-restore-test
 sh installer/build.sh && sh -n dist/setup-matinee.sh
 ```
 
-Then push the branch, open a PR against `main` (do not merge it), and wait for CI: every job (Python 3.10, 3.11,
-3.12, 3.13 and Alpine) must finish green. If one fails, fix it, push, and wait again.
+`tests/test_ask_ui.py` and `tests/test_people_ui.py` need Playwright and Chromium
+(`pip install playwright && python -m playwright install chromium`); without them they skip locally, but the UI
+smoke job fails on any skip.
+
+Then push the branch, open a PR against `main` (do not merge it), and wait for CI: all seven jobs must finish
+green — Lint (shellcheck + ruff), UI smoke (Playwright + Chromium, 412 px), Python 3.10, 3.11, 3.12 and 3.13 on
+Ubuntu, and Alpine. If one fails, fix it, push, and wait again.

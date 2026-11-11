@@ -128,3 +128,5 @@ Final: parked — Close tapped while a People change is in flight skips the refr
 Final: parked — I2 (ruling R21) for Nick's decision.
 Final: pre-existing flake test_ask_ui::test_modules_load_versioned_once_and_every_view_renders (~3/40 on main; handleRoute has no route token) — not made more likely by this branch per re-review.
 Task 10: complete through final review (commits 98f5ef7..0d62db1).
+Ruling: R21 — RESOLVED by Nick on 2026-11-11: a new "10+ Years" watch with default attendees records the active adults only. Implemented on fix/roadmap-review (review finding F2): app.default_attendees, the watch form's choose-then-Log bucket flow (kids off by default, attendees sent only when they differ), MCP log_watch date_bucket; spec §6.2, §7.2, §8 and README updated. Watches logged before the fix are not rewritten (host checklist H11).
+Decision: D2 — Nick, 2026-11-11: an explicit watched_date more than ten years back also defaults to the active adults (app.default_attendees uses recommend.attendance_of; the date field switches the kids off). Commit 3e3d919 on fix/roadmap-review.

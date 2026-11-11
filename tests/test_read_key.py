@@ -155,3 +155,31 @@ def test_ask_route_refuses_key_identities_even_past_the_gate(client, no_model, w
         res = app.make_response(ask.ask_route.__wrapped__())
         assert res.status_code == 403
         assert res.get_json() == {"error": "Ask is for signed-in editors."}
+
+
+# ------------------------------------------------------------------ decision D1 (review 2026-11-11): no barcode quota
+
+
+def test_read_key_cannot_look_up_a_barcode(client, monkeypatch):
+    """The UPC lookup spends UPCitemdb's 100-a-day trial quota and writes an upc_cache row, so the read key (held by
+    matinee-mcp at level none) is refused there. It never reaches UPCitemdb and writes nothing."""
+    calls = []
+    monkeypatch.setattr(matinee, "http_json", lambda *a, **kw: calls.append(a) or {"items": []})
+    res = client.get("/admin/api/upc/883929637581", headers=bearer(READ_KEY))
+    assert res.status_code == 403
+    assert res.get_json() == {"error": "The read key can't look up barcodes."}
+    assert calls == []
+    assert db().execute("SELECT count(*) FROM upc_cache").fetchone()[0] == 0
+
+
+def test_read_key_may_still_search_tmdb(client, monkeypatch):
+    monkeypatch.setattr(matinee, "tmdb_search", lambda q: [{"tmdb_id": 335984, "title": "Blade Runner 2049"}])
+    res = client.get("/admin/api/tmdb/search?q=blade runner 2049", headers=bearer(READ_KEY))
+    assert res.status_code == 200 and res.get_json()["results"][0]["tmdb_id"] == 335984
+
+
+def test_write_key_may_look_up_a_barcode_without_browser_headers(client, monkeypatch):
+    """Scripts send no Sec-Fetch-Site; the write key is exempt from the same-origin rule (decision D3)."""
+    monkeypatch.setattr(matinee, "http_json", lambda *a, **kw: {"items": []})
+    res = client.get("/admin/api/upc/883929637581", headers=bearer(API_KEY))
+    assert res.status_code == 404   # UPCitemdb had no product: the lookup ran

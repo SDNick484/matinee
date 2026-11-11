@@ -24,6 +24,9 @@
   // ================================================================= State
   const state = {
     route: { path: "/", params: {}, query: new URLSearchParams() },
+    // Bumped by handleRoute on every navigation. An async view render keeps the value it started with and stops
+    // after an await once it has changed, so a late response never overwrites the view the user moved on to.
+    routeSeq: 0,
     grid: {
       q: "",
       medium: [],

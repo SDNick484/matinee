@@ -3,7 +3,7 @@
 **Date:** 2026-11-11
 **Branch:** `feat/privacy-read-key` (one PR)
 **Schema:** unchanged (v8). No table, column or row changes.
-**Status:** approved decisions (roadmap 2026-11-10 §2, decision 1); implemented on this branch.
+**Status:** approved decisions (roadmap 2026-11-10 §2, decision 1); implemented and merged in PR #23 (`d88916f`).
 **Verified against:** `main` @ `a273ec2` (PRs #18 LAN cross-site, #19 housekeeping, #20 CI hardening merged).
 
 Addresses review findings F2 (the read-only remote MCP service holds a write-capable key) and F3 (watch notes are

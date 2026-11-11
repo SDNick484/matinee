@@ -4,6 +4,7 @@ import { getChipIcon, icon } from "./icons.js";
 
   // ================================================================= 8.1 Stats View
   async function renderStats(container) {
+    const seq = state.routeSeq;
     container.innerHTML = `
       <div class="stats-view">
         <div style="text-align:center;padding:48px 16px;color:var(--ink-2)">Loading statistics…</div>
@@ -15,6 +16,7 @@ import { getChipIcon, icon } from "./icons.js";
     try {
       data = await api(`${apiPrefix}/stats`);
     } catch (err) {
+      if (seq !== state.routeSeq) return;
       container.innerHTML = `
         <div class="stats-view">
           <div class="empty-state">
@@ -27,6 +29,7 @@ import { getChipIcon, icon } from "./icons.js";
       return;
     }
 
+    if (seq !== state.routeSeq) return;   // the user left Stats while it loaded
     const ov = data.overview || {};
     const qualities = data.qualities || [];
     const formats = data.formats || [];

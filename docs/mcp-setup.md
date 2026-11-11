@@ -12,7 +12,7 @@ Matinee has two keys for headless clients (`Authorization: Bearer <key>` or `X-A
 | Key | Can | Use it for |
 |-----|-----|------------|
 | `MATINEE_API_KEY` | read and write everything under `/admin/api` | write tools (`rate_movie`, `log_watch`, `add_movie`), scripts that change data; the remote `matinee-mcp` service at write level `log` or `all` |
-| `MATINEE_READ_KEY` | `GET` under `/admin/api` only; any other method answers `403 {"error": "The read key can only read"}` | assistants that only read; the remote `matinee-mcp` service while it is read-only |
+| `MATINEE_READ_KEY` | `GET` under `/admin/api` only; any other method answers `403 {"error": "The read key can only read"}`. Not the barcode lookup `GET /admin/api/upc/<upc>` (UPCitemdb's 100-a-day quota): `403 {"error": "The read key can't look up barcodes."}`. `search_tmdb` works. | assistants that only read; the remote `matinee-mcp` service while it is read-only |
 
 What each kind of caller sees:
 
@@ -144,8 +144,8 @@ The installer adds any missing key and never overwrites one you edited. The file
 
 | Setting | Default | Meaning |
 |---------|---------|---------|
-| `MATINEE_MCP_READONLY` | `1` | The master switch. Anything but `0`, `false`, `no` or `off` (including unset and empty) keeps the service read-only and `MATINEE_MCP_WRITES` is ignored; the service logs a warning when that hides a `log` or `all`. `0` hands the decision to `MATINEE_MCP_WRITES`. |
-| `MATINEE_MCP_WRITES` | `none` (`all` on a host that already had `MATINEE_MCP_READONLY=0`) | Write level, used only while `MATINEE_MCP_READONLY=0`. `none`: the seven read tools. `log`: also `rate_movie` and `log_watch`. `all`: also `add_movie`. An unknown value means `none` (and is logged); unset with `READONLY=0` means `all`, as before. Case and surrounding spaces do not matter. |
+| `MATINEE_MCP_READONLY` | `1` | The master switch. Any value but `0`, `false`, `no` or `off` keeps the service read-only and `MATINEE_MCP_WRITES` is ignored; the service logs a warning when that hides a `log` or `all`. `0` hands the decision to `MATINEE_MCP_WRITES`. Unset or empty: `MATINEE_MCP_WRITES` decides too (`none` when it is also unset), so deleting this line from a host with `WRITES=log` turns writes on. |
+| `MATINEE_MCP_WRITES` | `none` (`all` on a host that already had `MATINEE_MCP_READONLY=0`) | Write level, used only while `MATINEE_MCP_READONLY` is `0` (or unset or empty). `none`: the seven read tools. `log`: also `rate_movie` and `log_watch`. `all`: also `add_movie`. An unknown value means `none` (and is logged); unset with `READONLY=0` means `all`, as before. Case and surrounding spaces do not matter. |
 | `MCP_HTTP_BIND` | the host's LAN IP | Where `matinee-mcp` listens. It must be the address the tunnel route points at, because `cloudflared` runs in Docker (`127.0.0.1` gives HTTP 502). |
 | `MCP_HTTP_PORT` | `8719` | Port. |
 | `MCP_HTTP_PATH` | `/matinee/mcp` | Endpoint path. The tunnel does not strip the prefix. |
@@ -254,7 +254,7 @@ At `log` and `all` the service holds `MATINEE_API_KEY`, which can do everything 
 ### 5.2 Write Tools
 The remote service offers these only while `MATINEE_MCP_READONLY=0` and `MATINEE_MCP_WRITES` allows them: `rate_movie` and `log_watch` at `log` and `all`, `add_movie` at `all` (section 4.4). Over stdio all three are always available.
 - **`rate_movie`**: Set, update, or clear personal 0.0–10.0 ratings in 0.5 increments.
-- **`log_watch`**: Log a movie watch event with an ISO date (`YYYY-MM-DD`, defaults to today), optional notes, and optional `attendees` (a list of names). Leave `attendees` out when everyone watched; an empty list is refused by Matinee with a 400.
+- **`log_watch`**: Log a movie watch event with an ISO date (`YYYY-MM-DD`, defaults to today), optional notes, optional `attendees` (a list of names), and an optional `date_bucket` for a watch with no exact date (`past_year`, `1_2_years`, `2_5_years`, `5_10_years`, `over_10_years`, `unknown`). Leave `attendees` out when everyone watched; an empty list is refused by Matinee with a 400. For a watch more than ten years ago (`date_bucket="over_10_years"`, or a `watched_date` more than ten years back) with no `attendees`, Matinee records the adults only ("we saw The Princess Bride ages ago" → Nick and Lauren).
 - **`add_movie`**: Add a movie from TMDB into the library with physical/digital copy details.
 
 ### 5.3 Resources

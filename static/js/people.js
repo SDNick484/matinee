@@ -125,7 +125,9 @@ import { closeModal } from "./forms.js";
   }
 
   // True once a change in the People modal has been saved; closing the modal then re-renders the current view
-  // (a Who watched row or the Unseen by filters may appear or go). Reset each time the modal opens.
+  // when it shows people (the grid's Unseen by filters, a title's Who watched row). Other views (Add, Stats,
+  // About, Ask) are left alone: re-running their route would reset a half-typed search or the scanner.
+  // Reset each time the modal opens.
   let peopleChanged = false;
 
   function peopleModalOpen() {
@@ -137,6 +139,7 @@ import { closeModal } from "./forms.js";
     closeModal();
     if (wasOpen && peopleChanged) {
       peopleChanged = false;
+      if (!["/", "/t/:id"].includes(state.route?.path)) return;
       // main.js routes on hashchange; this re-renders the current route in place (no history entry).
       window.dispatchEvent(new HashChangeEvent("hashchange"));
     }

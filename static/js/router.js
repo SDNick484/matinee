@@ -173,7 +173,10 @@ import { loadPeople, openPeopleModal } from "./people.js";
     stopBarcodeScanner();
     const prevRoute = state.route;
     state.route = parseHash(location.hash);
+    state.routeSeq += 1;
+    const seq = state.routeSeq;
     await meReady;
+    if (seq !== state.routeSeq) return;   // a newer hashchange already took over
     updateHeader();
 
     const view = document.getElementById("view");

@@ -3,7 +3,7 @@
 **Date:** 2026-11-11
 **Branch:** `feat/csv-export` (one PR)
 **Schema:** unchanged (v8)
-**Status:** implemented in this PR.
+**Status:** implemented; merged in PR #24 (`8127d34`).
 **Verified against:** `matinee` `main` @ `d88916f` (merge of PR #23).
 
 ## 1. Intent

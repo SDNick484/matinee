@@ -1,5 +1,8 @@
 from app import clean_upc_title, connect, init_db
 
+# The SPA's own fetch: browsers mark it same-origin, which the barcode lookup requires (review decision D3).
+SPA = {"Sec-Fetch-Site": "same-origin"}
+
 
 def test_clean_upc_title_patterns():
     # 4K UHD variations
@@ -82,7 +85,7 @@ def test_api_upc_lookup_cached(tmp_path, monkeypatch):
     monkeypatch.setattr(app, "tmdb_search", lambda q: [{"tmdb_id": 157336, "title": "Interstellar", "year": 2014, "owned": False}])
 
     client = app.app.test_client()
-    resp = client.get("/admin/api/upc/032429311239")
+    resp = client.get("/admin/api/upc/032429311239", headers=SPA)
     assert resp.status_code == 200
     data = resp.get_json()
     assert data["upc"] == "032429311239"
@@ -116,7 +119,7 @@ def test_api_upc_lookup_duplicate_warning(tmp_path, monkeypatch):
     monkeypatch.setattr(app, "tmdb_search", lambda q: [{"tmdb_id": 155, "title": "The Dark Knight", "year": 2008, "owned": True}])
 
     client = app.app.test_client()
-    resp = client.get("/admin/api/upc/883929624799")
+    resp = client.get("/admin/api/upc/883929624799", headers=SPA)
     assert resp.status_code == 200
     data = resp.get_json()
     assert data["already_owned"] is True
@@ -171,7 +174,7 @@ def test_api_upc_rate_limit_not_cached(tmp_path, monkeypatch):
     monkeypatch.setattr(app, "http_json", fake_http_json)
 
     client = app.app.test_client()
-    resp = client.get("/admin/api/upc/012345678901")
+    resp = client.get("/admin/api/upc/012345678901", headers=SPA)
     assert resp.status_code == 429
     assert "limit reached" in resp.get_json()["error"]
 
@@ -201,7 +204,7 @@ def test_api_upc_lookup_uncached_success(tmp_path, monkeypatch):
     monkeypatch.setattr(app, "tmdb_search", lambda q: [{"tmdb_id": 348, "title": "Alien", "year": 1979, "owned": False}])
 
     client = app.app.test_client()
-    resp = client.get("/admin/api/upc/024543594833")
+    resp = client.get("/admin/api/upc/024543594833", headers=SPA)
     assert resp.status_code == 200
     data = resp.get_json()
     assert data["upc"] == "024543594833"
@@ -235,7 +238,7 @@ def test_api_upc_lookup_not_found_cached_as_miss(tmp_path, monkeypatch):
     monkeypatch.setattr(app, "http_json", fake_http_json)
 
     client = app.app.test_client()
-    resp = client.get("/admin/api/upc/000000000000")
+    resp = client.get("/admin/api/upc/000000000000", headers=SPA)
     assert resp.status_code == 404
     assert len(calls) == 1
 
@@ -247,7 +250,7 @@ def test_api_upc_lookup_not_found_cached_as_miss(tmp_path, monkeypatch):
     assert row["raw_title"] == ""
 
     # Second lookup should hit cache and NOT call http_json
-    resp2 = client.get("/admin/api/upc/000000000000")
+    resp2 = client.get("/admin/api/upc/000000000000", headers=SPA)
     assert resp2.status_code == 404
     assert len(calls) == 1
 
@@ -262,12 +265,12 @@ def test_api_upc_lookup_validation(tmp_path, monkeypatch):
 
     client = app.app.test_client()
     # Too short
-    resp = client.get("/admin/api/upc/12345")
+    resp = client.get("/admin/api/upc/12345", headers=SPA)
     assert resp.status_code == 400
     assert "Invalid barcode" in resp.get_json()["error"]
 
     # Non-digits only
-    resp = client.get("/admin/api/upc/abcdefghij")
+    resp = client.get("/admin/api/upc/abcdefghij", headers=SPA)
     assert resp.status_code == 400
 
 
