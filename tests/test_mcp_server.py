@@ -646,3 +646,51 @@ def test_stdio_client_falls_back_to_the_read_key(monkeypatch):
     assert (c.api_key, c.key_name) == ("wk", "MATINEE_API_KEY")
     c = mcp_server.MatineeClient(api_url="http://x", api_key="", db_path="")  # explicit "" still means /api
     assert c._read_prefix == "/api"
+
+
+# --------------------------------------------------------------- tool annotations (spec §5)
+# name: (readOnly, destructive, idempotent, openWorld)
+EXPECTED_HINTS = {
+    "search_collection": (True, False, True, False),
+    "get_movie": (True, False, True, False),
+    "where_is": (True, False, True, False),
+    "get_recommendations": (True, False, True, False),
+    "get_collection_stats": (True, False, True, False),
+    "search_tmdb": (True, False, True, True),
+    "rate_movie": (False, True, True, False),
+    "log_watch": (False, False, False, False),
+    "add_movie": (False, False, False, True),
+}
+
+
+def _hints(tool):
+    """The four hints as the client sees them: the wire (camelCase) form of the annotations."""
+    assert tool.annotations is not None, f"{tool.name} has no annotations"
+    wire = tool.annotations.model_dump(by_alias=True)
+    return (wire["readOnlyHint"], wire["destructiveHint"], wire["idempotentHint"], wire["openWorldHint"])
+
+
+def test_every_tool_has_the_annotations_from_the_spec():
+    pytest.importorskip("mcp.types")
+    tools = {t.name: t for t in asyncio.run(mcp_server.mcp.list_tools())}
+    assert set(tools) == set(EXPECTED_HINTS)
+    for name, expected in EXPECTED_HINTS.items():
+        assert _hints(tools[name]) == expected, name
+
+
+def test_annotation_kwargs_guarded_on_tool_signature():
+    class NoAnnotations:
+        def tool(self, name=None, description=None):
+            pass
+
+    class WithAnnotations:
+        def tool(self, name=None, description=None, annotations=None):
+            pass
+
+    assert mcp_server._annotation_kwargs(None, "where_is") == {}
+    assert mcp_server._annotation_kwargs(NoAnnotations, "where_is") == {}
+    assert "annotations" in mcp_server._annotation_kwargs(WithAnnotations, "where_is")
+
+
+def test_annotation_table_covers_exactly_the_nine_tools():
+    assert set(mcp_server.TOOL_HINTS) == set(EXPECTED_HINTS)

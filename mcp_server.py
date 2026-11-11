@@ -19,7 +19,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 try:
     from mcp.server.mcpserver import MCPServer as FastMCP
@@ -65,9 +65,24 @@ def _location_paths(con) -> Dict[int, str]:
     return {i: build_path(i) for i in by_id}
 
 
-def _readonly_kwargs(server_cls) -> Dict[str, Any]:
-    """Read-only tool annotations, only when this mcp release supports them on tool()."""
-    if server_cls is None:
+# (readOnlyHint, destructiveHint, idempotentHint, openWorldHint) per tool; the reasons are in
+# docs/superpowers/specs/2026-11-11-mcp-tiered-writes-design.md §5.
+TOOL_HINTS: Dict[str, Tuple[bool, bool, bool, bool]] = {
+    "search_collection": (True, False, True, False),
+    "get_movie": (True, False, True, False),
+    "where_is": (True, False, True, False),
+    "get_recommendations": (True, False, True, False),
+    "get_collection_stats": (True, False, True, False),
+    "search_tmdb": (True, False, True, True),   # reads TMDB
+    "rate_movie": (False, True, True, False),   # overwrites or clears the previous rating
+    "log_watch": (False, False, False, False),  # appends a watch row each call
+    "add_movie": (False, False, False, True),   # inserts a copy each call, may fetch TMDB
+}
+
+
+def _annotation_kwargs(server_cls, name: str) -> Dict[str, Any]:
+    """Tool annotations for `name`, only when this mcp release supports them on tool()."""
+    if server_cls is None or name not in TOOL_HINTS:
         return {}
     try:
         from mcp.types import ToolAnnotations
@@ -75,10 +90,15 @@ def _readonly_kwargs(server_cls) -> Dict[str, Any]:
             return {}
     except (ImportError, TypeError, ValueError):
         return {}
-    return {"annotations": ToolAnnotations(readOnlyHint=True, openWorldHint=False)}
+    read_only, destructive, idempotent, open_world = TOOL_HINTS[name]
+    return {"annotations": ToolAnnotations(readOnlyHint=read_only, destructiveHint=destructive,
+                                           idempotentHint=idempotent, openWorldHint=open_world)}
 
 
-_READONLY = _readonly_kwargs(FastMCP)
+def _readonly_kwargs(server_cls) -> Dict[str, Any]:
+    """Read-only tool annotations (kept for callers that predate TOOL_HINTS; same as get_recommendations')."""
+    return _annotation_kwargs(server_cls, "get_recommendations")
+
 
 try:
     from mcp.server.mcpserver.exceptions import ToolError
@@ -774,15 +794,14 @@ def build_server(*, writes: bool = True):
     server = _make_server(SERVER_INSTRUCTIONS if writes else READONLY_INSTRUCTIONS)
     if not server:
         return None
-    server.tool()(search_collection)
-    server.tool()(get_movie)
-    server.tool()(where_is)
-    server.tool(**_READONLY)(get_recommendations)
-    server.tool()(get_collection_stats)
-    server.tool()(search_tmdb)
+    def register(fn):
+        server.tool(**_annotation_kwargs(FastMCP, fn.__name__))(fn)
+
+    for fn in (search_collection, get_movie, where_is, get_recommendations, get_collection_stats, search_tmdb):
+        register(fn)
     if writes:
         for fn in (rate_movie, log_watch, add_movie):
-            server.tool()(fn)
+            register(fn)
     server.resource("matinee://stats")(resource_stats)
     server.resource("matinee://recommendations")(resource_recommendations)
     server.prompt("what_to_watch")(prompt_what_to_watch)
