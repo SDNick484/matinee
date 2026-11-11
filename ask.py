@@ -389,7 +389,7 @@ def answer(messages):
 @app.post("/admin/api/ask")
 @editor_required  # also refuses cross-site requests (Origin / Sec-Fetch-Site) for every editor route
 def ask_route():
-    if g.editor == "api-key":
+    if g.editor in app_module.KEY_IDENTITIES:  # editor_required already refuses the read key's POST
         return make_err(403, "Ask is for signed-in editors.")
     if not enabled():
         return make_err(503, "AI search isn't set up (no API key).")

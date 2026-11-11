@@ -9,13 +9,15 @@ Public:  /                 poster grid, detail pages, About (no editor emails)
          /api/...          read-only JSON
          /images/<file>    cached TMDB posters and backdrops
 Editors: /admin            same UI with editing; put this path behind Cloudflare Access
-         /admin/api/       full JSON + writes (TMDB search, copies, refresh, delete);
+         /admin/api/       full JSON (watch notes included) + writes (TMDB search, copies, refresh, delete);
                            requires a verified Access JWT (or a direct LAN request when LAN_EDIT=1,
-                           addressed by IP, localhost or a LAN_HOSTS name)
+                           addressed by IP, localhost or a LAN_HOSTS name), or MATINEE_API_KEY;
+                           MATINEE_READ_KEY may GET it but not write
 Health:  /healthz          {ok, titles, copies}
 
 Environment (see /etc/conf.d/matinee and .env.example):
   PORT, DATA_DIR, CF_TEAM_DOMAIN, CF_AUD, ADMIN_EMAILS, LAN_EDIT, LAN_HOSTS, PUBLIC_VIEW, TMDB_READ_TOKEN, MATINEE_API_KEY,
+  MATINEE_READ_KEY,
   ANTHROPIC_SEARCH_KEY, ANTHROPIC_SEARCH_MODEL, ASK_DAILY_LIMIT
 """
 import datetime as dt, hashlib, hmac, ipaddress, json, os, re, sqlite3, sys, time, unicodedata
@@ -74,6 +76,17 @@ def parse_hosts(raw):
 LAN_HOSTS = parse_hosts(os.environ.get("LAN_HOSTS", ""))
 PUBLIC_VIEW = os.environ.get("PUBLIC_VIEW", "1") == "1"
 MATINEE_API_KEY = os.environ.get("MATINEE_API_KEY", "").strip()
+
+
+def read_key_setting(env):
+    """MATINEE_READ_KEY, or "" when it is unset or equal to MATINEE_API_KEY (that token is the write key)."""
+    key = (env.get("MATINEE_READ_KEY") or "").strip()
+    if key and key == (env.get("MATINEE_API_KEY") or "").strip():
+        app.logger.error("MATINEE_READ_KEY equals MATINEE_API_KEY, so it would write: ignoring MATINEE_READ_KEY")
+        return ""
+    return key
+
+
 OMDB_API_KEY = os.environ.get("OMDB_API_KEY", "").strip()
 TMDB_READ_TOKEN = os.environ.get("TMDB_READ_TOKEN", "").strip()
 TMDB_API = "https://api.themoviedb.org/3"
@@ -81,6 +94,8 @@ TMDB_IMG = "https://image.tmdb.org/t/p"
 UA = "matinee/1.0 (movie collection tracker; https://github.com/SDNick484/matinee)"
 
 app = Flask(__name__, static_folder=None)
+# a second key that may GET /admin/api (notes included) but never write; see editor_required
+MATINEE_READ_KEY = read_key_setting(os.environ)
 
 # =============================================================================== db
 SCHEMA = """
@@ -468,18 +483,27 @@ def http_bytes(url, timeout=15):
 _jwks = None
 
 
+KEY_IDENTITIES = ("api-key", "read-key")  # scripts and the MCP server, not browsers
+READ_METHODS = ("GET", "HEAD")
+
+
+def presented_key():
+    """The token from `Authorization: Bearer <key>` or `X-API-Key: <key>`, or ""."""
+    auth = request.headers.get("Authorization", "")
+    if auth.lower().startswith("bearer "):
+        return auth[7:].strip()
+    return request.headers.get("X-API-Key", "").strip()
+
+
 def access_identity():
-    """Return the editor's email (or 'lan' or 'api-key'), or None."""
-    if MATINEE_API_KEY:
-        auth = request.headers.get("Authorization", "")
-        key = request.headers.get("X-API-Key", "")
-        token = ""
-        if auth.lower().startswith("bearer "):
-            token = auth[7:].strip()
-        elif key:
-            token = key.strip()
-        if token and hmac.compare_digest(token, MATINEE_API_KEY):
+    """Return the editor's email (or 'lan', 'api-key' or 'read-key'), or None."""
+    presented = presented_key()
+    if presented:
+        # the write key wins if both are equal (read_key_setting refuses that pairing at startup anyway)
+        if MATINEE_API_KEY and hmac.compare_digest(presented, MATINEE_API_KEY):
             return "api-key"
+        if MATINEE_READ_KEY and hmac.compare_digest(presented, MATINEE_READ_KEY):
+            return "read-key"
     token = request.headers.get("Cf-Access-Jwt-Assertion")
     if token and CF_TEAM_DOMAIN and CF_AUD:
         global _jwks
@@ -543,8 +567,10 @@ def editor_required(fn):
         who = access_identity()
         if not who:
             return jsonify(error="Sign in to edit"), 401
-        if who != "api-key" and cross_site():  # the API key is for scripts and the MCP server, not browsers
+        if who not in KEY_IDENTITIES and cross_site():  # keys are for scripts and the MCP server, not browsers
             return jsonify(error="Cross-site request refused"), 403
+        if who == "read-key" and request.method not in READ_METHODS:
+            return jsonify(error="The read key can only read"), 403
         g.editor = who
         return fn(*a, **kw)
     return inner
