@@ -184,6 +184,7 @@
     dot: '<circle cx="12" cy="12" r="6.5" fill="currentColor" stroke="none"/>',
     chat: '<path d="M5 4.5h14A1.5 1.5 0 0 1 20.5 6v9a1.5 1.5 0 0 1-1.5 1.5h-8.5L6 20v-3.5H5A1.5 1.5 0 0 1 3.5 15V6A1.5 1.5 0 0 1 5 4.5z"/>',
     send: '<path d="M4 12 20.5 4 16 20.5l-4-6.5z"/><path d="m12 14 8.5-10"/>',
+    download: '<path d="M12 4v11M7.5 10.5 12 15l4.5-4.5"/><path d="M4.5 19.5h15"/>',
   };
 
   function icon(name, cls = "") {
@@ -2941,11 +2942,12 @@
     container.innerHTML = `
       <div class="stats-view">
         <div class="stats-header">
-          <div>
+          <div class="stats-header-top">
             <a href="#/" class="back-link">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg>
               Back to collection
             </a>
+            ${isAdmin ? `<a href="/admin/api/export.csv" class="btn btn-sm btn-ghost" id="btn-export-csv" download>${icon("download")} Export CSV</a>` : ""}
           </div>
           <h1 style="margin-top:var(--s2)">Collection Stats</h1>
           <p>Breakdown of movies, formats, qualities, and services in your family library.</p>
