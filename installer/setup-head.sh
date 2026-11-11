@@ -184,6 +184,7 @@ chmod +x /etc/init.d/matinee-mcp
 # The MCP stack is not packaged for Alpine (no py3-mcp), so this one service gets a pip venv.
 # A pip or network failure only skips matinee-mcp; the main app still installs and starts.
 echo "==> Installing MCP HTTP service (pip venv)"
+# shellcheck disable=SC2015  # deliberate: any failure in the chain (including MCP_OK=1) falls through to the warning branch
 apk add --no-cache py3-pip >/dev/null 2>&1 && python3 -m venv "$MCP_VENV" && "$MCP_VENV/bin/pip" install --no-cache-dir -q -r "$APP_DIR/requirements-mcp.txt" && MCP_OK=1 || { MCP_OK=0; echo "    WARNING: could not set up the MCP venv (needs PyPI access); matinee-mcp will not start. Re-run this installer to retry."; }
 
 # ---------------------------------------------------------------- backups & maintenance
@@ -229,7 +230,7 @@ fi
 
 echo
 echo "Matinee is running:  http://$IP:$PORT/        (editing on the LAN: http://$IP:$PORT/admin)"
-echo "Health: $(wget -qO- http://127.0.0.1:$PORT/healthz)"
+echo "Health: $(wget -qO- "http://127.0.0.1:$PORT/healthz")"
 [ -n "${ADDED:-}" ] && echo "New settings added:${ADDED}"
 grep -q '^TMDB_READ_TOKEN=$' "$CONF" && echo "  - TMDB is off until you set TMDB_READ_TOKEN in $CONF (then: rc-service matinee restart)"
 grep -q '^CF_AUD=$' "$CONF" && echo "  - Set CF_AUD in $CONF after creating the Access app for <your-domain>/admin"

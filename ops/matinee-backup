@@ -10,6 +10,7 @@
 set -u
 OPS_CONF=${OPS_CONF:-/etc/conf.d/ops}
 [ -f /etc/conf.d/ct210-ops ] && OPS_CONF=/etc/conf.d/ct210-ops
+# shellcheck source=/dev/null  # optional config, path comes from the environment
 [ -f "$OPS_CONF" ] && . "$OPS_CONF"
 LOCAL_DIR=${LOCAL_DIR:-/var/backups/matinee}
 KEEP_DAYS=${KEEP_DAYS:-14}
@@ -31,6 +32,7 @@ if [ -f "$DB" ]; then
     log "FAILED matinee/matinee.db"; fail=1
   fi
 fi
+# shellcheck disable=SC2010  # the grep pattern pins the names to <tmdb_id>-custom-<hex>.<ext>
 covers=$(ls "$DATA/images" 2>/dev/null | grep -E -- '-custom-[0-9a-f]{10}\.(jpg|png|webp)$')
 if [ -n "$covers" ]; then
   # shellcheck disable=SC2086  # names are <tmdb_id>-custom-<hex>.<ext>: no spaces

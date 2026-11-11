@@ -6,7 +6,7 @@ whose ratings are stale (older than --stale-days, default 180) or missing.
 Usage:
   python3 ops/refresh_ratings.py [--limit 50] [--stale-days 180] [--db-path PATH]
 """
-import argparse, datetime as dt, os, sqlite3, sys, time
+import argparse, datetime as dt, sqlite3, sys, time
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent

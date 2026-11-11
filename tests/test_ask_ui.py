@@ -1,8 +1,9 @@
 """Playwright smoke test for the #/ask view at phone widths.
 
-Skipped when playwright or a Chromium build is missing (CI does not install
-them). /admin/api/me and /admin/api/ask are stubbed with page.route, so no
-API key or network is needed.
+Skipped locally when playwright or a Chromium build is missing. The CI job
+"ui-smoke" installs both and fails if any test here is skipped, so it always
+runs there. /admin/api/me and /admin/api/ask are stubbed with page.route, so
+no API key or network is needed.
 """
 import glob
 import json
