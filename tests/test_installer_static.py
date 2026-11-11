@@ -196,3 +196,10 @@ def test_mcp_setup_states_what_the_api_key_adds_to_reads():
                if l.startswith("| `MATINEE_API_KEY` |"))
     assert "search_tmdb" in row and "added_by" in row
     assert "adds only `search_tmdb`" not in row
+
+
+def test_lan_hosts_setting_is_written_and_exported():
+    assert re.search(r'^add_setting "\$CONF" LAN_HOSTS "" ".+"$', HEAD, re.M)
+    export = next(l for l in HEAD.splitlines() if l.startswith("export PORT "))
+    assert " LAN_EDIT LAN_HOSTS " in f" {export} "
+    assert re.search(r"^# .+\nLAN_HOSTS=$", (ROOT / ".env.example").read_text(encoding="utf-8"), re.M)

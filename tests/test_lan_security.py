@@ -1,4 +1,4 @@
-"""Cross-site writes against the editor API.
+"""Cross-site writes and DNS rebinding against the editor API.
 
 Reproduced on main @ 018ec06 with LAN_EDIT=1:
   * a text/plain POST from https://evil.example.com logged a watch (a CORS "simple request": no preflight);
@@ -29,6 +29,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr("app.DATA_DIR", tmp_path)
     monkeypatch.setattr("app.IMAGE_DIR", tmp_path / "images")
     monkeypatch.setattr("app.LAN_EDIT", True)
+    monkeypatch.setattr("app.LAN_HOSTS", set(), raising=False)
     monkeypatch.setattr("app.PUBLIC_VIEW", True)
     monkeypatch.setattr("app.MATINEE_API_KEY", "k")
     monkeypatch.setattr("app.TMDB_READ_TOKEN", "")
@@ -55,13 +56,19 @@ def count(sql, *args):
         return db().execute(sql, args).fetchone()[0]
 
 
-# ------------------------------------------------------------------ the reported request
+# ------------------------------------------------------------------ the two reported requests
 def test_cross_site_text_plain_watch_is_refused(client, dark_knight):
     r = client.post(f"/admin/api/titles/{dark_knight}/watches", data='{"watched_date": "2026-11-10"}',
                     headers={**EVIL, "Content-Type": "text/plain"})
     assert r.status_code == 403
     assert r.get_json() == {"error": "Cross-site request refused"}
     assert count("SELECT count(*) FROM watches WHERE title_id=?", dark_knight) == 0
+
+
+def test_rebound_host_cannot_delete_a_title(client, dark_knight):
+    r = client.delete(f"/admin/api/titles/{dark_knight}", headers={"Host": "evil.example.com"})
+    assert r.status_code == 401
+    assert count("SELECT count(*) FROM titles WHERE id=?", dark_knight) == 1
 
 
 # -------------------------------------------------- every editor route refuses cross-site requests
@@ -167,4 +174,41 @@ def test_tunnel_request_with_access_jwt_still_works(client, monkeypatch, dark_kn
 def test_tunnel_request_without_jwt_is_still_not_an_editor(client):
     r = client.get("/admin/api/me", headers={"Host": "movies.example.com", "Cf-Ray": "8e1f-SJC"})
     assert r.status_code == 401
+
+
+# ------------------------------------------------------------------- Host-gated "lan" identity
+@pytest.mark.parametrize("host", [
+    "localhost", "localhost:8769", "127.0.0.1", "127.0.0.1:8769", "192.168.1.50", LAN_IP,
+    "10.0.0.7:8769", "[::1]:8769", "[fd00::50]",
+])
+def test_lan_identity_for_ip_literals_and_localhost(client, host):
+    r = client.get("/admin/api/me", headers={"Host": host})
+    assert r.status_code == 200, host
+    assert r.get_json()["email"] == "lan"
+
+
+@pytest.mark.parametrize("host", [
+    "evil.example.com", "evil.example.com:8769", "matinee.lan", "localhost.evil.example.com",
+    "192.168.1.50.nip.io", "127.0.0.1.evil.example.com",
+])
+def test_no_lan_identity_for_other_hosts(client, host):
+    assert client.get("/admin/api/me", headers={"Host": host}).status_code == 401, host
+    assert client.get("/api/me", headers={"Host": host}).get_json()["editor"] is False
+
+
+@pytest.mark.parametrize("host", ["matinee.lan", "matinee.lan:8769", "MATINEE.LAN", "movies.home.arpa"])
+def test_lan_hosts_setting_allows_named_hosts(client, monkeypatch, host):
+    monkeypatch.setattr("app.LAN_HOSTS", {"matinee.lan", "movies.home.arpa"})
+    r = client.get("/admin/api/me", headers={"Host": host})
+    assert r.status_code == 200 and r.get_json()["email"] == "lan"
+
+
+def test_lan_hosts_parsing():
+    assert core.parse_hosts(" Matinee.LAN , movies.home.arpa,,") == {"matinee.lan", "movies.home.arpa"}
+    assert core.parse_hosts("") == set()
+
+
+def test_lan_edit_off_still_wins(client, monkeypatch):
+    monkeypatch.setattr("app.LAN_EDIT", False)
+    assert client.get("/admin/api/me", headers={"Host": LAN_IP}).status_code == 401
 

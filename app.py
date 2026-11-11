@@ -10,14 +10,15 @@ Public:  /                 poster grid, detail pages, About (no editor emails)
          /images/<file>    cached TMDB posters and backdrops
 Editors: /admin            same UI with editing; put this path behind Cloudflare Access
          /admin/api/       full JSON + writes (TMDB search, copies, refresh, delete);
-                           requires a verified Access JWT (or a direct LAN request when LAN_EDIT=1)
+                           requires a verified Access JWT (or a direct LAN request when LAN_EDIT=1,
+                           addressed by IP, localhost or a LAN_HOSTS name)
 Health:  /healthz          {ok, titles, copies}
 
 Environment (see /etc/conf.d/matinee and .env.example):
-  PORT, DATA_DIR, CF_TEAM_DOMAIN, CF_AUD, ADMIN_EMAILS, LAN_EDIT, PUBLIC_VIEW, TMDB_READ_TOKEN, MATINEE_API_KEY,
+  PORT, DATA_DIR, CF_TEAM_DOMAIN, CF_AUD, ADMIN_EMAILS, LAN_EDIT, LAN_HOSTS, PUBLIC_VIEW, TMDB_READ_TOKEN, MATINEE_API_KEY,
   ANTHROPIC_SEARCH_KEY, ANTHROPIC_SEARCH_MODEL, ASK_DAILY_LIMIT
 """
-import datetime as dt, hashlib, hmac, json, os, re, sqlite3, sys, time, unicodedata
+import datetime as dt, hashlib, hmac, ipaddress, json, os, re, sqlite3, sys, time, unicodedata
 import urllib.error, urllib.parse, urllib.request
 from functools import wraps
 from pathlib import Path
@@ -62,6 +63,15 @@ CF_TEAM_DOMAIN = re.sub(r"^https?://", "", os.environ.get("CF_TEAM_DOMAIN", "").
 CF_AUD = os.environ.get("CF_AUD", "").strip()
 ADMIN_EMAILS = {e.strip().lower() for e in os.environ.get("ADMIN_EMAILS", "").split(",") if e.strip()}
 LAN_EDIT = os.environ.get("LAN_EDIT", "1") == "1"
+
+
+def parse_hosts(raw):
+    """'Matinee.LAN, movies.home.arpa' -> {'matinee.lan', 'movies.home.arpa'}"""
+    return {h.strip().lower().rstrip(".") for h in (raw or "").split(",") if h.strip()}
+
+
+# host names (besides IP literals and localhost) that a LAN_EDIT request may use; see lan_host()
+LAN_HOSTS = parse_hosts(os.environ.get("LAN_HOSTS", ""))
 PUBLIC_VIEW = os.environ.get("PUBLIC_VIEW", "1") == "1"
 MATINEE_API_KEY = os.environ.get("MATINEE_API_KEY", "").strip()
 OMDB_API_KEY = os.environ.get("OMDB_API_KEY", "").strip()
@@ -488,9 +498,33 @@ def access_identity():
             return None
         return email or "access-user"
     via_cloudflare = request.headers.get("Cf-Ray") or request.headers.get("Cf-Connecting-Ip")
-    if LAN_EDIT and not via_cloudflare and not token:
+    if LAN_EDIT and not via_cloudflare and not token and lan_host():
         return "lan"
     return None
+
+
+def lan_host():
+    """True when the Host header is an IP literal, localhost, or listed in LAN_HOSTS.
+
+    A DNS-rebinding page is served from its own name (Host: evil.example.com) even after that name
+    resolves to this box, so a name we don't know never earns the "lan" identity."""
+    host = (request.host or "").strip().lower()
+    if host.startswith("["):                      # [fd00::50]:8769
+        name = host[1:host.find("]")] if "]" in host else ""
+    elif host.count(":") == 1:                    # 192.168.1.50:8769, matinee.lan:8769
+        name = host.rsplit(":", 1)[0]
+    else:                                         # 192.168.1.50, matinee.lan
+        name = host
+    name = name.rstrip(".")
+    if not name:
+        return False
+    if name == "localhost" or name in LAN_HOSTS:
+        return True
+    try:
+        ipaddress.ip_address(name)
+        return True
+    except ValueError:
+        return False
 
 
 def cross_site():
