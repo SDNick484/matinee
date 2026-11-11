@@ -145,7 +145,7 @@ The installer adds any missing key and never overwrites one you edited. The file
 | Setting | Default | Meaning |
 |---------|---------|---------|
 | `MATINEE_MCP_READONLY` | `1` | The master switch. Anything but `0`, `false`, `no` or `off` (including unset and empty) keeps the service read-only and `MATINEE_MCP_WRITES` is ignored; the service logs a warning when that hides a `log` or `all`. `0` hands the decision to `MATINEE_MCP_WRITES`. |
-| `MATINEE_MCP_WRITES` | `none` (`all` on a host that already had `MATINEE_MCP_READONLY=0`) | Write level, used only while `MATINEE_MCP_READONLY=0`. `none`: the six read tools. `log`: also `rate_movie` and `log_watch`. `all`: also `add_movie`. An unknown value means `none` (and is logged); unset with `READONLY=0` means `all`, as before. Case and surrounding spaces do not matter. |
+| `MATINEE_MCP_WRITES` | `none` (`all` on a host that already had `MATINEE_MCP_READONLY=0`) | Write level, used only while `MATINEE_MCP_READONLY=0`. `none`: the seven read tools. `log`: also `rate_movie` and `log_watch`. `all`: also `add_movie`. An unknown value means `none` (and is logged); unset with `READONLY=0` means `all`, as before. Case and surrounding spaces do not matter. |
 | `MCP_HTTP_BIND` | the host's LAN IP | Where `matinee-mcp` listens. It must be the address the tunnel route points at, because `cloudflared` runs in Docker (`127.0.0.1` gives HTTP 502). |
 | `MCP_HTTP_PORT` | `8719` | Port. |
 | `MCP_HTTP_PATH` | `/matinee/mcp` | Endpoint path. The tunnel does not strip the prefix. |
@@ -196,7 +196,7 @@ By default the phone can search, look up shelves, read watch notes, get recommen
 
 | Level | Tools added | Key the service holds |
 |-------|-------------|-----------------------|
-| `none` (default) | none: six read tools | `MATINEE_READ_KEY` |
+| `none` (default) | none: seven read tools | `MATINEE_READ_KEY` |
 | `log` | `rate_movie`, `log_watch` | `MATINEE_API_KEY` |
 | `all` | `rate_movie`, `log_watch`, `add_movie` | `MATINEE_API_KEY` |
 
@@ -229,9 +229,9 @@ At `log` and `all` the service holds `MATINEE_API_KEY`, which can do everything 
 ## 5. Available MCP Capabilities
 
 ### 5.1 Read Tools
-- **`search_collection`**: Search movies by title text, genre, physical/digital medium, format (e.g. `4K UHD`, `Blu-ray`), watch status (`watched`/`unwatched`), or minimum user rating.
-- **`get_movie`**: Retrieve complete metadata for a title, including physical copies, digital storefronts, family user rating, full watch log history, and `custom_poster` (true when an editor uploaded their own cover in place of the TMDB poster). Certification comes back three ways: `certification` is the effective US rating the family sees, `certification_tmdb` is what TMDB reports, and `certification_override` is the editor's value (or null).
-- **`get_recommendations`**: Pick movies from the family's own collection. Parameters: `mode`, `genre`, `medium` (`physical`/`digital`), `max_runtime`, `min_rating`, `max_cert` (`G`, `PG`, `PG-13`, `R`, `NC-17`), `limit`, and `random`. Modes:
+- **`search_collection`**: Search movies by title text, genre, physical/digital medium, format (e.g. `4K UHD`, `Blu-ray`), watch status (`watched`/`unwatched`), minimum user rating, or `unseen_by` (same grammar as `audience`: only titles none of those people has seen, such as `unseen_by="kids"`).
+- **`get_movie`**: Retrieve complete metadata for a title, including physical copies, digital storefronts, family user rating, full watch log history, and `custom_poster` (true when an editor uploaded their own cover in place of the TMDB poster). Each watch also carries `attendance` (`recorded`, `assumed_everyone` or `assumed_adults`) and `attendees` (names), and the movie carries `seen_by` and `not_seen_by` (names; `not_seen_by` covers active people only). With nobody set up, those lists are empty. On the public `/api` (no key) none of these keys exist. Certification comes back three ways: `certification` is the effective US rating the family sees, `certification_tmdb` is what TMDB reports, and `certification_override` is the editor's value (or null).
+- **`get_recommendations`**: Pick movies from the family's own collection. Parameters: `mode`, `genre`, `medium` (`physical`/`digital`), `max_runtime`, `min_rating`, `max_cert` (`G`, `PG`, `PG-13`, `R`, `NC-17`), `audience` (see below), `limit`, and `random`. Modes:
   - `forgotten_gems`: Rated $\ge 8.0$ and unviewed for $> 12$ months.
   - `never_watched`: Unwatched movies ranked by TMDB rating.
   - `quick_picks`: Short movies under a given runtime limit (default $\le 95$m).
@@ -245,6 +245,8 @@ At `log` and `all` the service holds `MATINEE_API_KEY`, which can do everything 
   - **`max_cert` uses the effective rating.** An editor's override wins over the TMDB rating.
   - **`max_cert` is strict.** Any value outside the five above returns a 400 from the API. The MCP schema rejects it before it gets there.
   - **Empty results carry a `hint`.** Follow it (for example, "Try mode=start_franchise") instead of telling the user nothing matched.
+  - **`audience` picks for who is watching.** It takes `everyone`, `adults`, `kids` (the active people of that kind) or a comma list of names, such as `audience="Alice,Paige"`. A title counts as unwatched only if nobody in the audience has seen it; the franchise modes return the next film nobody in the audience has seen. The result carries an `audience` echo (`label` and `people`) and a `seen_by` list of names on every pick, so "Midge has seen it" is visible. An unknown name, or an audience with nobody in it, returns an error that lists who exists.
+- **`list_people`**: The family members Matinee knows, as `[{"id", "name", "kind", "color", "active"}]` with `kind` `adult` or `kid`. It is registered at every write level and is read-only. Use it to resolve a name before passing `audience`, `unseen_by` or `attendees`. The read key is enough: it can already read watch notes, and it also sees people and who attended each watch. A database older than schema v9, or one with nobody set up, returns `[]`.
 - **`get_collection_stats`**: Summary counts of physical discs, digital licenses, watch coverage %, and family rating averages.
 - **`search_tmdb`**: Search TMDB for movies not yet in the collection.
 - **`where_is`**: Where the disc is shelved or which service has it.
@@ -252,7 +254,7 @@ At `log` and `all` the service holds `MATINEE_API_KEY`, which can do everything 
 ### 5.2 Write Tools
 The remote service offers these only while `MATINEE_MCP_READONLY=0` and `MATINEE_MCP_WRITES` allows them: `rate_movie` and `log_watch` at `log` and `all`, `add_movie` at `all` (section 4.4). Over stdio all three are always available.
 - **`rate_movie`**: Set, update, or clear personal 0.0–10.0 ratings in 0.5 increments.
-- **`log_watch`**: Log a movie watch event with an ISO date (`YYYY-MM-DD`, defaults to today) and optional notes.
+- **`log_watch`**: Log a movie watch event with an ISO date (`YYYY-MM-DD`, defaults to today), optional notes, and optional `attendees` (a list of names). Leave `attendees` out when everyone watched; an empty list is refused by Matinee with a 400.
 - **`add_movie`**: Add a movie from TMDB into the library with physical/digital copy details.
 
 ### 5.3 Resources
@@ -260,17 +262,24 @@ The remote service offers these only while `MATINEE_MCP_READONLY=0` and `MATINEE
 - `matinee://recommendations`: Current top recommended movies from the collection in JSON format.
 
 ### 5.4 Prompts
-- **`what_to_watch`**: Interactive prompt guiding the AI to suggest a tailored movie night lineup based on mood, family preferences, or runtime limits. With `kids=True`, it tells the assistant to call `get_recommendations(max_cert="PG-13")` and to mention that unrated films were left out.
+- **`what_to_watch`**: Interactive prompt guiding the AI to suggest a tailored movie night lineup based on mood, family preferences, or runtime limits. With `kids=True`, it tells the assistant to call `get_recommendations(audience="kids", max_cert="PG-13")` and to mention that unrated films were left out.
 - **`log_movie_night`**: Quick assistant workflow to look up a movie just watched, log personal ratings, and record notes.
 
-### 5.5 Recommendation Recipes
+### 5.5 People: older servers and public mode
+
+`audience` and `unseen_by` only work against a server that knows about people. An older Matinee ignores them and would return an unfiltered list, so over REST (a key is set) the client first asks `GET /admin/api/people`. If that is a 404, or a recommendations response comes back without the `audience` echo, the tool fails with `This Matinee server is too old to pick for specific people. Update Matinee.` instead of returning a list that looks filtered. Over stdio with `MATINEE_DB_PATH` the same code that the app uses runs against the database directly, so nothing is probed. With no key at all (public `/api`) the client does not probe; Matinee answers 400 `Sign in to pick for specific people.` and that message is the tool error. For example, a service at `https://mcp.example.com` backed by `https://movies.example.com` needs `MATINEE_READ_KEY` for `audience="kids"` to work.
+
+### 5.6 Recommendation Recipes
 
 The server instructions map common requests to calls, so most phrasings work without spelling out parameters:
 
 | What the family says | What the assistant calls |
 |----------------------|--------------------------|
-| "Kids' night" / "something the kids can watch" | `get_recommendations(max_cert="PG-13")` |
-| "Kids' night, nothing above PG" | `get_recommendations(max_cert="PG")` |
+| "Kids' night" / "something the kids can watch" | `get_recommendations(audience="kids", max_cert="PG-13")` |
+| "Kids' night, nothing above PG" | `get_recommendations(audience="kids", max_cert="PG")` |
+| "Date night" / "just us two" | `get_recommendations(audience="adults")` |
+| "What's next in Harry Potter for Alice and Paige?" | `get_recommendations(mode="next_in_franchise", audience="Alice,Paige")` |
+| "Which of our movies have the girls not seen?" | `search_collection(unseen_by="kids")` |
 | "What's next in Harry Potter?" | `get_recommendations(mode="next_in_franchise")`, then keep the result whose `collection_name` is the Harry Potter collection |
 | "Let's start a new series" | `get_recommendations(mode="start_franchise")` |
 | "Something quick, and it has to be a disc" | `get_recommendations(mode="quick_picks", medium="physical")` |
