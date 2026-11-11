@@ -20,6 +20,7 @@ OUT=dist/setup-matinee.sh
 {
   cat installer/setup-head.sh
   echo "__PAYLOAD_BELOW__"
+  # shellcheck disable=SC2086  # TAR_EXTRA is empty or two flags: it must word-split
   ( cd "$STAGE" && tar $TAR_EXTRA -czf - matinee ) | base64
 } > "$OUT"
 chmod +x "$OUT"

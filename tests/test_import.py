@@ -1,6 +1,5 @@
-import io, os, sys, tempfile
+import sys
 from pathlib import Path
-import pytest
 
 # Ensure app can be imported
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))

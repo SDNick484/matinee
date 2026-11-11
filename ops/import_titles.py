@@ -7,7 +7,7 @@ Usage:
   python3 ops/import_titles.py movies.txt --format "Digital HD" --service "Movies Anywhere"
   python3 ops/import_titles.py collection.csv --dry-run
 """
-import argparse, csv, datetime as dt, os, re, sys, time
+import argparse, csv, datetime as dt, re, sys, time
 from pathlib import Path
 
 # Add project root to sys.path

@@ -1,5 +1,4 @@
 import pytest, sqlite3
-from unittest.mock import patch, MagicMock
 import app as matinee_app
 
 def test_migration_v4_to_v5(tmp_path, monkeypatch):

@@ -191,7 +191,7 @@ def test_log_watch_dateless_and_watched_at(monkeypatch):
     assert posted_payloads[-1][2]["notes"] == "Old tape"
 
     # 2. Log watch with watched_at
-    res2 = client.log_watch(title_id=42, watched_at="2024-03-01")
+    client.log_watch(title_id=42, watched_at="2024-03-01")
     assert posted_payloads[-1][2]["watched_date"] == "2024-03-01"
 
     # 3. FastMCP tool wrapper accepts watched_at optional
@@ -492,7 +492,6 @@ def test_build_server_is_independent():
 
 # --------------------------------------------------------------- MatineeError messages
 import io
-import json as _json
 import socket
 import threading
 import time

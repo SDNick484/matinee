@@ -1,4 +1,3 @@
-import pytest
 from app import clean_upc_title, connect, init_db
 
 

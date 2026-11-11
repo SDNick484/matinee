@@ -825,7 +825,6 @@ def test_watches_api_and_filters(monkeypatch):
     t2_date = "2025-01-10"
     res3 = c.post(f"/admin/api/titles/{t2['id']}/watches", json={"watched_date": t2_date})
     assert res3.status_code == 200
-    w3 = res3.get_json()["watch"]
 
     # 5. Invalid date rejected with 400
     bad_res = c.post(f"/admin/api/titles/{t1['id']}/watches", json={"watched_date": "not-a-date"})
@@ -884,7 +883,7 @@ def test_stats_watched_and_rating():
     import datetime as dt
     t1 = add(129)
     t2 = add(194)
-    t3 = add(10681)
+    add(10681)
 
     c.put(f"/admin/api/titles/{t1['id']}/rating", json={"rating": 9.0})
     c.put(f"/admin/api/titles/{t2['id']}/rating", json={"rating": 7.0})
@@ -917,7 +916,6 @@ def test_static_app_js_no_undefined_escapeHtml():
 
 # ------------------------------------------------------------------- certification override (v7)
 def test_migration_v7_idempotent(tmp_path, monkeypatch):
-    import sqlite3
     con = sqlite3.connect(tmp_path / "v6.db")
     con.row_factory = sqlite3.Row
     con.executescript(matinee.SCHEMA)

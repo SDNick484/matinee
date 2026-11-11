@@ -1,0 +1,15 @@
+# CI-only lint (see .github/workflows/ci.yml). ruff is not a runtime dependency.
+# Deliberately minimal: pyflakes (F) plus pycodestyle errors (E). No formatting is enforced.
+target-version = "py310"
+line-length = 220          # the longest line in the tree is 210 characters (tests/test_omdb.py)
+extend-exclude = ["dist", "openspec"]
+
+[lint]
+select = ["E", "F"]
+ignore = [
+    "E401",  # `import a, b` on one line is the house style
+    "E402",  # ops/*.py and tests set sys.path or env before importing the app on purpose
+    "E701",  # `if x: y` one-liners
+    "E702",  # `a; b` one-liners
+    "E741",  # short names such as `l` in comprehensions
+]

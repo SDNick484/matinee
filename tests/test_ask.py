@@ -550,7 +550,6 @@ def test_unexpected_error_is_502(lib, monkeypatch):
 
 
 def test_missing_db_is_502_and_no_outbound(lib, monkeypatch, tmp_path):
-    import ask
     outbound = []
     monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **kw: outbound.append(a))
 

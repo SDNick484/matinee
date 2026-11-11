@@ -1,6 +1,6 @@
 import sqlite3
 import pytest
-from app import app, init_db, connect, migrate, get_locations, get_descendant_location_ids, get_location_path_map
+from app import app, init_db, connect, migrate, get_locations, get_descendant_location_ids
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
