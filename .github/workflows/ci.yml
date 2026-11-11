@@ -36,7 +36,7 @@ jobs:
 
       - name: shellcheck (POSIX sh)
         run: |
-          shellcheck -s sh installer/setup-head.sh installer/build.sh ops/matinee-backup ops/matinee-refresh
+          shellcheck -s sh installer/setup-head.sh installer/build.sh ops/matinee-backup ops/matinee-refresh ops/matinee-restore-test
 
       - name: ruff check
         run: |

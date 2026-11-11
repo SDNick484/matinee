@@ -1,0 +1,71 @@
+#!/bin/sh
+# Weekly restore test for the Matinee backups (installed by setup-matinee.sh). Runs from /etc/periodic/weekly.
+# A backup nobody has opened is only a hope, so this unpacks the newest local database backup into a
+# temp file and checks that it is a usable database. It never touches the live database or its images.
+#   1. the newest $LOCAL_DIR/<date>/matinee-matinee.db.gz exists and is under MAX_AGE_HOURS old
+#   2. it gunzips, and PRAGMA integrity_check says ok
+#   3. it has titles and copies tables that can be counted (counts are logged)
+#   4. the custom-covers tarball next to it, if there is one, lists cleanly
+# Config: /etc/conf.d/ops     Log: /var/log/ops.log     Runbook: docs/restore.md
+# (LOCAL_DIR, LOG, MAX_AGE_HOURS and NOTIFY may be overridden for a local test run.)
+set -u
+OPS_CONF=${OPS_CONF:-/etc/conf.d/ops}
+[ -f /etc/conf.d/ct210-ops ] && OPS_CONF=/etc/conf.d/ct210-ops
+# shellcheck source=/dev/null  # optional config, path comes from the environment
+[ -f "$OPS_CONF" ] && . "$OPS_CONF"
+LOCAL_DIR=${LOCAL_DIR:-/var/backups/matinee}
+LOG=${LOG:-/var/log/ops.log}
+MAX_AGE_HOURS=${MAX_AGE_HOURS:-48}
+NOTIFY=${NOTIFY:-}
+log() { echo "$(date '+%F %T') matinee-restore-test: $*" >> "$LOG"; }
+
+notify_failure() {
+  msg="The weekly Matinee restore test failed: $1 See $LOG and docs/restore.md."
+  if [ -n "$NOTIFY" ]; then
+    "$NOTIFY" "Matinee restore test" down "$msg"
+  elif [ -x /usr/local/bin/ops-notify ]; then
+    /usr/local/bin/ops-notify "Matinee restore test" down "$msg"
+  elif [ -x /usr/local/bin/ct210-notify ]; then
+    /usr/local/bin/ct210-notify "Matinee restore test" down "$msg"
+  fi
+}
+fail() { log "FAILED: $*"; notify_failure "$*"; exit 1; }
+
+command -v sqlite3 >/dev/null 2>&1 || fail "sqlite3 is not installed."
+
+# newest dated folder that actually holds a database backup (folder names are YYYY-MM-DD, so they sort by date)
+gz=""
+for d in "$LOCAL_DIR"/*/; do   # the glob expands in name order, so the last folder with a backup is the newest
+  [ -f "${d}matinee-matinee.db.gz" ] && gz="${d}matinee-matinee.db.gz"
+done
+[ -n "$gz" ] || fail "no matinee-matinee.db.gz found under $LOCAL_DIR."
+
+# a backup job that stopped running would otherwise leave this test happily checking an old file
+if [ -n "$(find "$gz" -mmin +$((MAX_AGE_HOURS * 60)) 2>/dev/null)" ]; then
+  fail "the newest backup ($gz) is more than $MAX_AGE_HOURS hours old; is the nightly backup running?"
+fi
+
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/matinee-restore-test.XXXXXX") || fail "could not create a temp directory."
+trap 'rm -rf "$tmp"' EXIT INT TERM
+db="$tmp/matinee.db"
+
+gunzip -c "$gz" > "$db" 2>/dev/null || fail "$gz does not gunzip."
+[ -s "$db" ] || fail "$gz is empty."
+
+check=$(sqlite3 "$db" 'PRAGMA integrity_check;' 2>&1)
+[ "$check" = "ok" ] || fail "integrity_check on $gz said: $(echo "$check" | head -n 1)"
+
+titles=$(sqlite3 "$db" 'SELECT COUNT(*) FROM titles;' 2>&1) || fail "$gz has no readable titles table: $titles"
+copies=$(sqlite3 "$db" 'SELECT COUNT(*) FROM copies;' 2>&1) || fail "$gz has no readable copies table: $copies"
+case "$titles$copies" in *[!0-9]*) fail "$gz gave non-numeric counts (titles=$titles copies=$copies).";; esac
+
+covers="$(dirname "$gz")/matinee-custom-covers.tar.gz"
+note=""
+if [ -f "$covers" ]; then
+  n=$(tar -tzf "$covers" 2>/dev/null | wc -l | tr -d ' ') || n=0
+  [ "$n" -gt 0 ] 2>/dev/null || fail "$covers does not list as a tar archive."
+  note=", $n custom covers"
+fi
+
+log "ok $(basename "$(dirname "$gz")"): integrity ok, $titles titles, $copies copies$note"
+exit 0
