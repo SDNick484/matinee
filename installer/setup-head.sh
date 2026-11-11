@@ -24,9 +24,9 @@ if [ "${1:-}" = "--uninstall" ]; then
   rc-update del matinee-mcp default 2>/dev/null || true
   rc-service matinee stop 2>/dev/null || true
   rc-update del matinee default 2>/dev/null || true
-  rm -f /etc/init.d/matinee /etc/init.d/matinee-mcp /etc/periodic/daily/matinee-backup /etc/periodic/daily/matinee-refresh
+  rm -f /etc/init.d/matinee /etc/init.d/matinee-mcp /etc/periodic/daily/matinee-backup /etc/periodic/daily/matinee-refresh /etc/periodic/weekly/matinee-restore-test
   rm -rf "$APP_DIR" /opt/matinee-mcp
-  echo "Removed app, service and backup job. Data kept in $DATA_DIR, config in $CONF, backups in /var/backups/matinee."
+  echo "Removed app, service and backup, refresh and restore-test jobs. Data kept in $DATA_DIR, config in $CONF, backups in /var/backups/matinee."
   exit 0
 fi
 
@@ -198,10 +198,11 @@ echo "==> Installing MCP HTTP service (pip venv)"
 apk add --no-cache py3-pip >/dev/null 2>&1 && python3 -m venv "$MCP_VENV" && "$MCP_VENV/bin/pip" install --no-cache-dir -q -r "$APP_DIR/requirements-mcp.txt" && MCP_OK=1 || { MCP_OK=0; echo "    WARNING: could not set up the MCP venv (needs PyPI access); matinee-mcp will not start. Re-run this installer to retry."; }
 
 # ---------------------------------------------------------------- backups & maintenance
-echo "==> Installing nightly backup and maintenance jobs"
-mkdir -p /etc/periodic/daily
+echo "==> Installing nightly backup and refresh jobs and the weekly restore test"
+mkdir -p /etc/periodic/daily /etc/periodic/weekly
 install -m 755 "$APP_DIR/ops/matinee-backup" /etc/periodic/daily/matinee-backup
 install -m 755 "$APP_DIR/ops/matinee-refresh" /etc/periodic/daily/matinee-refresh
+install -m 755 "$APP_DIR/ops/matinee-restore-test" /etc/periodic/weekly/matinee-restore-test
 rc-update add crond default >/dev/null 2>&1 || true
 rc-service crond start >/dev/null 2>&1 || true
 

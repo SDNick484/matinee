@@ -85,6 +85,17 @@ def test_health_check_and_uninstall():
     assert "matinee-mcp" in block and "/opt/matinee-mcp" in block
 
 
+def test_restore_test_is_installed_weekly_and_removed_on_uninstall():
+    assert 'install -m 755 "$APP_DIR/ops/matinee-restore-test" /etc/periodic/weekly/matinee-restore-test' in HEAD
+    assert "mkdir -p /etc/periodic/daily /etc/periodic/weekly" in HEAD
+    block = HEAD[HEAD.index('"--uninstall"'):HEAD.index("exit 0")]
+    assert "/etc/periodic/weekly/matinee-restore-test" in block
+    # the build ships all of ops/, so the new scripts travel with it
+    assert re.search(r"\bops\b", BUILD)
+    for f in ("matinee-restore-test", "refresh_titles.py"):
+        assert (ROOT / "ops" / f).exists()
+
+
 def test_build_copies_mcp_files():
     for f in ("mcp_http.py", "mcp_remote.py", "requirements-mcp.txt"):
         assert f in BUILD, f
