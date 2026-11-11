@@ -354,7 +354,7 @@ def test_people_button_is_admin_only():
     assert calls, "router.js never calls loadPeople()"
     for stmt in calls:
         # the guard must be part of the same statement: `if (isAdmin) loadPeople()`
-        assert re.fullmatch(r"\s*if \(isAdmin\) loadPeople\(\)", stmt), f"loadPeople() not guarded in its own statement: {stmt!r}"
+        assert re.fullmatch(r"\s*if \(isAdmin\) state\.peopleReady = loadPeople\(\)", stmt), f"loadPeople() not guarded in its own statement: {stmt!r}"
 
 
 # Reviewed-safe interpolation forms in people.js: escaped text, numeric ids/counts, fixed-token locals
@@ -428,7 +428,7 @@ def test_who_watched_renders_only_for_editors_with_people():
     assert re.search(r"const showWho = people\.length > 0;", DETAIL_JS)
     assert re.search(r"\$\{showWho \? whoRowHTML\(\) : \"\"\}", DETAIL_JS)          # the toggle row
     assert "if (!showWho) return \"\";" in DETAIL_JS                                    # the row editor's dots
-    assert "if (isAdmin) await loadPeople();" in DETAIL_JS
+    assert "if (isAdmin && state.peopleReady) await state.peopleReady;" in DETAIL_JS
     # the body key exists only when the row does
     assert re.search(r"attendeesBody = \(\) => \(whoRow \? \{ attendees: readToggles\(whoRow\) \} : \{\}\);", DETAIL_JS)
 
@@ -442,6 +442,8 @@ def test_all_three_log_calls_send_attendees():
 
 def test_log_buttons_disable_when_nobody_is_on_and_editor_saves_with_put():
     assert "b.disabled = none" in DETAIL_JS
+    assert re.search(r"\.watch-header-actions \.btn:disabled\s*\{\s*opacity", CSS)
+    assert 'aria-label="Change who watched"' not in DETAIL_JS and 'class="sr-only"' in DETAIL_JS   # WCAG 2.5.3
     assert re.search(r"/watches/\$\{w\.id\}/attendees`", DETAIL_JS) and 'method: "PUT"' in DETAIL_JS
 
 

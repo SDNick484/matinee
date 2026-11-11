@@ -166,7 +166,7 @@ import { loadPeople, openPeopleModal } from "./people.js";
     if (isAdmin) updateHeader();
   });
   // People (editors only): never awaited, so it cannot hold first paint.
-  if (isAdmin) loadPeople();
+  if (isAdmin) state.peopleReady = loadPeople();
 
   async function handleRoute() {
     closeModal();

@@ -2617,12 +2617,31 @@ main#view {
   color: var(--page);
 }
 .who-watched {
+  flex: 1 1 100%;       /* its own line under "+ Watched Today" on phones */
   display: flex;
   align-items: center;
   gap: var(--s3);
   flex-wrap: wrap;
-  margin-bottom: var(--s3);
 }
+@media (min-width: 900px) {
+  /* desktop (spec 7.2): the row sits beside the button */
+  .watch-section-header { align-items: center; justify-content: flex-start; }
+  .watch-section-header > :first-child { margin-right: auto; }
+  .who-watched { flex: none; }
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+.watch-log-form .btn:disabled,
+.watch-header-actions .btn:disabled { opacity: .35; cursor: default; }
 .who-watched-label {
   font-size: var(--fs-sm);
   color: var(--ink-2);

@@ -77,16 +77,20 @@ def _json(route, body, status=200):
     route.fulfill(status=status, content_type="application/json", body=json.dumps(body))
 
 
+def _mark_stale(page):
+    """Tag the current title view so a later wait can tell a fresh render from the pre-action DOM."""
+    page.evaluate("document.querySelector('.detail-view').dataset.stale = '1'")
+
+
 def _settled(page, posts, n):
-    """Wait for the n-th log POST to land and the title view to finish re-rendering after it."""
-    for _ in range(100):
+    """Wait for the n-th log POST, then for a title view that replaced the one marked by _mark_stale."""
+    for _ in range(250):
         if len(posts) >= n:
             break
         page.wait_for_timeout(20)
     assert len(posts) == n
-    page.wait_for_function("document.querySelector('#who-watched-row .person-toggle') && "
-                           "!document.getElementById('view').textContent.includes('Loading movie details')")
-    page.wait_for_timeout(50)
+    page.wait_for_function("document.querySelector('.detail-view') && !document.querySelector('.detail-view[data-stale]')"
+                           " && document.querySelector('#who-watched-row .person-toggle')")
 
 
 def _open(browser, server, people, width=412, put_status=200):
@@ -137,6 +141,7 @@ def test_who_watched_log_and_row_editor_at_412_and_360(server, browser):
     # turn Midge, Alice and Paige off: attendees [1, 2]
     for pid in (3, 4, 5):
         page.click(f'#who-watched-row .person-toggle[data-person-id="{pid}"]')
+    _mark_stale(page)
     page.click("#btn-watched-today")
     _settled(page, posts, 1)
     assert set(posts[0]) == {"watched_date", "attendees"} and posts[0]["attendees"] == [1, 2]
@@ -147,10 +152,12 @@ def test_who_watched_log_and_row_editor_at_412_and_360(server, browser):
     assert page.is_disabled("#btn-watched-today") and page.is_disabled("#btn-log-watch")
     assert all(page.locator(".btn-watch-bucket").nth(i).is_disabled() for i in range(6))
     page.click('#who-watched-row .person-toggle[data-person-id="5"]')
+    _mark_stale(page)
     page.click('.btn-watch-bucket[data-bucket="past_year"]')
     _settled(page, posts, 2)
     assert posts[-1] == {"date_bucket": "past_year", "attendees": [5]}
     page.fill("#input-watch-date", "2026-11-01")
+    _mark_stale(page)
     page.click("#btn-log-watch")
     _settled(page, posts, 3)
     assert posts[-1] == {"watched_date": "2026-11-01", "attendees": [1, 2, 3, 4, 5]}
@@ -158,6 +165,9 @@ def test_who_watched_log_and_row_editor_at_412_and_360(server, browser):
     # saved watches: recorded shows dots; the old one shows ? and "assumed adults"
     recorded, old = page.locator('.watch-row[data-watch-id="88"]'), page.locator('.watch-row[data-watch-id="12"]')
     assert recorded.locator(".person-dot").count() == 2 and "assumed" not in recorded.inner_text()
+    # the dots button's accessible name comes from its content, not an overriding aria-label (WCAG 2.5.3)
+    assert recorded.locator(".watch-who-btn").get_attribute("aria-label") is None
+    assert "Nick, watched" in recorded.locator(".watch-who-btn").inner_html()
     assert old.locator(".person-unknown").inner_text() == "?"
     assert "assumed adults" in old.inner_text()
 
@@ -218,6 +228,36 @@ def test_no_people_means_todays_title_view(server, browser):
     page, posts, puts, errors = _open(browser, server, [])
     assert page.locator("#who-watched-row").count() == 0 and page.locator(".watch-who-btn").count() == 0
     page.click("#btn-watched-today")
-    page.wait_for_timeout(100)
+    for _ in range(250):
+        if posts:
+            break
+        page.wait_for_timeout(20)
     assert posts == [{"watched_date": posts[0]["watched_date"]}]
+    assert errors == []
+
+
+def test_expanded_row_keeps_its_place_after_cancel_and_save(server, browser):
+    page, posts, puts, errors = _open(browser, server, PEOPLE)
+    # reopen with four watches so the 4th sits behind "Show all"
+    extra = {"id": 12, "watched_date": "2010-01-01", "date_bucket": None, "notes": None,
+             "attendance": "recorded", "attendees": [1, 2]}
+    four = [dict(TITLE["watches"][0], id=90 + i) for i in range(3)] + [extra]
+    page.route("**/admin/api/titles/1", lambda r: _json(r, {**TITLE, "watches": four}))
+    page.reload()
+    page.wait_for_selector(".detail-view")
+    row = page.locator('.watch-row[data-watch-id="12"]')
+    assert not row.is_visible()
+    page.click("#btn-toggle-watches")
+    assert row.is_visible()
+
+    row.locator(".watch-who-btn").click()
+    row.locator(".watch-who-cancel").click()
+    assert row.locator(".watch-who-editor").count() == 0 and row.is_visible()
+
+    row.locator(".watch-who-btn").click()
+    row.locator('.watch-who-editor .person-toggle[data-person-id="3"]').click()
+    row.locator(".watch-who-save").click()
+    page.wait_for_selector('.watch-row[data-watch-id="12"]:not(.is-editing)')
+    assert puts == [("titles/1/watches/12/attendees", {"attendees": [1, 2, 3]})]
+    assert row.is_visible() and row.locator(".person-dot").count() == 3
     assert errors == []

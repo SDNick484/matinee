@@ -5,7 +5,7 @@ import {
   icon
 } from "./icons.js";
 import { navigate } from "./router.js";
-import { activePeople, loadPeople, personDotsHTML, personTogglesHTML, readToggles } from "./people.js";
+import { activePeople, personDotsHTML, personTogglesHTML, readToggles } from "./people.js";
 import {
   downscaleImage, MAX_COVER_BYTES, openCopyModal, openCoverPreviewModal, openEditCopyModal
 } from "./forms.js";
@@ -100,7 +100,7 @@ import {
     const copies = title.copies || [];
 
     // "Who watched" (editors only, and only once a person exists): otherwise this view is exactly as before.
-    if (isAdmin) await loadPeople();
+    if (isAdmin && state.peopleReady) await state.peopleReady;   // started once by router.js
     const people = isAdmin ? activePeople() : [];
     const showWho = people.length > 0;
     const whoLabel = "Who watched";
@@ -119,7 +119,7 @@ import {
     const watchWhoHTML = (w) => {
       if (!showWho) return "";
       const assumed = w.attendance === "assumed_adults" ? "adults" : w.attendance === "assumed_everyone" ? "everyone" : null;
-      return `<button type="button" class="watch-who-btn" aria-label="Change who watched" aria-expanded="false">${personDotsHTML(w.attendees || [], { assumed })}</button>`;
+      return `<button type="button" class="watch-who-btn" aria-expanded="false">${personDotsHTML(w.attendees || [], { assumed })}<span class="sr-only">, change who watched</span></button>`;
     };
     const watchRowHTML = (w, idx) => `
                 <div class="watch-row ${idx >= 3 ? "watch-row-extra hidden" : ""}" data-watch-id="${w.id}">
@@ -266,9 +266,8 @@ import {
             `
                 : ""
             }
+            ${showWho ? whoRowHTML() : ""}
           </div>
-
-          ${showWho ? whoRowHTML() : ""}
 
           ${
             isAdmin
@@ -694,7 +693,7 @@ import {
         const tmp = document.createElement("div");
         tmp.innerHTML = watchRowHTML(w, idx).trim();
         const fresh = tmp.firstElementChild;
-        if (hidden) fresh.classList.add("hidden");
+        fresh.classList.toggle("hidden", hidden);   // keep the row's current visibility (Show all)
         row.replaceWith(fresh);
         bindWatchRow(fresh);
       }
