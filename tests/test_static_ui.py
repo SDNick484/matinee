@@ -350,27 +350,46 @@ def test_people_button_is_admin_only():
     admin_branch, _, anon_branch = header.partition("} else {")
     assert 'id="btn-header-people"' in admin_branch and 'id="btn-header-people"' not in anon_branch
     # loadPeople() is only ever called behind isAdmin
-    calls = [m.start() for m in re.finditer(r"loadPeople\(\)", router)]
+    calls = re.findall(r"[^\n;{}]*\bloadPeople\(\)", router)
     assert calls, "router.js never calls loadPeople()"
-    for pos in calls:
-        assert "isAdmin" in router[max(0, pos - 200):pos], "loadPeople() call not guarded by isAdmin"
+    for stmt in calls:
+        # the guard must be part of the same statement: `if (isAdmin) loadPeople()`
+        assert re.fullmatch(r"\s*if \(isAdmin\) loadPeople\(\)", stmt), f"loadPeople() not guarded in its own statement: {stmt!r}"
+
+
+# Reviewed-safe interpolation forms in people.js: escaped text, numeric ids/counts, fixed-token locals
+# (COLORS, kinds), pre-built HTML fragments and icon()/helper calls. A bare ${p.name} is none of these.
+SAFE_INTERP_EXACT = {
+    "c", "k", "id", "p.id", "p.watch_count", "label", "who", "dots", "buttons", "swatches", "activateBtn", "removeBtn",
+    "personInitial(p)", 'icon("dot")', 'icon("trash")', 'kindBtn("adult", "Adult")', 'kindBtn("kid", "Kid")',
+    "p.watch_count === 1 ? \"watch\" : \"watches\"",
+    "p.active ? \"\" : \" is-inactive\"", "p.active ? \"\" : \" · inactive\"",
+    "p.kind === k ? \" is-on\" : \"\"",
+    "idx === 0 ? \"disabled\" : \"\"", "idx === total - 1 ? \"disabled\" : \"\"",
+    "p.color === c ? \"true\" : \"false\"", "p.kind === k ? \"true\" : \"false\"", "on.has(p.id) ? \"true\" : \"false\"",
+}
+SAFE_INTERP_PREFIX = ("esc(", "COLORS.map((c) =>", "people.length ? people.map((p, i) => personRowHTML(")
 
 
 def test_person_names_are_escaped():
+    """Every ${...} in people.js must be a known-safe form; anything else (a bare ${p.name}) fails."""
     assert PEOPLE_JS
-    interps = re.findall(r"\$\{([^}]*name[^}]*)\}", PEOPLE_JS)
-    assert interps, "no name interpolations found"
+    interps = re.findall(r"\$\{((?:[^{}]|\{[^{}]*\})*)\}", PEOPLE_JS)
+    assert interps, "no interpolations found"
     for expr in interps:
-        assert expr.strip().startswith("esc("), f"unescaped name in template: ${{{expr}}}"
+        e = expr.strip()
+        assert e in SAFE_INTERP_EXACT or e.startswith(SAFE_INTERP_PREFIX), f"unreviewed interpolation: ${{{e}}}"
 
 
 def test_dots_carry_full_name_labels():
     for fn in ("personDotsHTML", "personTogglesHTML"):
         m = re.search(rf"function {fn}\(.*?\n  \}}\n", PEOPLE_JS, re.S)
         assert m, fn
-        body = m.group(0)
-        assert re.search(r'aria-label="\$\{esc\(p\.name\)\}', body), f"{fn} must label with the full name"
-        assert not re.search(r'aria-label="[^"]*initial', body)
+        labels = re.findall(r'aria-label="(.{0,24})', m.group(0))
+        assert labels, f"{fn} has no aria-label"
+        for label in labels:      # every label: the escaped full name (dots, toggles) or the caller's group label
+            assert label.startswith(("${esc(p.name)}", "${esc(groupLabel")), f"{fn}: aria-label {label!r}"
+        assert any(x.startswith("${esc(p.name)}") for x in labels), fn
     assert "aria-pressed" in PEOPLE_JS
 
 
@@ -397,3 +416,36 @@ def test_people_css_uses_defined_properties():
 def test_people_code_has_no_browser_storage():
     assert PEOPLE_JS
     assert "localStorage" not in PEOPLE_JS and "sessionStorage" not in PEOPLE_JS
+
+
+# --- Title view: who watched ------------------------------------------------------------------
+
+DETAIL_JS = (STATIC / "js" / "detail.js").read_text(encoding="utf-8")
+
+
+def test_who_watched_renders_only_for_editors_with_people():
+    assert re.search(r"const people = isAdmin \? activePeople\(\) : \[\];", DETAIL_JS)
+    assert re.search(r"const showWho = people\.length > 0;", DETAIL_JS)
+    assert re.search(r"\$\{showWho \? whoRowHTML\(\) : \"\"\}", DETAIL_JS)          # the toggle row
+    assert "if (!showWho) return \"\";" in DETAIL_JS                                    # the row editor's dots
+    assert "if (isAdmin) await loadPeople();" in DETAIL_JS
+    # the body key exists only when the row does
+    assert re.search(r"attendeesBody = \(\) => \(whoRow \? \{ attendees: readToggles\(whoRow\) \} : \{\}\);", DETAIL_JS)
+
+
+def test_all_three_log_calls_send_attendees():
+    for body in ("{ watched_date: todayIso, ...attendeesBody() }", "{ watched_date: val, ...attendeesBody() }",
+                 "{ date_bucket: bucket, ...attendeesBody() }"):
+        assert body in DETAIL_JS, body
+    assert len(re.findall(r"/watches`, \{\s*method: \"POST\"", DETAIL_JS)) == 3
+
+
+def test_log_buttons_disable_when_nobody_is_on_and_editor_saves_with_put():
+    assert "b.disabled = none" in DETAIL_JS
+    assert re.search(r"/watches/\$\{w\.id\}/attendees`", DETAIL_JS) and 'method: "PUT"' in DETAIL_JS
+
+
+def test_person_toggle_off_state_text_is_ink_2():
+    base = _rule(".person-toggle")
+    assert "color: var(--ink-2)" in base
+    assert "var(--page)" in _rule('.person-toggle[aria-pressed="true"]')

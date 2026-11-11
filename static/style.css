@@ -2606,7 +2606,7 @@ main#view {
   border-radius: 50%;
   border: 2px solid var(--pc, var(--line));
   background: transparent;
-  color: var(--ink);
+  color: var(--ink-2);
   font: inherit;
   font-weight: 700;
   cursor: pointer;
@@ -2616,6 +2616,47 @@ main#view {
   background: var(--pc, var(--line));
   color: var(--page);
 }
+.who-watched {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  flex-wrap: wrap;
+  margin-bottom: var(--s3);
+}
+.who-watched-label {
+  font-size: var(--fs-sm);
+  color: var(--ink-2);
+}
+.watch-who-btn {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 var(--s1);
+  background: none;
+  border: 0;
+  border-radius: var(--r-card);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.watch-who-btn:focus-visible {
+  outline: 2px solid var(--accent-text);
+  outline-offset: 2px;
+}
+.watch-row.is-editing { flex-wrap: wrap; }
+.watch-who-editor {
+  flex: 1 1 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  padding-top: var(--s2);
+}
+.watch-who-actions { display: flex; gap: var(--s2); }
+.watch-who-actions .btn { min-height: 44px; min-width: 44px; }
+.watch-who-actions .btn:disabled { opacity: .35; cursor: default; }
+.watch-who-error { color: var(--danger); font-size: var(--fs-xs); }
+.watch-who-error:empty { display: none; }
 .person-toggle:focus-visible,
 .people-swatch:focus-visible,
 .people-kind:focus-visible {

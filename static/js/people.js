@@ -37,10 +37,12 @@ import { closeModal } from "./forms.js";
     return `<span class="person-dots">${dots}<span class="person-dot person-unknown" title="Assumed ${who}" aria-hidden="true">?</span><span class="person-assumed">assumed ${who}</span></span>`;
   }
 
-  // One 44 px toggle per active person. selectedIds are pressed; groupLabel names the group for screen readers.
+  // One 44 px toggle per active person (plus any inactive person in selectedIds). selectedIds are pressed; groupLabel names the group for screen readers.
   function personTogglesHTML(selectedIds, groupLabel) {
     const on = new Set(selectedIds || []);
-    const buttons = activePeople()
+    // An inactive person stays visible while they are one of the selected (a past watch they were at).
+    const buttons = (state.people || [])
+      .filter((p) => p.active || on.has(p.id))
       .map((p) => `<button type="button" class="person-toggle person-${esc(p.color)}" data-person-id="${p.id}" aria-pressed="${on.has(p.id) ? "true" : "false"}" aria-label="${esc(p.name)}" title="${esc(p.name)}">${personInitial(p)}</button>`)
       .join("");
     return `<div class="person-toggles" role="group" aria-label="${esc(groupLabel || "People")}">${buttons}</div>`;
@@ -200,6 +202,5 @@ import { closeModal } from "./forms.js";
     await renderPeopleModal();
   }
 
-// Tasks 8 and 9 add activePeople, personDotsHTML, personTogglesHTML and readToggles here as they import them
-// (tests/test_js_modules.py rejects an export nothing imports).
-export { loadPeople, openPeopleModal };
+// Task 9 adds the rest here as it imports them (tests/test_js_modules.py rejects an export nothing imports).
+export { activePeople, loadPeople, openPeopleModal, personDotsHTML, personTogglesHTML, readToggles };
