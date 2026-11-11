@@ -200,11 +200,17 @@ def test_tool_defs_read_only():
     import ask
     names = [d["name"] for d in ask.tool_defs()]
     assert names == ["search_collection", "get_movie", "where_is", "get_recommendations",
-                     "get_collection_stats", "show_results"]
+                     "get_collection_stats", "list_people", "show_results"]
     blob = json.dumps(ask.tool_defs()) + ask.SYSTEM
     assert not any(x in blob for x in EXCLUDED)
     desc = dict((n, d) for n, _, d, _ in ask.TOOLS)["get_recommendations"]
     assert "max_cert" in desc and "next_in_franchise" in desc and "unrated" in desc.lower()
+
+
+def test_system_prompt_maps_groups_to_audience():
+    import ask
+    assert 'audience="kids"' in ask.SYSTEM and 'audience="adults"' in ask.SYSTEM
+    assert "If a tool answers that no people are set up, repeat the call without audience." in ask.SYSTEM
 
 
 def test_schemas_match_client_signatures():
@@ -592,6 +598,28 @@ def test_kids_follow_up_thread(lib):
     assert msgs == [{"role": "user", "content": "something for kids' night"},
                     {"role": "assistant", "content": "Toy Story 3 and Inside Out."},
                     {"role": "user", "content": "only PG"}]
+
+
+def test_run_tool_passes_audience(lib):
+    from conftest import seed_people
+    with app.app_context():
+        con = db()
+        p = seed_people(con)
+        for name, who in (("inside_out", ("Nick", "Lauren")),
+                          ("toy_story_3", ("Nick", "Lauren", "Midge", "Alice", "Paige"))):
+            wid = con.execute("INSERT INTO watches (title_id, watched_date) VALUES (?, date('now', '-1 day'))",
+                              (lib.ids[name],)).lastrowid
+            for w in who:
+                con.execute("INSERT INTO watch_people (watch_id, person_id) VALUES (?, ?)", (wid, p[w]))
+        con.commit()
+    io_id = lib.ids["inside_out"]
+    fake = lib.script(resp(tool_use("get_recommendations", {"mode": "never_watched", "audience": "kids"})),
+                      resp(show("Inside Out.", [io_id])))
+    body = post(lib.client, [{"q": "something the girls haven't seen"}]).get_json()
+    result = fake.bodies[1]["messages"][2]["content"][0]
+    assert "is_error" not in result
+    assert "Inside Out" in result["content"] and "Toy Story 3" not in result["content"]
+    assert [i["id"] for i in body["items"]] == [io_id]
 
 
 def test_run_tool_missing_required_args_is_clean(client, monkeypatch):

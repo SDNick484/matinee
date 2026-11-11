@@ -212,7 +212,7 @@ See [docs/mcp-setup.md](docs/mcp-setup.md) for full configuration blocks and pro
 - Worst case: one question can reach roughly 100-150k input tokens (several tool calls per round, each result up to 12k characters), about $0.02-0.04. It is still bounded by 5 rounds, the daily cap and an Anthropic Console spend limit.
 - At the default cap of 200 a day: about $0.26 a day typically, and at most about $8 a day if every question hit the worst case.
 
-**Data sent to Anthropic**: each question and the results of the collection lookups the model makes, which can include personal ratings and watch notes. No images are sent. Question text is not stored locally; token counts are logged per question in the `ask_log` table.
+**Data sent to Anthropic**: each question and the results of the collection lookups the model makes, which can include personal ratings and watch notes. When a tool result carries them, people's first names and who watched what are sent too. No images are sent. Question text is not stored locally; token counts are logged per question in the `ask_log` table.
 
 ---
 
