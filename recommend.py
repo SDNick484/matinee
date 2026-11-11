@@ -102,6 +102,7 @@ SEEN_CTE = """seen(title_id, person_id, watched_date) AS (
 ATTENDANCE = ("recorded", "assumed_everyone", "assumed_adults")
 AUDIENCE_KEYWORDS = {"everyone": None, "adults": "adult", "kids": "kid"}
 _NO_PEOPLE = "No people are set up yet. Add them under People in the admin view."
+_MAX_ROWID = 2 ** 63 - 1  # SQLite's largest integer; a bigger id cannot be bound, so it is simply unknown
 
 
 def _field(row, key):
@@ -123,10 +124,10 @@ def _ten_years_before(today: dt.date) -> str:
 def attendance_of(watch_row, has_attendees: bool, today: "dt.date | None" = None) -> str:
     """'recorded', 'assumed_everyone' or 'assumed_adults' for one watch, by the same rule as SEEN_CTE.
     `watch_row` needs `watched_date` and `date_bucket` (a dict or sqlite3.Row). Dates compare as text, as
-    SQLite compares them."""
+    SQLite compares them. `today` defaults to the UTC date, which is what SQLite's date('now') uses."""
     if has_attendees:
         return "recorded"
-    cutoff = _ten_years_before(today or dt.date.today())
+    cutoff = _ten_years_before(today or dt.datetime.now(dt.timezone.utc).date())
     day = _field(watch_row, "watched_date")
     if (_field(watch_row, "date_bucket") or "") == "over_10_years" or (day is not None and day < cutoff):
         return "assumed_adults"
@@ -162,8 +163,9 @@ def resolve_audience(con, raw: str) -> dict:
 
     people, seen_ids = [], set()
     for token in tokens:
-        if token.isdigit():
-            row = con.execute("SELECT id, name FROM people WHERE id = ?", (int(token),)).fetchone()
+        if token.isascii() and token.isdigit():  # str.isdigit alone accepts "²", which int() rejects
+            n = int(token)
+            row = con.execute("SELECT id, name FROM people WHERE id = ?", (n,)).fetchone() if n <= _MAX_ROWID else None
         else:  # `name` is COLLATE NOCASE, so this match ignores case
             row = con.execute("SELECT id, name FROM people WHERE name = ?", (token,)).fetchone()
         if row is None:
@@ -224,15 +226,20 @@ _START_RANKED = f""", ranked AS (
             AND EXISTS (SELECT 1 FROM copies c WHERE c.title_id = t.id)
         )"""
 
-_FRANCHISE_CTE = {
-    # Owned, unwatched titles of started collections.
-    "next_in_franchise": _STARTED_CTE + f""", ranked AS (
+# next_in_franchise's `ranked`: owned titles of started collections that {unseen} keeps (household: no
+# watch at all; audience: nobody in it has seen the title). Filled with str.format, so no other braces here.
+_NEXT_RANKED = f""", ranked AS (
           SELECT t.*, s.last_watch,
                  ROW_NUMBER() OVER (PARTITION BY t.collection_tmdb_id ORDER BY {_PICK_ORDER}) AS rn
           FROM titles t JOIN started s ON s.collection_tmdb_id = t.collection_tmdb_id
           WHERE EXISTS (SELECT 1 FROM copies c WHERE c.title_id = t.id)
-            AND NOT EXISTS (SELECT 1 FROM watches w WHERE w.title_id = t.id)
-        )""",
+            AND {{unseen}}
+        )"""
+
+_FRANCHISE_CTE = {
+    # Owned, unwatched titles of started collections.
+    "next_in_franchise": _STARTED_CTE + _NEXT_RANKED.format(
+        unseen="NOT EXISTS (SELECT 1 FROM watches w WHERE w.title_id = t.id)"),
     # Owned titles of collections with no watch at all; owned_n counts the owned titles.
     "start_franchise": _STARTED_CTE + _START_RANKED,
 }
@@ -256,13 +263,8 @@ def _franchise_cte(mode, ids=None) -> str:
         return _FRANCHISE_CTE[mode]
     started = _started_cte(ids)
     if mode == "next_in_franchise":
-        return started + f""", ranked AS (
-          SELECT t.*, s.last_watch,
-                 ROW_NUMBER() OVER (PARTITION BY t.collection_tmdb_id ORDER BY {_PICK_ORDER}) AS rn
-          FROM titles t JOIN started s ON s.collection_tmdb_id = t.collection_tmdb_id
-          WHERE EXISTS (SELECT 1 FROM copies c WHERE c.title_id = t.id)
-            AND NOT EXISTS (SELECT 1 FROM seen x WHERE x.title_id = t.id AND x.person_id {_in_ids(ids)})
-        )"""
+        return started + _NEXT_RANKED.format(
+            unseen=f"NOT EXISTS (SELECT 1 FROM seen x WHERE x.title_id = t.id AND x.person_id {_in_ids(ids)})")
     return started + _START_RANKED
 
 

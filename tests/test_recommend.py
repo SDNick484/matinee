@@ -637,3 +637,37 @@ def test_no_people_table_is_no_people(tmp_path):
     with pytest.raises(recommend.ParamError) as e:
         recommend.resolve_audience(c, "kids")
     assert str(e.value) == "No people are set up yet. Add them under People in the admin view."
+
+
+@pytest.mark.parametrize("token", ["²", "99999999999999999999999"])
+def test_resolve_audience_odd_digit_tokens_are_unknown(con, token):
+    seed_people(con)
+    with pytest.raises(recommend.ParamError) as e:
+        recommend.resolve_audience(con, f"Alice,{token}")
+    assert str(e.value) == f"Unknown person: {token}. People: Nick, Lauren, Midge, Alice, Paige."
+
+
+def test_everyone_with_everyone_inactive_is_no_people(con):
+    seed_people(con)
+    con.execute("UPDATE people SET active = 0")
+    con.commit()
+    with pytest.raises(recommend.ParamError) as e:
+        recommend.resolve_audience(con, "everyone")
+    assert str(e.value) == "No people are set up yet. Add them under People in the admin view."
+
+
+def test_seen_by_includes_inactive_person_on_assumed_everyone_watch(con):
+    seed_people(con)
+    con.execute("UPDATE people SET active = 0 WHERE name = 'Paige'")
+    con.commit()
+    _watch(con, seed_title(con, 862), _ago(30))     # Toy Story, nobody recorded: assumed_everyone
+    out = _aud(con, "quick_picks", "Nick")
+    assert [(r["title"], r["seen_by"]) for r in out["results"]] == [("Toy Story", list(EVERYONE))]
+
+
+def test_attendance_of_default_today_is_sqlite_now(con):
+    sqlite_today = con.execute("SELECT date('now')").fetchone()[0]
+    assert dt.datetime.now(dt.timezone.utc).date().isoformat() == sqlite_today
+    edge = con.execute("SELECT date('now', '-10 years'), date('now', '-10 years', '-1 day')").fetchone()
+    assert recommend.attendance_of({"watched_date": edge[0], "date_bucket": None}, False) == "assumed_everyone"
+    assert recommend.attendance_of({"watched_date": edge[1], "date_bucket": None}, False) == "assumed_adults"
