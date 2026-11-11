@@ -405,9 +405,10 @@ Harness: a generated RSA key, `mcp_remote.AccessVerifier(policy, key_resolver=�
 | If this leaks or is abused | What the holder gets |
 |----------------------------|----------------------|
 | A request with no/forged/expired Access JWT (internet or LAN) | 403 (or Access 401). No tool runs. |
-| A stolen Access session | Whatever the tools allow, until it expires (15 minutes if the Access app is set as in the webos README). Read-only by default: titles, shelves, ratings and watch notes — the same data `GET /api/titles/<id>` serves anonymously when `PUBLIC_VIEW=1` (`title_detail()` does not gate them; only copies' `added_by` is editor-only). To the read tools `MATINEE_API_KEY` adds only `search_tmdb` and copies' `added_by` (the editor's Access email, via `get_movie`). |
+| A stolen Access session | Whatever the tools allow, until it expires (15 minutes if the Access app is set as in the webos README). Read-only by default: titles, shelves, ratings, and the editor-only data the service's key reads at `/admin/api`: watch notes (not public since 2026-11-11, see the privacy/read-key spec), copies' `added_by` (the editor's Access email, via `get_movie`), and `search_tmdb`. |
 | Someone on the LAN who can reach `192.168.1.174:8719` | `/healthz` only. They cannot mint a Cloudflare-signed JWT. (The Flask app on `0.0.0.0:8771` with `LAN_EDIT=1` is a pre-existing, separate exposure.) |
-| Code execution as `matinee-mcp` | `MATINEE_API_KEY`, which is **write-capable** on the admin API regardless of `MATINEE_MCP_READONLY`. Mitigations: dedicated user with no database access, bound to a LAN address, `MATINEE_DB_PATH` forced empty, TMDB/OMDb keys not in its environment. A scoped read-only key is deferred (§16). |
+| Code execution as `matinee-mcp`, read-only (default) | `MATINEE_READ_KEY` only: every `GET` under `/admin/api` (notes included, and up to a day's UPC lookups through `/admin/api/upc/<upc>`), and `403` on any write. `MATINEE_API_KEY` is not in its environment (the init script unsets it and `mcp_http` refuses to start if it is there). Mitigations as below. *(Updated 2026-11-11; was the write-capable `MATINEE_API_KEY`.)* |
+| Code execution as `matinee-mcp`, `MATINEE_MCP_READONLY=0` | `MATINEE_API_KEY`, which is **write-capable** on the admin API. Mitigations: dedicated user with no database access, bound to a LAN address, `MATINEE_DB_PATH` forced empty, TMDB/OMDb keys not in its environment. |
 | A prompt-injected model | In read-only mode: nothing destructive is reachable. With writes on: it can rate, log watches and import titles. |
 
 ## 15. Commit sequence (Conventional Commits, one logical change each)
@@ -428,7 +429,7 @@ All on `feat/remote-mcp`, merged by PR. Author email `SDNick484@users.noreply.gi
 
 ## 16. Deferred
 
-- A **read-only API key** on the Flask side, so the remote service can't write even if compromised (`MATINEE_API_KEY` is all-or-nothing today).
+- ~~A **read-only API key** on the Flask side, so the remote service can't write even if compromised~~ Done 2026-11-11: `MATINEE_READ_KEY` (`docs/superpowers/specs/2026-11-11-privacy-read-key-design.md`).
 - A tiered write flag (`MATINEE_MCP_WRITES=none|log|all`): allow `log_watch` and `rate_movie` but not `add_movie`.
 - Per-tool rate limiting and log redaction (`mcp-server-shared`'s `ratelimit.py` and `logsafe.py`, not taken with option B).
 - Pulling upstream fixes to `remote.py`: manual, by re-copying and changing the header.

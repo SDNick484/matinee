@@ -37,8 +37,10 @@ def test_init_script_contents():
         assert needle in s, needle
     export = next(l for l in s.splitlines() if l.startswith("export "))
     assert "TMDB_READ_TOKEN" not in export and "OMDB_API_KEY" not in export
-    for key in ("MATINEE_URL", "MATINEE_API_KEY", "MATINEE_MCP_READONLY", "MCP_HTTP_BIND", "CF_ACCESS_AUD"):
+    for key in ("MATINEE_URL", "MATINEE_MCP_READONLY", "MCP_HTTP_BIND", "CF_ACCESS_AUD"):
         assert key in export, key
+    # the keys are exported by the per-mode case below, never unconditionally
+    assert "MATINEE_API_KEY" not in export and "MATINEE_READ_KEY" not in export
 
 
 
@@ -72,8 +74,9 @@ def test_service_start_only_when_configured():
     idx = [i for i, l in enumerate(lines) if l.strip().startswith("rc-service matinee-mcp start")]
     assert len(idx) == 1
     cond = next(lines[j] for j in range(idx[0], -1, -1) if lines[j].lstrip().startswith("if "))
-    for key in ("CF_ACCESS_AUD", "MCP_PUBLIC_HOSTS", "MATINEE_API_KEY"):
+    for key in ("CF_ACCESS_AUD", "MCP_PUBLIC_HOSTS", '"$(mcp_key_name)"'):
         assert key in cond, key
+    assert "MATINEE_API_KEY" not in cond  # a read-only service starts without the write key
 
 
 def test_health_check_and_uninstall():
@@ -188,13 +191,15 @@ def test_final_banner_warns_when_allowed_emails_is_empty(tmp_path, value, warns)
     assert ("MCP_ALLOWED_EMAILS is empty" in out) is warns
 
 
-def test_mcp_setup_states_what_the_api_key_adds_to_reads():
-    # Security framing: the key is not just for search_tmdb; /admin/api also returns copies' added_by
-    # (the editor's Access email). Pinned by test_rest_get_movie_added_by_only_with_key.
-    row = next(l for l in (ROOT / "docs" / "mcp-setup.md").read_text(encoding="utf-8").splitlines()
-               if l.startswith("| `MATINEE_API_KEY` |"))
-    assert "search_tmdb" in row and "added_by" in row
-    assert "adds only `search_tmdb`" not in row
+def test_mcp_setup_states_what_the_read_key_adds_to_reads():
+    # Security framing: through /admin/api the read-only service sees watch notes, search_tmdb and copies'
+    # added_by (the editor's Access email), which /api does not serve. Pinned by
+    # test_rest_get_movie_added_by_only_with_key and tests/test_privacy.py.
+    lines = (ROOT / "docs" / "mcp-setup.md").read_text(encoding="utf-8").splitlines()
+    row = next(l for l in lines if l.startswith("| `MATINEE_READ_KEY` | *(generated"))
+    assert "search_tmdb" in row and "added_by" in row and "watch notes" in row and "cannot write" in row
+    api = next(l for l in lines if l.startswith("| `MATINEE_API_KEY` | *(empty)*"))
+    assert "MATINEE_MCP_READONLY=0" in api
 
 
 def test_lan_hosts_setting_is_written_and_exported():
@@ -202,3 +207,76 @@ def test_lan_hosts_setting_is_written_and_exported():
     export = next(l for l in HEAD.splitlines() if l.startswith("export PORT "))
     assert " LAN_EDIT LAN_HOSTS " in f" {export} "
     assert re.search(r"^# .+\nLAN_HOSTS=$", (ROOT / ".env.example").read_text(encoding="utf-8"), re.M)
+
+
+# ------------------------------------------------------------------ MATINEE_READ_KEY
+# Mirrors mcp_http.readonly(): only 0/false/no/off (case-insensitive, trimmed) turn writes on.
+READONLY_CASES = [(None, "read"), ("", "read"), ("1", "read"), ("true", "read"), ("garbage", "read"),
+                  ("0", "write"), ("false", "write"), (" OFF ", "write"), ("No", "write")]
+
+
+def _fn(name):
+    return re.search(rf"^{name}\(\) \{{.*?^\}}$", HEAD, re.S | re.M).group(0)
+
+
+def test_read_key_is_generated_only_when_absent(tmp_path):
+    assert re.search(r'^add_setting "\$CONF" MATINEE_READ_KEY "\$\(gen_key\)" ".+"$', HEAD, re.M)
+    conf = tmp_path / "matinee"
+    conf.write_text("PORT=8771\n")
+    script = _fn("add_setting") + "\n" + _fn("gen_key") + (
+        f'\nadd_setting "{conf}" MATINEE_READ_KEY "$(gen_key)" "read key"\n')
+    subprocess.run(["sh", "-c", script], check=True)
+    first = re.search(r"^MATINEE_READ_KEY=(.*)$", conf.read_text(), re.M).group(1)
+    assert re.fullmatch(r"[A-Za-z0-9_-]{43}", first), first
+    subprocess.run(["sh", "-c", script], check=True)  # a re-run keeps the generated key
+    assert conf.read_text().count("MATINEE_READ_KEY=") == 1
+    assert f"MATINEE_READ_KEY={first}" in conf.read_text()
+    conf.write_text("MATINEE_READ_KEY=chosen-by-hand\n")  # and a value set by hand
+    subprocess.run(["sh", "-c", script], check=True)
+    assert conf.read_text() == "MATINEE_READ_KEY=chosen-by-hand\n"
+
+
+def test_matinee_service_gets_both_keys():
+    export = next(l for l in HEAD.splitlines() if l.startswith("export PORT "))
+    assert " MATINEE_API_KEY " in f" {export} " and " MATINEE_READ_KEY " in f" {export} "
+
+
+def _mcp_key_case():
+    s = _init_script()
+    m = re.search(r"^case .*?^esac$", s, re.S | re.M)
+    assert m, "matinee-mcp init script has no key-selection case"
+    return m.group(0)
+
+
+@pytest.mark.parametrize("value,mode", READONLY_CASES)
+def test_mcp_init_script_exports_one_key_per_mode(value, mode):
+    setv = "" if value is None else f"MATINEE_MCP_READONLY='{value}'\n"
+    script = f"MATINEE_API_KEY=w-key\nMATINEE_READ_KEY=r-key\n{setv}{_mcp_key_case()}\nenv\n"
+    out = subprocess.run(["env", "-i", "PATH=/usr/bin:/bin", "sh", "-c", script],
+                         capture_output=True, text=True, check=True).stdout.splitlines()
+    if mode == "read":
+        assert "MATINEE_READ_KEY=r-key" in out and not any(l.startswith("MATINEE_API_KEY=") for l in out)
+    else:
+        assert "MATINEE_API_KEY=w-key" in out and not any(l.startswith("MATINEE_READ_KEY=") for l in out)
+
+
+def test_mcp_init_script_unsets_an_inherited_write_key():
+    script = f"MATINEE_MCP_READONLY=1\nMATINEE_READ_KEY=r-key\n{_mcp_key_case()}\nenv\n"
+    out = subprocess.run(["env", "-i", "PATH=/usr/bin:/bin", "MATINEE_API_KEY=inherited", "sh", "-c", script],
+                         capture_output=True, text=True, check=True).stdout
+    assert "MATINEE_API_KEY" not in out
+
+
+@pytest.mark.parametrize("value,mode", READONLY_CASES)
+def test_installer_picks_the_key_matinee_mcp_needs(tmp_path, value, mode):
+    conf = tmp_path / "matinee"
+    conf.write_text("" if value is None else f"MATINEE_MCP_READONLY={value}\n")
+    conf_val = next(l for l in HEAD.splitlines() if l.startswith("conf_val()"))
+    out = subprocess.run(["sh", "-c", f'CONF="{conf}"\n{conf_val}\n{_fn("mcp_key_name")}\nmcp_key_name'],
+                         capture_output=True, text=True, check=True).stdout.strip()
+    assert out == ("MATINEE_READ_KEY" if mode == "read" else "MATINEE_API_KEY")
+
+
+def test_not_started_banner_names_the_mode_key():
+    line = next(l for l in HEAD.splitlines() if l.strip().startswith("for k in MCP_PUBLIC_HOSTS"))
+    assert '"$(mcp_key_name)"' in line and "MATINEE_API_KEY" not in line

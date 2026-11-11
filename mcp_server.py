@@ -3,7 +3,8 @@
 Exposes read and write tools, resources, and prompts for the Matinee movie collection.
 
 Can operate in:
-1. REST Mode: Connects to a running Matinee instance via MATINEE_URL and MATINEE_API_KEY.
+1. REST Mode: Connects to a running Matinee instance via MATINEE_URL and MATINEE_API_KEY (or, for reads only,
+   MATINEE_READ_KEY; with neither it reads the public /api, which has no watch notes).
 2. Direct SQLite Mode: Accelerates read operations directly against MATINEE_DB_PATH.
 """
 import inspect
@@ -100,6 +101,7 @@ class MatineeError(RuntimeError, ToolError):
 
 MATINEE_URL = os.environ.get("MATINEE_URL", "http://127.0.0.1:8771").rstrip("/")
 MATINEE_API_KEY = os.environ.get("MATINEE_API_KEY", "").strip()
+MATINEE_READ_KEY = os.environ.get("MATINEE_READ_KEY", "").strip()
 MATINEE_DB_PATH = os.environ.get("MATINEE_DB_PATH", "").strip()
 
 
@@ -111,9 +113,16 @@ class MatineeClient:
         api_url: Optional[str] = None,
         api_key: Optional[str] = None,
         db_path: Optional[str] = None,
+        key_name: Optional[str] = None,
     ):
         self.api_url = (api_url or MATINEE_URL).rstrip("/")
-        self.api_key = api_key if api_key is not None else MATINEE_API_KEY
+        if api_key is not None:
+            self.api_key, default_name = api_key, "MATINEE_API_KEY"
+        elif MATINEE_API_KEY or not MATINEE_READ_KEY:
+            self.api_key, default_name = MATINEE_API_KEY, "MATINEE_API_KEY"
+        else:  # reads only: /admin/api with notes; the write tools get Matinee's 403
+            self.api_key, default_name = MATINEE_READ_KEY, "MATINEE_READ_KEY"
+        self.key_name = key_name or default_name  # named in the 401/403 message, never the key itself
         self.db_path = db_path if db_path is not None else MATINEE_DB_PATH
 
     def _get_db(self) -> Optional[sqlite3.Connection]:
@@ -162,7 +171,7 @@ class MatineeClient:
             log.warning("Matinee %s %s -> HTTP %s", method, path.split("?")[0], e.code)
             if e.code in (401, 403):
                 raise MatineeError(
-                    f"Matinee rejected the service's API key (HTTP {e.code}). Check MATINEE_API_KEY on the Matinee host."
+                    f"Matinee rejected the service's key (HTTP {e.code}). Check {self.key_name} on the Matinee host."
                 ) from None
             detail = ""
             try:

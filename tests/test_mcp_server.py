@@ -520,9 +520,9 @@ ERROR_CASES = {
     "refused": (urllib.error.URLError(ConnectionRefusedError(111, "refused")), UNREACHABLE),
     "timeout": (socket.timeout("timed out"), UNREACHABLE),
     "401": (_http_error(401, '{"error":"unauthorized"}'),
-            "Matinee rejected the service's API key (HTTP 401). Check MATINEE_API_KEY on the Matinee host."),
+            "Matinee rejected the service's key (HTTP 401). Check MATINEE_API_KEY on the Matinee host."),
     "403": (_http_error(403, "<html>forbidden</html>"),
-            "Matinee rejected the service's API key (HTTP 403). Check MATINEE_API_KEY on the Matinee host."),
+            "Matinee rejected the service's key (HTTP 403). Check MATINEE_API_KEY on the Matinee host."),
     "500html": (_http_error(500, "<!DOCTYPE HTML><html>boom</html>"), "Matinee API error (500)"),
     "500json": (_http_error(500, '{"error":"disk full"}'), "Matinee API error (500): disk full"),
 }
@@ -633,3 +633,16 @@ def test_rest_matches_sqlite_branch_for_up(test_env, monkeypatch):
     assert direct["title"] == "Up"
     rest, _ = _where_client(monkeypatch, [{"id": 50, "title": "Super 8"}, {"id": 51, "title": "Up"}])
     assert rest.where_is("Up")["title"] == direct["title"]
+
+
+def test_stdio_client_falls_back_to_the_read_key(monkeypatch):
+    """A workstation with only MATINEE_READ_KEY reads /admin/api (notes included) and can't write."""
+    monkeypatch.setattr(mcp_server, "MATINEE_API_KEY", "")
+    monkeypatch.setattr(mcp_server, "MATINEE_READ_KEY", "rk")
+    c = mcp_server.MatineeClient(api_url="http://x", db_path="")
+    assert (c.api_key, c.key_name, c._read_prefix) == ("rk", "MATINEE_READ_KEY", "/admin/api")
+    monkeypatch.setattr(mcp_server, "MATINEE_API_KEY", "wk")
+    c = mcp_server.MatineeClient(api_url="http://x", db_path="")
+    assert (c.api_key, c.key_name) == ("wk", "MATINEE_API_KEY")
+    c = mcp_server.MatineeClient(api_url="http://x", api_key="", db_path="")  # explicit "" still means /api
+    assert c._read_prefix == "/api"

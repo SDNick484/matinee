@@ -33,6 +33,8 @@ import mcp_remote
 import mcp_server
 
 KEY = "test-matinee-api-key-0123456789"
+READ = "test-matinee-read-key-9876543210"
+NOTE = "girls loved it"
 AUD = "aud-tag-matinee"
 TEAM = "nick.cloudflareaccess.com"
 EMAIL = "nick@example.com"
@@ -43,7 +45,8 @@ WRITE = {"rate_movie", "log_watch", "add_movie"}
 
 
 class FakeMatinee:
-    """Loopback stand-in for the Flask app. Records every request; answers only to the API key."""
+    """Loopback stand-in for the Flask app. Records every request; answers to the API key, and to the read
+    key for GETs only (as editor_required does)."""
 
     def __init__(self):
         self.requests = []
@@ -73,8 +76,16 @@ class FakeMatinee:
                     return self._send(401, {"error": "unauthorized"})
                 if outer.mode == "500html":
                     return self._send(500, b"<!DOCTYPE HTML><html>Traceback</html>", "text/html")
-                if self.headers.get("Authorization") != f"Bearer {KEY}":
+                auth = self.headers.get("Authorization")
+                if auth == f"Bearer {READ}" and self.command != "GET":
+                    return self._send(403, {"error": "The read key can only read"})
+                if auth not in (f"Bearer {KEY}", f"Bearer {READ}"):
                     return self._send(401, {"error": "unauthorized"})
+                if self.command == "GET" and self.path == "/admin/api/titles/1":
+                    return self._send(200, {
+                        "id": 1, "title": "The Dark Knight", "year": 2008, "user_rating": 9.5,
+                        "watches": [{"id": 7, "watched_date": "2026-11-07", "notes": NOTE, "date_bucket": None}],
+                        "copies": []})
                 if self.command == "GET" and self.path.startswith("/admin/api/titles?"):
                     return self._send(200, {"titles": [{"id": 214, "title": "Paddington 2", "year": 2017}]})
                 if self.command == "GET" and self.path == "/admin/api/titles/214":
@@ -355,7 +366,7 @@ def test_matinee_401_and_500_messages(client, token, fake_matinee):
     sid = open_session(client, tok)
     fake_matinee.mode = "401"
     text = call_tool(client, tok, sid, "where_is", {"title": "Paddington 2"})["result"]["content"][0]["text"]
-    assert text == ("Error executing tool where_is: Matinee rejected the service's API key (HTTP 401). "
+    assert text == ("Error executing tool where_is: Matinee rejected the service's key (HTTP 401). "
                     "Check MATINEE_API_KEY on the Matinee host.")
     fake_matinee.mode = "500html"
     text = call_tool(client, tok, sid, "where_is", {"title": "Paddington 2"}, id_=4)["result"]["content"][0]["text"]
@@ -402,23 +413,76 @@ def served(monkeypatch):
 
 
 def full_env():
-    return {"MATINEE_API_KEY": KEY, "PORT": "8771", "MCP_HTTP_BIND": "127.0.0.1", "MCP_HTTP_PORT": "8719",
+    """Read-only (the default), so the service is given MATINEE_READ_KEY and no MATINEE_API_KEY."""
+    return {"MATINEE_READ_KEY": READ, "PORT": "8771", "MCP_HTTP_BIND": "127.0.0.1", "MCP_HTTP_PORT": "8719",
             "MCP_HTTP_PATH": "/matinee/mcp", "MCP_PUBLIC_HOSTS": HOST, "CF_ACCESS_TEAM_DOMAIN": TEAM,
             "CF_ACCESS_AUD": AUD, "MCP_ALLOWED_EMAILS": EMAIL}
 
 
-def test_main_refuses_empty_api_key(served, capsys):
+def test_main_refuses_empty_api_key_when_writes_are_on(served, capsys):
     import mcp_http
     env = full_env()
-    env["MATINEE_API_KEY"] = "  "
+    env.update(MATINEE_MCP_READONLY="0", MATINEE_API_KEY="  ")
     assert mcp_http.main([], env) == 2
-    assert "MATINEE_API_KEY" in capsys.readouterr().err
+    assert "MATINEE_API_KEY is empty" in capsys.readouterr().err
     assert served == []
+
+
+@pytest.mark.parametrize("value", [None, "", "  "])
+def test_main_refuses_empty_read_key_when_read_only(served, capsys, value):
+    import mcp_http
+    env = full_env()
+    if value is None:
+        del env["MATINEE_READ_KEY"]
+    else:
+        env["MATINEE_READ_KEY"] = value
+    env["MATINEE_API_KEY"] = ""  # a write key doesn't stand in for a missing read key
+    assert mcp_http.main([], env) == 2
+    assert "MATINEE_READ_KEY is empty" in capsys.readouterr().err
+    assert served == []
+
+
+@pytest.mark.parametrize("readonly", [None, "1", "true", "garbage"])
+def test_main_refuses_write_key_in_read_only_environment(served, capsys, readonly):
+    import mcp_http
+    env = full_env()
+    env["MATINEE_API_KEY"] = KEY
+    if readonly is not None:
+        env["MATINEE_MCP_READONLY"] = readonly
+    assert mcp_http.main([], env) == 2
+    err = capsys.readouterr().err
+    assert "MATINEE_API_KEY must not be in" in err and KEY not in err
+    assert served == []
+
+
+@pytest.mark.parametrize("readonly, name, value", [
+    ({}, "MATINEE_READ_KEY", "r"),
+    ({"MATINEE_MCP_READONLY": "1"}, "MATINEE_READ_KEY", "r"),
+    ({"MATINEE_MCP_READONLY": " OFF "}, "MATINEE_API_KEY", "w"),
+    ({"MATINEE_MCP_READONLY": "0"}, "MATINEE_API_KEY", "w"),
+])
+def test_service_key(readonly, name, value):
+    import mcp_http
+    assert mcp_http.service_key({"MATINEE_READ_KEY": " r ", "MATINEE_API_KEY": "w", **readonly}) == (name, value)
+
+
+def test_main_writes_mode_uses_the_api_key(served):
+    import asyncio
+
+    import mcp_http
+    env = full_env()
+    del env["MATINEE_READ_KEY"]
+    env.update(MATINEE_MCP_READONLY="0", MATINEE_API_KEY=KEY)
+    assert mcp_http.main([], env) == 0
+    assert mcp_server._default_client.api_key == KEY
+    assert mcp_server._default_client.key_name == "MATINEE_API_KEY"
+    server, _, _ = served[0]
+    assert {t.name for t in asyncio.run(server.list_tools())} == READ_TOOLS | WRITE
 
 
 def test_main_refuses_public_bind_without_access(served, capsys):
     import mcp_http
-    env = {"MATINEE_API_KEY": KEY, "MCP_HTTP_BIND": "192.168.1.100"}
+    env = {"MATINEE_READ_KEY": READ, "MCP_HTTP_BIND": "192.168.1.100"}
     assert mcp_http.main([], env) == 2
     assert "Cloudflare Access" in capsys.readouterr().err
     assert served == []
@@ -426,7 +490,7 @@ def test_main_refuses_public_bind_without_access(served, capsys):
 
 def test_main_refuses_public_host_without_access(served, capsys):
     import mcp_http
-    env = {"MATINEE_API_KEY": KEY, "MCP_PUBLIC_HOSTS": HOST}
+    env = {"MATINEE_READ_KEY": READ, "MCP_PUBLIC_HOSTS": HOST}
     assert mcp_http.main([], env) == 2
     assert "Cloudflare Access" in capsys.readouterr().err
     assert served == []
@@ -450,7 +514,8 @@ def test_main_derives_matinee_url_from_port(served):
     assert mcp_http.main([], full_env()) == 0
     assert os.environ["MATINEE_URL"] == "http://127.0.0.1:8771"
     assert mcp_server._default_client.api_url == "http://127.0.0.1:8771"
-    assert mcp_server._default_client.api_key == KEY
+    assert mcp_server._default_client.api_key == READ
+    assert mcp_server._default_client.key_name == "MATINEE_READ_KEY"
 
 
 def test_main_serves_with_configured_values(served):
@@ -463,3 +528,38 @@ def test_main_serves_with_configured_values(served):
     assert cfg.port == 8719 and cfg.path == "/matinee/mcp"
     assert {t.name for t in asyncio.run(server.list_tools())} == READ_TOOLS
     assert callable(kw["health_check"])
+
+
+# ------------------------------------------------------------------ read key end to end
+@pytest.fixture
+def read_key_client(monkeypatch, fake_matinee):
+    """The tools use exactly the client main() builds for a read-only service."""
+    import mcp_http
+    client = mcp_http.matinee_client({"MATINEE_READ_KEY": READ, "MATINEE_URL": fake_matinee.url})
+    monkeypatch.setattr(mcp_server, "_default_client", client)
+    return client
+
+
+def test_read_only_service_reads_notes_with_the_read_key(env, signing_key, token, fake_matinee, read_key_client):
+    del env["MATINEE_API_KEY"]
+    env["MATINEE_READ_KEY"] = READ
+    with make_client(env, signing_key) as c:
+        tok = token()
+        sid = open_session(c, tok)
+        msg = call_tool(c, tok, sid, "get_movie", {"title_id": 1})
+    assert msg["result"]["isError"] is False
+    movie = msg["result"]["structuredContent"]["result"]
+    assert movie["title"] == "The Dark Knight" and movie["user_rating"] == 9.5
+    assert movie["watches"][0]["notes"] == NOTE
+    assert [(m, p, a) for m, p, a in fake_matinee.requests] == [("GET", "/admin/api/titles/1", f"Bearer {READ}")]
+
+
+def test_read_key_rejection_names_the_read_key(env, signing_key, token, fake_matinee, read_key_client):
+    fake_matinee.mode = "401"
+    with make_client(env, signing_key) as c:
+        tok = token()
+        sid = open_session(c, tok)
+        text = call_tool(c, tok, sid, "get_movie", {"title_id": 1})["result"]["content"][0]["text"]
+    assert text == ("Error executing tool get_movie: Matinee rejected the service's key (HTTP 401). "
+                    "Check MATINEE_READ_KEY on the Matinee host.")
+    assert READ not in text

@@ -33,7 +33,7 @@ def test_add_watch_with_notes_and_retrieve_in_detail(client):
     assert data["watch"]["watched_date"] == "2026-05-10"
 
     # Verify detail returns notes
-    detail_res = client.get("/api/titles/1")
+    detail_res = client.get("/admin/api/titles/1")  # notes are editor-only
     assert detail_res.status_code == 200
     watches = detail_res.get_json()["watches"]
     assert len(watches) == 1
@@ -63,7 +63,7 @@ def test_add_dateless_watch_null(client):
     assert data["watch"]["notes"] == "Saw in theaters years ago"
 
     # Verify detail returns dateless watch correctly
-    detail_res = client.get("/api/titles/3")
+    detail_res = client.get("/admin/api/titles/3")  # notes are editor-only
     assert detail_res.status_code == 200
     d_data = detail_res.get_json()
     assert d_data["last_watched"] is None
