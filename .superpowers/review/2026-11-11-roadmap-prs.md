@@ -1,7 +1,7 @@
 # Review: roadmap PRs #18–#29 (018ec06 → 3423d08)
 
 **Date:** 2026-11-11 · **Reviewed:** `main` @ `3423d0896c7ce54061c8f3941ec2cd6e2ced25aa` (merge of PR #29), against `018ec06` (merge of PR #17)
-**Branch:** `fix/roadmap-review` · **Method:** phase 1 read-only; code read, suites run, behaviour probed with the Flask test client, a worktree of `98f5ef7` and headless Chromium. PR descriptions, spec status lines and the SDD ledger's "review clean" lines were not taken on trust.
+**Branch:** `fix/roadmap-review` (review committed as `fc882ce` before any code change; fixes F1–F7 follow, one commit each) · **Method:** phase 1 read-only; code read, suites run, behaviour probed with the Flask test client, a worktree of `98f5ef7` and headless Chromium. PR descriptions, spec status lines and the SDD ledger's "review clean" lines were not taken on trust.
 **Baseline:** `python -m pytest -q` → **1043 passed, 13 skipped** (Python 3.13.18, Playwright Chromium present; the 13 skips are `tests/test_restore_test.py`, no `sqlite3` CLI in this sandbox). CI on `3423d08`: all seven check runs green.
 
 > Every finding is labelled **Verified** (file:line, or a command and its output), **Likely**, or **Can't verify from the repo** (needs the host).
@@ -216,13 +216,13 @@ Severity: **blocker** = breaks prod/CI or an auth/privacy boundary · **fix** = 
 
 | # | Sev | PR | Finding | Evidence | Proposed fix | Fixed in |
 |---|---|---|---|---|---|---|
-| F1 | fix | #20, #27, #29 | **Route race makes the ui-smoke gate flaky (4/40) and can show the wrong view on a slow phone.** An async render that resolves after the user moved on overwrites `#view`. | §2.7; `static/js/stats.js:7-16`; `static/js/router.js:handleRoute`; deterministic reproduction (held `/admin/api/stats`) | A route sequence number in `state`; `renderStats`, `renderGrid` and `renderDetail` stop after each await when it changed. Regression test holds the stats response. | _pending_ |
-| F2 | fix (R21) | #29 | **A "10+ Years" watch logged with default attendees records the kids**, unlike the read-time rule for old unrecorded watches. MCP `log_watch` has no way to log that bucket at all. | `app.py:2201-2202`; probe: `POST …/watches {"date_bucket":"over_10_years"}` → `recorded [1, 2, 3, 4]` | Nick's ruling: default to active adults for that bucket (server), the page switches the kids off when that bucket is chosen and sends `attendees` only when the selection differs from the bucket's default, MCP `log_watch` gains `date_bucket`. Spec §6.2/§7.2, README, ledger updated. | _pending_ |
-| F3 | fix | #29 | **Closing the People modal after a change re-renders any route**, which resets the Add form (and the scanner) and jumps the grid. Only the grid and the title view show people. | `static/js/people.js:135-143`; ledger "Final: parked" | Re-run the route only when it is `/` or `/t/:id`. | _pending_ |
-| F4 | fix | #23, #29 | **The privacy guard does not cover every public route.** The AST walk stops at `app.py`'s module boundary; the runtime check is a fixed list of 8 paths, no people seeded, 2 of 6 recommendation modes. | `tests/test_privacy.py:63-66,143-160` | Runtime test that seeds people, recorded and assumed attendance and a note, then GETs every `/api/` rule in `app.url_map` (all six modes, every title id) and asserts no note text, no person name, no attendance key. | _pending_ |
-| F5 | fix | #26 | **`docs/mcp-setup.md` says an unset or empty `MATINEE_MCP_READONLY` keeps the service read-only.** Code, shell twin and spec defer to `MATINEE_MCP_WRITES` (`READONLY` unset + `WRITES=log` → `log`). | `docs/mcp-setup.md:147-148`; `mcp_http.py:33-49`; `tests/test_mcp_http.py` case `(None, "log", "log")` | Correct the two table rows; add a test that pins the doc sentence to `_resolve`. | _pending_ |
-| F6 | fix | #19 | **`CLAUDE.md`'s Definition of done is stale**: five CI jobs (seven exist), no `ruff check` / `shellcheck`, nothing on people/attendance being editor-only or `tests/test_privacy.py`. | `CLAUDE.md:52-61`; `.github/workflows/ci.yml` | Name all seven jobs, add ruff and shellcheck to the commands, add the privacy rule. | _pending_ |
-| F7 | fix | #23–#29 | **Four 2026-11-11 spec status lines still say "this PR / this branch / awaiting merge".** | `docs/superpowers/specs/2026-11-11-{csv-export,mcp-tiered-writes,per-person,privacy-read-key}-design.md:6` | "Implemented; merged in PR #N (`<merge sha>`)". | _pending_ |
+| F1 | fix | #20, #27, #29 | **Route race makes the ui-smoke gate flaky (4/40) and can show the wrong view on a slow phone.** An async render that resolves after the user moved on overwrites `#view`. | §2.7; `static/js/stats.js:7-16`; `static/js/router.js:handleRoute`; deterministic reproduction (held `/admin/api/stats`) | A route sequence number in `state`; `renderStats`, `renderGrid` and `renderDetail` stop after each await when it changed. Regression test holds the stats response. | `eb9f968` |
+| F2 | fix (R21) | #29 | **A "10+ Years" watch logged with default attendees records the kids**, unlike the read-time rule for old unrecorded watches. MCP `log_watch` has no way to log that bucket at all. | `app.py:2201-2202`; probe: `POST …/watches {"date_bucket":"over_10_years"}` → `recorded [1, 2, 3, 4]` | Nick's ruling: default to active adults for that bucket (server), the page switches the kids off when that bucket is chosen and sends `attendees` only when the selection differs from the bucket's default, MCP `log_watch` gains `date_bucket`. Spec §6.2/§7.2, README, ledger updated. | `1b410f9` |
+| F3 | fix | #29 | **Closing the People modal after a change re-renders any route**, which resets the Add form (and the scanner) and jumps the grid. Only the grid and the title view show people. | `static/js/people.js:135-143`; ledger "Final: parked" | Re-run the route only when it is `/` or `/t/:id`. | `4886e65` |
+| F4 | fix | #23, #29 | **The privacy guard does not cover every public route.** The AST walk stops at `app.py`'s module boundary; the runtime check is a fixed list of 8 paths, no people seeded, 2 of 6 recommendation modes. | `tests/test_privacy.py:63-66,143-160` | Runtime test that seeds people, recorded and assumed attendance and a note, then GETs every `/api/` rule in `app.url_map` (all six modes, every title id) and asserts no note text, no person name, no attendance key. | `26d748d` |
+| F5 | fix | #26 | **`docs/mcp-setup.md` says an unset or empty `MATINEE_MCP_READONLY` keeps the service read-only.** Code, shell twin and spec defer to `MATINEE_MCP_WRITES` (`READONLY` unset + `WRITES=log` → `log`). | `docs/mcp-setup.md:147-148`; `mcp_http.py:33-49`; `tests/test_mcp_http.py` case `(None, "log", "log")` | Correct the two table rows; add a test that pins the doc sentence to `_resolve`. | `124c3ad` |
+| F6 | fix | #19 | **`CLAUDE.md`'s Definition of done is stale**: five CI jobs (seven exist), no `ruff check` / `shellcheck`, nothing on people/attendance being editor-only or `tests/test_privacy.py`. | `CLAUDE.md:52-61`; `.github/workflows/ci.yml` | Name all seven jobs, add ruff and shellcheck to the commands, add the privacy rule. | `9748b8b` |
+| F7 | fix | #23–#29 | **Four 2026-11-11 spec status lines still say "this PR / this branch / awaiting merge".** | `docs/superpowers/specs/2026-11-11-{csv-export,mcp-tiered-writes,per-person,privacy-read-key}-design.md:6` | "Implemented; merged in PR #N (`<merge sha>`)". | `58feec9` |
 | F8 | note | #18 | Side-effecting GETs pass for "lan"/Access identities when a browser sends neither `Origin` nor `Sec-Fetch-Site`, or sends `same-site`. Cannot read the response (no CORS); can spend UPC quota and write a cache row. | §2.1 table | D3. | — |
 | F9 | note | #18 | No `Host` header → `SERVER_NAME` (`0.0.0.0` under gunicorn) → "lan". Browsers always send Host; a raw LAN client is already trusted. | `app.py:552-573` | None. | — |
 | F10 | note | #23 | Read key can call `tmdb/search` and `upc/<upc>` (quota, and a cache row from a "read-only" key). | `app.py:592-595,1706-1777` | D1. | — |
@@ -279,7 +279,19 @@ Run as root on the Matinee host unless noted. `movies.example.com` / `mcp.exampl
 
 ---
 
-## 6. Not done here (by instruction)
+## 6. Phase 2 notes
+
+- **F2 (R21) UX.** With people set up, a bucket button now *chooses* a bucket: the toggles switch to its default
+  (kids off for "10+ Years"), the editor can switch anyone back on, and a 44 px **Log 10+ Years** button sends it.
+  That second tap is what makes "switch Midge back on" possible; without people the buckets still log on one tap.
+  Every log sends `attendees` only when the toggles differ from the default for that log, so an untouched form
+  leaves the choice to `app.default_attendees`. MCP `log_watch` gained `date_bucket` so both modes can log the
+  bucket at all.
+- **F1** also guards `renderGrid` and `renderDetail`'s later awaits; the regression test covers Stats, a title and
+  the grid. The previously flaky test passed 25 of 25 runs after the fix.
+- **F4** was mutation-checked: making `recommend()` attach `seen_by` without an audience fails only the new test.
+
+## 7. Not done here (by instruction)
 
 - No product decisions taken (D1–D4); no change to who can see data.
 - `app.py` not split (§2.16).
