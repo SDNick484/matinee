@@ -493,12 +493,24 @@ def access_identity():
     return None
 
 
+def cross_site():
+    """True when a browser says this request comes from another site: an Origin that isn't this host
+    (including the opaque "null"), or Sec-Fetch-Site: cross-site. A text/plain POST is a CORS "simple
+    request" with no preflight, so without this a page on any site could drive the editor API."""
+    origin = (request.headers.get("Origin") or "").strip()
+    if origin and urllib.parse.urlparse(origin).netloc != request.host:
+        return True
+    return (request.headers.get("Sec-Fetch-Site") or "").lower() == "cross-site"
+
+
 def editor_required(fn):
     @wraps(fn)
     def inner(*a, **kw):
         who = access_identity()
         if not who:
             return jsonify(error="Sign in to edit"), 401
+        if who != "api-key" and cross_site():  # the API key is for scripts and the MCP server, not browsers
+            return jsonify(error="Cross-site request refused"), 403
         g.editor = who
         return fn(*a, **kw)
     return inner
