@@ -50,6 +50,7 @@ class FakeMatinee:
 
     def __init__(self):
         self.requests = []
+        self.bodies = []  # raw request body per entry in `requests`
         self.mode = "ok"  # ok | 401 | 500html
         outer = self
 
@@ -67,8 +68,7 @@ class FakeMatinee:
 
             def _handle(self):
                 n = int(self.headers.get("Content-Length") or 0)
-                if n:
-                    self.rfile.read(n)
+                outer.bodies.append(self.rfile.read(n) if n else b"")
                 outer.requests.append((self.command, self.path, self.headers.get("Authorization", "")))
                 if self.path == "/healthz":
                     return self._send(200, {"ok": True})
@@ -93,6 +93,8 @@ class FakeMatinee:
                         "id": 214, "title": "Paddington 2", "year": 2017,
                         "copies": [{"id": 351, "kind": "physical", "format": "Blu-ray", "service": None,
                                     "location_id": 9, "location_path": "Family Room › Media Cabinet › Shelf 2"}]})
+                if self.command == "POST" and self.path == "/admin/api/titles/214/watches":
+                    return self._send(201, {"ok": True, "watch": {"id": 8, "watched_date": "2026-11-10"}})
                 if self.command == "PUT":
                     return self._send(200, {"ok": True})
                 return self._send(404, {"error": "not found"})
@@ -563,3 +565,171 @@ def test_read_key_rejection_names_the_read_key(env, signing_key, token, fake_mat
     assert text == ("Error executing tool get_movie: Matinee rejected the service's key (HTTP 401). "
                     "Check MATINEE_READ_KEY on the Matinee host.")
     assert READ not in text
+
+
+# ------------------------------------------------------------------ MATINEE_MCP_WRITES: none | log | all
+LOG_TOOLS = {"rate_movie", "log_watch"}
+
+# (MATINEE_MCP_READONLY, MATINEE_MCP_WRITES, level): every row of the table in the spec, section 3
+LEVEL_CASES = [
+    (None, None, "none"), ("", "", "none"), ("1", None, "none"), ("true", "none", "none"),
+    (" yes ", "", "none"), ("garbage", None, "none"),
+    ("1", "log", "none"), ("true", "all", "none"), ("garbage", "log", "none"), ("1", "none", "none"),
+    ("0", None, "all"), ("false", "", "all"), ("No", "  ", "all"), (" off ", None, "all"),
+    ("0", "none", "none"), ("0", "log", "log"), ("0", " ALL ", "all"), ("0", "Log", "log"),
+    ("0", "rw", "none"), ("0", "1", "none"), ("0", "yes", "none"),
+    (None, "log", "log"), ("", "all", "all"), (None, "rw", "none"),
+]
+
+
+def level_env(readonly, writes):
+    env = {}
+    if readonly is not None:
+        env["MATINEE_MCP_READONLY"] = readonly
+    if writes is not None:
+        env["MATINEE_MCP_WRITES"] = writes
+    return env
+
+
+@pytest.mark.parametrize("readonly,writes,level", LEVEL_CASES)
+def test_write_level_parsing(readonly, writes, level):
+    import mcp_http
+    env = level_env(readonly, writes)
+    assert mcp_http.write_level(env) == level
+    assert mcp_http.readonly(env) is (level == "none")
+
+
+@pytest.mark.parametrize("readonly,writes,warnings", [
+    ("1", "log", ["MATINEE_MCP_WRITES=log ignored: MATINEE_MCP_READONLY=1 keeps the service read-only"]),
+    (" true ", "ALL", ["MATINEE_MCP_WRITES=all ignored: MATINEE_MCP_READONLY=true keeps the service read-only"]),
+    ("0", "rw", ["unknown MATINEE_MCP_WRITES 'rw'; using none"]),
+    (None, "RW", ["unknown MATINEE_MCP_WRITES 'RW'; using none"]),
+    ("1", "none", []), ("1", None, []), ("0", "log", []), ("0", None, []), (None, None, []), ("garbage", "rw", []),
+])
+def test_write_level_warnings(readonly, writes, warnings):
+    import mcp_http
+    assert mcp_http.write_level_warnings(level_env(readonly, writes)) == warnings
+
+
+@pytest.mark.parametrize("readonly,writes,name,value", [
+    (None, None, "MATINEE_READ_KEY", "r"),
+    ("1", "log", "MATINEE_READ_KEY", "r"),
+    ("0", "none", "MATINEE_READ_KEY", "r"),
+    ("0", "log", "MATINEE_API_KEY", "w"),
+    ("0", "all", "MATINEE_API_KEY", "w"),
+    ("0", None, "MATINEE_API_KEY", "w"),
+])
+def test_service_key_by_level(readonly, writes, name, value):
+    import mcp_http
+    env = {"MATINEE_READ_KEY": " r ", "MATINEE_API_KEY": "w", **level_env(readonly, writes)}
+    assert mcp_http.service_key(env) == (name, value)
+
+
+@pytest.mark.parametrize("readonly,writes,expected", [
+    (None, None, READ_TOOLS), ("1", "log", READ_TOOLS), ("0", "rw", READ_TOOLS), ("0", "none", READ_TOOLS),
+    ("0", "log", READ_TOOLS | LOG_TOOLS), ("0", "all", READ_TOOLS | WRITE), ("0", None, READ_TOOLS | WRITE),
+])
+def test_tools_list_by_level(env, signing_key, where_is_calls, token, readonly, writes, expected):
+    env.update(level_env(readonly, writes))
+    with make_client(env, signing_key) as c:
+        tok = token()
+        assert tool_names(c, tok, open_session(c, tok)) == expected
+
+
+def test_tools_list_carries_annotations_on_the_wire(env, signing_key, where_is_calls, token):
+    env.update(level_env("0", "all"))
+    with make_client(env, signing_key) as c:
+        tok = token()
+        sid = open_session(c, tok)
+        tools = payload(rpc(c, "tools/list", {}, token=tok, sid=sid, id_=2))["result"]["tools"]
+    ann = {t["name"]: t["annotations"] for t in tools}
+    assert set(ann) == READ_TOOLS | WRITE
+    for name, a in ann.items():
+        assert {"readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint"} <= set(a), name
+    assert ann["where_is"]["readOnlyHint"] is True
+    assert ann["rate_movie"]["destructiveHint"] is True and ann["rate_movie"]["idempotentHint"] is True
+    assert ann["log_watch"]["readOnlyHint"] is False and ann["log_watch"]["idempotentHint"] is False
+    assert ann["add_movie"]["openWorldHint"] is True and ann["search_tmdb"]["openWorldHint"] is True
+
+
+def test_log_level_logs_a_watch_for_paddington_2(env, signing_key, where_is_calls, token, fake_matinee):
+    env.update(level_env("0", "log"))
+    with make_client(env, signing_key) as c:
+        tok = token()
+        sid = open_session(c, tok)
+        found = call_tool(c, tok, sid, "where_is", {"title": "Paddington 2"})["result"]["structuredContent"]["result"]
+        assert found["id"] == 214
+        msg = call_tool(c, tok, sid, "log_watch", {"title_id": found["id"], "watched_date": "2026-11-10"}, id_=4)
+    assert msg["result"]["isError"] is False
+    posts = [(r, b) for r, b in zip(fake_matinee.requests, fake_matinee.bodies) if r[0] == "POST"]
+    assert len(posts) == 1
+    (method, path, auth), body = posts[0]
+    assert path == "/admin/api/titles/214/watches" and auth == f"Bearer {KEY}"
+    assert json.loads(body) == {"watched_date": "2026-11-10"}
+
+
+def test_log_level_can_rate_too(env, signing_key, where_is_calls, token, fake_matinee):
+    env.update(level_env("0", "log"))
+    with make_client(env, signing_key) as c:
+        tok = token()
+        sid = open_session(c, tok)
+        msg = call_tool(c, tok, sid, "rate_movie", {"title_id": 214, "rating": 8.5}, id_=5)
+    assert msg["result"]["isError"] is False
+    puts = [(r, b) for r, b in zip(fake_matinee.requests, fake_matinee.bodies) if r[0] == "PUT"]
+    assert [(r[1], json.loads(b)) for r, b in puts] == [("/admin/api/titles/214/rating", {"rating": 8.5})]
+
+
+def test_log_level_refuses_add_movie(env, signing_key, where_is_calls, token, fake_matinee):
+    env.update(level_env("0", "log"))
+    with make_client(env, signing_key) as c:
+        tok = token()
+        sid = open_session(c, tok)
+        msg = call_tool(c, tok, sid, "add_movie", {"tmdb_id": 346648, "kind": "physical", "format": "Blu-ray"}, id_=6)
+    assert msg["result"]["isError"] is True
+    assert msg["result"]["content"][0]["text"] == "Unknown tool: add_movie"
+    assert [r for r in fake_matinee.requests if r[0] in ("POST", "PUT", "DELETE")] == []
+
+
+def test_main_log_level_uses_the_api_key_and_registers_eight_tools(served):
+    import asyncio
+
+    import mcp_http
+    env = full_env()
+    del env["MATINEE_READ_KEY"]
+    env.update(MATINEE_MCP_READONLY="0", MATINEE_MCP_WRITES="log", MATINEE_API_KEY=KEY)
+    assert mcp_http.main([], env) == 0
+    assert mcp_server._default_client.key_name == "MATINEE_API_KEY" and mcp_server._default_client.api_key == KEY
+    server, _, _ = served[0]
+    assert {t.name for t in asyncio.run(server.list_tools())} == READ_TOOLS | LOG_TOOLS
+
+
+def test_main_log_level_refuses_a_missing_api_key(served, capsys):
+    import mcp_http
+    env = full_env()  # has only MATINEE_READ_KEY, which does not stand in for the write key
+    env.update(MATINEE_MCP_READONLY="0", MATINEE_MCP_WRITES="log")
+    assert mcp_http.main([], env) == 2
+    assert "MATINEE_API_KEY is empty" in capsys.readouterr().err
+    assert served == []
+
+
+def test_main_conflict_stays_read_only_and_warns(served, capsys):
+    import asyncio
+
+    import mcp_http
+    env = full_env()
+    env.update(MATINEE_MCP_READONLY="1", MATINEE_MCP_WRITES="log")
+    assert mcp_http.main([], env) == 0
+    assert mcp_server._default_client.key_name == "MATINEE_READ_KEY"
+    server, _, _ = served[0]
+    assert {t.name for t in asyncio.run(server.list_tools())} == READ_TOOLS
+    err = capsys.readouterr().err
+    assert "MATINEE_MCP_WRITES=log ignored: MATINEE_MCP_READONLY=1 keeps the service read-only" in err
+
+
+def test_main_logs_the_level(served, capsys):
+    import mcp_http
+    env = full_env()
+    del env["MATINEE_READ_KEY"]
+    env.update(MATINEE_MCP_READONLY="0", MATINEE_MCP_WRITES="log", MATINEE_API_KEY=KEY)
+    assert mcp_http.main([], env) == 0
+    assert "writes: log" in capsys.readouterr().err
