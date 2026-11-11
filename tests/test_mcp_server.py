@@ -368,7 +368,7 @@ def test_server_instructions_present():
 
 def test_what_to_watch_kids_uses_pg13():
     kids = mcp_server.prompt_what_to_watch(kids=True)
-    assert 'max_cert="PG-13"' in kids and 'audience="kids"' in kids
+    assert 'max_cert="PG-13"' in kids
     assert "unrated" in kids
     assert "max_cert" not in mcp_server.prompt_what_to_watch(kids=False)
 
@@ -951,6 +951,11 @@ def test_rest_response_without_audience_echo_is_refused(monkeypatch):
         {"people": []} if p.endswith("/people") else {"mode": "never_watched", "results": [{"id": 1}]}))
     with pytest.raises(mcp_server.MatineeError, match="too old to pick for specific people"):
         client.get_recommendations(audience="kids")
+    # public mode (no key): no probe, but an unechoed audience is still refused
+    public = mcp_server.MatineeClient(api_url="http://fake-host", api_key="", db_path="")
+    monkeypatch.setattr(public, "_api_request", lambda m, p, d=None: {"mode": "never_watched", "results": [{"id": 1}]})
+    with pytest.raises(mcp_server.MatineeError, match="too old to pick for specific people"):
+        public.get_recommendations(audience="kids")
 
 
 def test_public_rest_mode_does_not_probe_and_surfaces_the_400(monkeypatch):
@@ -1006,3 +1011,23 @@ def test_tool_schemas_carry_the_new_arguments():
     assert "audience" in props("get_recommendations")
     assert "unseen_by" in props("search_collection")
     assert "attendees" in props("log_watch")
+
+
+def test_assumed_adults_attendance_db_matches_rest(test_env, monkeypatch):
+    people, toy, inside, wall = _seed_family(test_env)
+    con = db()
+    old_day = con.execute("SELECT date('now', '-11 years')").fetchone()[0]
+    a = con.execute("INSERT INTO watches (title_id, watched_date, date_bucket) VALUES (?, NULL, 'over_10_years')",
+                    (wall,)).lastrowid
+    b = con.execute("INSERT INTO watches (title_id, watched_date) VALUES (?, ?)", (wall, old_day)).lastrowid
+    con.commit()
+    direct = mcp_server.MatineeClient(db_path=str(test_env)).get_movie(wall)
+    rest = _admin_rest_client(monkeypatch).get_movie(wall)
+    for m in (direct, rest):
+        by_id = {w["id"]: w for w in m["watches"]}
+        for wid in (a, b):
+            assert by_id[wid]["attendance"] == "assumed_adults"
+            assert by_id[wid]["attendees"] == ["Nick", "Lauren"]
+        assert m["seen_by"] == ["Nick", "Lauren"] and m["not_seen_by"] == ["Midge", "Alice", "Paige"]
+    assert [(w["id"], w["attendance"], w["attendees"]) for w in direct["watches"]] == \
+           [(w["id"], w["attendance"], w["attendees"]) for w in rest["watches"]]

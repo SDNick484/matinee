@@ -235,8 +235,9 @@ class MatineeClient:
         con = self._get_db()
         if con is not None:
             try:
-                if con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='people'").fetchone() is None:
-                    return []  # a database older than schema v9
+                import recommend
+                if not recommend.has_people(con):
+                    return []  # a database older than schema v9, or nobody set up
                 return [{"id": r["id"], "name": r["name"], "kind": r["kind"], "color": r["color"],
                          "active": bool(r["active"])}
                         for r in con.execute("SELECT id, name, kind, color, active FROM people ORDER BY sort_order, id")]
@@ -435,33 +436,26 @@ class MatineeClient:
 
     @staticmethod
     def _db_attendance(con, title_id: int, watches) -> Tuple[List[Dict[str, Any]], List[str], List[str]]:
-        """(watches with attendance and attendee names, seen_by names, not_seen_by names), by the rules the app
-        uses: recommend.attendance_of for each watch and recommend.SEEN_CTE for who has seen the title."""
+        """(watches with attendance and attendee names, seen_by names, not_seen_by names). The logic is the app's:
+        recommend.watch_attendance and recommend.title_seen_by (attendance_of and SEEN_CTE)."""
         import recommend
-        people = []
-        recorded: Dict[int, set] = {}
-        seen_ids: set = set()
-        if recommend.has_people(con):
-            people = con.execute("SELECT id, name, kind, active FROM people ORDER BY sort_order, id").fetchall()
-            ids = [w["id"] for w in watches]
-            for r in con.execute("SELECT watch_id, person_id FROM watch_people WHERE watch_id IN (%s)"
-                                 % ",".join("?" * len(ids)), ids) if ids else []:
-                recorded.setdefault(r["watch_id"], set()).add(r["person_id"])
-            seen_ids = {r[0] for r in con.execute(
-                f"WITH {recommend.SEEN_CTE} SELECT DISTINCT person_id FROM seen WHERE title_id=?", (title_id,))}
+        if not recommend.has_people(con):  # also a database older than schema v9, which has no people tables
+            att = {w["id"]: {"attendance": recommend.attendance_of(w, False), "attendees": []} for w in watches}
+            people, seen_ids = [], []
+        else:
+            att = recommend.watch_attendance(con, watches)
+            people = con.execute("SELECT id, name, active FROM people ORDER BY sort_order, id").fetchall()
+            seen_ids = recommend.title_seen_by(con, title_id)
+        names = {p["id"]: p["name"] for p in people}
         out = []
         for w in watches:
-            mine = recorded.get(w["id"])
-            kind = recommend.attendance_of(w, bool(mine))
-            if mine:
-                who = [p["name"] for p in people if p["id"] in mine]
-            else:
-                who = [p["name"] for p in people if kind == "assumed_everyone" or p["kind"] == "adult"]
             d = {k: w[k] for k in w.keys() if k != "date_bucket"}
-            d["attendance"], d["attendees"] = kind, who
+            d["attendance"] = att[w["id"]]["attendance"]
+            d["attendees"] = [names[i] for i in att[w["id"]]["attendees"]]
             out.append(d)
-        return (out, [p["name"] for p in people if p["id"] in seen_ids],
-                [p["name"] for p in people if p["active"] and p["id"] not in seen_ids])
+        seen = set(seen_ids)
+        return (out, [names[i] for i in seen_ids],
+                [p["name"] for p in people if p["active"] and p["id"] not in seen])
 
     def where_is(self, title: str) -> Dict[str, Any]:
         """Find where physical copies of a movie are stored or which digital services host it."""
@@ -635,7 +629,7 @@ class MatineeClient:
 
         qs = urllib.parse.urlencode(params)
         out = self._api_request("GET", f"{self._read_prefix}/recommendations?{qs}")
-        if audience is not None and self.api_key and isinstance(out, dict) and "audience" not in out:
+        if audience is not None and isinstance(out, dict) and "audience" not in out:
             # The server ignored it (it echoes `audience` whenever it applies one); never return an unfiltered list.
             raise MatineeError(TOO_OLD_FOR_PEOPLE)
         if max_cert and isinstance(out, dict) and isinstance(out.get("results"), list):
@@ -738,7 +732,7 @@ class MatineeClient:
 SERVER_INSTRUCTIONS = """\
 Matinee is the family's own collection of physical discs and digital copies.
 - Recommend only what get_recommendations or search_collection return. Use search_tmdb only when the user asks about movies they do not own.
-- "Kids' night" or "something the kids can watch": call get_recommendations(audience="kids", max_cert="PG-13") unless the user names a rating. Unrated films are left out whenever max_cert is set.
+- "Kids' night" or "something the kids can watch": call get_recommendations(max_cert="PG-13") unless the user names a rating. Unrated films are left out whenever max_cert is set.
 - "What's next in the series we're watching": mode="next_in_franchise". "Let's start a new series": mode="start_franchise".
 - "The girls" or "the kids": audience="kids". "Us two", "date night": audience="adults". A named person: audience="Alice". After watching, pass attendees to log_watch only when someone was missing.
 - After a pick, "where is it?": call where_is(title). After watching: call log_watch, then rate_movie if the user gives a rating.
@@ -948,7 +942,7 @@ def prompt_what_to_watch(mood: str = "", max_runtime: int = 0, kids: bool = Fals
     instructions.append(f"{len(instructions)}. Present 2-3 distinct choices with format (e.g. 4K UHD vs Blu-ray) and reason why they fit.")
     if kids:
         instructions.append(
-            f'{len(instructions)}. This is a kids\' night: call `get_recommendations` with audience="kids" and max_cert="PG-13" and tell the '
+            f'{len(instructions)}. This is a kids\' night: call `get_recommendations` with max_cert="PG-13" and tell the '
             "family that unrated films were left out."
         )
     return "\n".join(instructions)

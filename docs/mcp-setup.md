@@ -262,12 +262,12 @@ The remote service offers these only while `MATINEE_MCP_READONLY=0` and `MATINEE
 - `matinee://recommendations`: Current top recommended movies from the collection in JSON format.
 
 ### 5.4 Prompts
-- **`what_to_watch`**: Interactive prompt guiding the AI to suggest a tailored movie night lineup based on mood, family preferences, or runtime limits. With `kids=True`, it tells the assistant to call `get_recommendations(audience="kids", max_cert="PG-13")` and to mention that unrated films were left out.
+- **`what_to_watch`**: Interactive prompt guiding the AI to suggest a tailored movie night lineup based on mood, family preferences, or runtime limits. With `kids=True`, it tells the assistant to call `get_recommendations(max_cert="PG-13")` and to mention that unrated films were left out.
 - **`log_movie_night`**: Quick assistant workflow to look up a movie just watched, log personal ratings, and record notes.
 
 ### 5.5 People: older servers and public mode
 
-`audience` and `unseen_by` only work against a server that knows about people. An older Matinee ignores them and would return an unfiltered list, so over REST (a key is set) the client first asks `GET /admin/api/people`. If that is a 404, or a recommendations response comes back without the `audience` echo, the tool fails with `This Matinee server is too old to pick for specific people. Update Matinee.` instead of returning a list that looks filtered. Over stdio with `MATINEE_DB_PATH` the same code that the app uses runs against the database directly, so nothing is probed. With no key at all (public `/api`) the client does not probe; Matinee answers 400 `Sign in to pick for specific people.` and that message is the tool error. For example, a service at `https://mcp.example.com` backed by `https://movies.example.com` needs `MATINEE_READ_KEY` for `audience="kids"` to work.
+`audience` and `unseen_by` only work against a server that knows about people. An older Matinee ignores them and would return an unfiltered list, so over REST (a key is set) the client first asks `GET /admin/api/people`. If that is a 404, or a recommendations response comes back without the `audience` echo (checked in every REST mode, public included), the tool fails with `This Matinee server is too old to pick for specific people. Update Matinee.` instead of returning a list that looks filtered. Over stdio with `MATINEE_DB_PATH` the same code that the app uses runs against the database directly, so nothing is probed. With no key at all (public `/api`) the client does not probe; Matinee answers 400 `Sign in to pick for specific people.` and that message is the tool error. For example, a service at `https://mcp.example.com` backed by `https://movies.example.com` needs `MATINEE_READ_KEY` for `audience="kids"` to work. In public mode against an older server, `unseen_by` on `search_collection` cannot be detected as ignored, because `/titles` has no echo.
 
 ### 5.6 Recommendation Recipes
 
@@ -275,8 +275,8 @@ The server instructions map common requests to calls, so most phrasings work wit
 
 | What the family says | What the assistant calls |
 |----------------------|--------------------------|
-| "Kids' night" / "something the kids can watch" | `get_recommendations(audience="kids", max_cert="PG-13")` |
-| "Kids' night, nothing above PG" | `get_recommendations(audience="kids", max_cert="PG")` |
+| "Kids' night" / "something the kids can watch" | `get_recommendations(max_cert="PG-13")` |
+| "Kids' night, nothing above PG" | `get_recommendations(max_cert="PG")` |
 | "Date night" / "just us two" | `get_recommendations(audience="adults")` |
 | "What's next in Harry Potter for Alice and Paige?" | `get_recommendations(mode="next_in_franchise", audience="Alice,Paige")` |
 | "Which of our movies have the girls not seen?" | `search_collection(unseen_by="kids")` |

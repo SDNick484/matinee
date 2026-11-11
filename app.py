@@ -29,8 +29,9 @@ from pathlib import Path
 from flask import Flask, abort, g, jsonify, make_response, redirect, request, send_from_directory, has_app_context
 from werkzeug.wrappers import Response as WerkzeugResponse
 
-from recommend import (CERT_VALUES, FORMAT_ORDER, SEEN_CTE, ParamError, attendance_of, find_person, has_people,
-                       parse_params, recommend, resolve_audience, sorted_formats, unknown_person_message)
+from recommend import (CERT_VALUES, FORMAT_ORDER, SEEN_CTE, ParamError, find_person, has_people, parse_params,
+                       recommend, resolve_audience, sorted_formats, title_seen_by, unknown_person_message,
+                       watch_attendance)
 
 APP_NAME = "Matinee"
 APP_DIR = Path(__file__).resolve().parent
@@ -1117,37 +1118,6 @@ def watch_out(r, private):
         for k in PRIVATE_WATCH:
             d.pop(k, None)
     return d
-
-
-def watch_attendance(con, watches):
-    """{watch_id: {"attendance", "attendees"}} for watch rows (needing id, watched_date, date_bucket). A watch with
-    watch_people rows lists exactly those people; an unresolved one lists who recommend.SEEN_CTE counts for it:
-    every person, or every adult when attendance_of says assumed_adults. Active or not, in sort_order, id order."""
-    people = con.execute("SELECT id, kind FROM people ORDER BY sort_order, id").fetchall()
-    order = {p["id"]: i for i, p in enumerate(people)}
-    recorded = {}
-    ids = [w["id"] for w in watches]
-    if ids:
-        for r in con.execute(f"SELECT watch_id, person_id FROM watch_people WHERE watch_id IN ({','.join('?' * len(ids))})", ids):
-            recorded.setdefault(r["watch_id"], []).append(r["person_id"])
-    out = {}
-    for w in watches:
-        mine = recorded.get(w["id"])
-        kind = attendance_of(w, bool(mine))
-        if mine:
-            who = sorted(mine, key=order.__getitem__)
-        else:
-            who = [p["id"] for p in people if kind == "assumed_everyone" or p["kind"] == "adult"]
-        out[w["id"]] = {"attendance": kind, "attendees": who}
-    return out
-
-
-def title_seen_by(con, title_id):
-    """Ids of everyone with a `seen` row for the title (recommend.SEEN_CTE), active or not, in people order."""
-    return [r[0] for r in con.execute(
-        f"""WITH {SEEN_CTE}
-            SELECT DISTINCT p.id FROM seen s JOIN people p ON p.id = s.person_id
-            WHERE s.title_id = ? ORDER BY p.sort_order, p.id""", (title_id,))]
 
 
 def title_detail(title_id, private):
