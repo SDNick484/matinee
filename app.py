@@ -1913,7 +1913,8 @@ def get_person(con, person_id):
 
 
 def person_name_arg(con, raw, person_id=None):
-    name = clean(raw)
+    # Only a JSON string is a name: clean() would store ["Midge"] or 42 as their str() text.
+    name = clean(raw) if isinstance(raw, str) else None
     if not name or len(name) > 40:
         abort(make_err(400, "A name is required (up to 40 characters)."))
     if name.lower() in RESERVED_PERSON_NAMES or "," in name or name.isdigit():

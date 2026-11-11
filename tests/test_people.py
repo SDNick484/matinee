@@ -268,6 +268,43 @@ def test_migration_from_every_earlier_version(tmp_path, monkeypatch, version):
     con.close()
 
 
+def test_migrate_twice_on_v9_keeps_people_and_attendance(tmp_path, monkeypatch):
+    """A v9 database already holding people and watch_people rows survives init_db() and migrate() twice, byte for
+    byte (no table rebuild, no reset of the new tables)."""
+    path = tmp_path / "v9.db"
+    monkeypatch.setattr(matinee, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(matinee, "IMAGE_DIR", tmp_path / "images")
+    monkeypatch.setattr(matinee, "DB_PATH", path)
+    monkeypatch.setattr(matinee, "_standalone_db", None)
+    matinee.init_db()
+    con = matinee.connect()
+    ids = seed_people(con)
+    con.execute("UPDATE people SET active = 0 WHERE id = ?", (ids["Paige"],))
+    tid = seed_title(con, 155, watched=("2026-11-10", "2015-06-01", None))
+    watches = [r[0] for r in con.execute("SELECT id FROM watches WHERE title_id = ? ORDER BY id", (tid,))]
+    for name in ("Nick", "Lauren", "Paige"):
+        con.execute("INSERT INTO watch_people (watch_id, person_id) VALUES (?, ?)", (watches[0], ids[name]))
+    con.execute("INSERT INTO watch_people (watch_id, person_id) VALUES (?, ?)", (watches[2], ids["Midge"]))
+    con.commit()
+    def snapshot(c):   # every row, every column; watch_people has no rowid, so order by all of its columns
+        return {t: [tuple(r) for r in c.execute(f"SELECT * FROM {t} ORDER BY 1, 2")]
+                for t in ("people", "watch_people", "watches")}
+
+    before = snapshot(con)
+    assert len(before["people"]) == 5 and len(before["watch_people"]) == 4
+    con.close()
+
+    matinee.init_db()
+    matinee.init_db()
+    con = matinee.connect()
+    matinee.migrate(con)
+    matinee.migrate(con)
+    assert snapshot(con) == before
+    assert con.execute("SELECT v FROM meta WHERE k='schema'").fetchone()[0] == "9"
+    assert con.execute("PRAGMA foreign_key_check").fetchall() == []
+    con.close()
+
+
 # ------------------------------------------------------------------ API
 
 
@@ -301,6 +338,18 @@ def test_validation(client, body, msg):
     r = client.post("/admin/api/people", json=body)
     assert r.status_code == 400 and r.json == {"error": msg}
     assert client.get("/admin/api/people").json["people"] == []
+
+
+@pytest.mark.parametrize("name", [["Midge"], {"first": "Midge"}, 42, 4.5, True])
+def test_name_must_be_a_string(client, name):
+    """JSON that is not a string is refused, not stored as str(value) ("['Midge']", "42", "True")."""
+    r = client.post("/admin/api/people", json={"name": name, "kind": "kid", "color": "red"})
+    assert r.status_code == 400 and r.json == {"error": NAME_MSG}
+    assert client.get("/admin/api/people").json["people"] == []
+    pid = make(client, "Alice", color="pink").json["person"]["id"]
+    r = client.put(f"/admin/api/people/{pid}", json={"name": name})
+    assert r.status_code == 400 and r.json == {"error": NAME_MSG}
+    assert [p["name"] for p in client.get("/admin/api/people").json["people"]] == ["Alice"]
 
 
 def test_update_validates_like_create(client):

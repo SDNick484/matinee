@@ -671,3 +671,43 @@ def test_attendance_of_default_today_is_sqlite_now(con):
     edge = con.execute("SELECT date('now', '-10 years'), date('now', '-10 years', '-1 day')").fetchone()
     assert recommend.attendance_of({"watched_date": edge[0], "date_bucket": None}, False) == "assumed_everyone"
     assert recommend.attendance_of({"watched_date": edge[1], "date_bucket": None}, False) == "assumed_adults"
+
+
+def test_seen_cte_and_attendance_of_agree_on_boundaries(con):
+    """attendance_of() and SEEN_CTE are one rule written twice (Python for watch rows, SQL for seen()). Pin them
+    together on every edge: one title per unresolved watch, so seen() rows for that title are that watch's."""
+    seed_people(con)
+    today_s, cutoff = con.execute("SELECT date('now'), date('now', '-10 years')").fetchone()
+    today = dt.date.fromisoformat(today_s)
+    day = dt.date.fromisoformat(cutoff)
+    cases = {                                                   # (watched_date, date_bucket) -> attendance_of
+        (str(day - dt.timedelta(days=1)), None): "assumed_adults",       # a day past ten years
+        (cutoff, None): "assumed_everyone",                              # exactly ten years: not before the cutoff
+        (str(day + dt.timedelta(days=1)), None): "assumed_everyone",     # a day inside ten years
+        (None, None): "assumed_everyone",                                # no date, no bucket
+        (None, "over_10_years"): "assumed_adults",
+        (None, "past_year"): "assumed_everyone",
+        (today_s, "over_10_years"): "assumed_adults",                    # the bucket wins over a recent date
+        (str(day - dt.timedelta(days=1)), "past_year"): "assumed_adults",  # an old date wins over a recent bucket
+    }
+    tmdb_ids = (155, 862, 150540, 10681, 671, 672, 673, 674)
+    for tmdb_id, ((watched, bucket), expected) in zip(tmdb_ids, cases.items()):
+        tid = seed_title(con, tmdb_id)
+        con.execute("INSERT INTO watches (title_id, watched_date, date_bucket) VALUES (?, ?, ?)", (tid, watched, bucket))
+        con.commit()
+        w = con.execute("SELECT * FROM watches WHERE title_id = ?", (tid,)).fetchone()
+        kinds = {r[0] for r in con.execute(
+            f"WITH {recommend.SEEN_CTE} SELECT DISTINCT p.kind FROM seen s JOIN people p ON p.id = s.person_id "
+            "WHERE s.title_id = ?", (tid,))}
+        sql_says = {frozenset({"adult", "kid"}): "assumed_everyone", frozenset({"adult"}): "assumed_adults"}[frozenset(kinds)]
+        assert recommend.attendance_of(w, False, today) == sql_says == expected, (watched, bucket)
+    # a recorded watch counts for exactly its people, whatever its date
+    tid = seed_title(con, 9806)
+    wid = con.execute("INSERT INTO watches (title_id, watched_date, date_bucket) VALUES (?, ?, 'over_10_years')",
+                      (tid, today_s)).lastrowid
+    con.execute("INSERT INTO watch_people (watch_id, person_id) SELECT ?, id FROM people WHERE name = 'Midge'", (wid,))
+    con.commit()
+    w = con.execute("SELECT * FROM watches WHERE id = ?", (wid,)).fetchone()
+    assert recommend.attendance_of(w, True, today) == "recorded"
+    assert [r[0] for r in con.execute(f"WITH {recommend.SEEN_CTE} SELECT p.name FROM seen s JOIN people p "
+                                      "ON p.id = s.person_id WHERE s.title_id = ?", (tid,))] == ["Midge"]
