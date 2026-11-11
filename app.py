@@ -21,7 +21,7 @@ Environment (see /etc/conf.d/matinee and .env.example):
   MATINEE_READ_KEY,
   ANTHROPIC_SEARCH_KEY, ANTHROPIC_SEARCH_MODEL, ASK_DAILY_LIMIT
 """
-import csv, datetime as dt, hashlib, hmac, io, ipaddress, json, os, re, sqlite3, sys, time, unicodedata
+import csv, datetime as dt, hashlib, hmac, io, ipaddress, json, os, re, sqlite3, sys, threading, time, unicodedata
 import urllib.error, urllib.parse, urllib.request
 from functools import wraps
 from pathlib import Path
@@ -91,6 +91,10 @@ def read_key_setting(env):
 
 
 OMDB_API_KEY = os.environ.get("OMDB_API_KEY", "").strip()
+# Home Assistant webhook, POSTed when a watch is logged for today; empty = off. A SECRET: the webhook id in the URL
+# is its only credential, so it is never logged (the host only), never returned by a route, never put in a payload.
+HA_WEBHOOK_URL = os.environ.get("HA_WEBHOOK_URL", "").strip()
+HA_WEBHOOK_TIMEOUT = 3  # seconds per socket operation; the request runs on a daemon thread
 TMDB_READ_TOKEN = os.environ.get("TMDB_READ_TOKEN", "").strip()
 TMDB_API = "https://api.themoviedb.org/3"
 TMDB_IMG = "https://image.tmdb.org/t/p"
@@ -2172,6 +2176,66 @@ def set_title_certification(title_id):
                    certification_tmdb=row["certification"], certification_override=value)
 
 
+def _ha_host(url):
+    """The host of the webhook URL, for log lines: the rest of the URL is the credential."""
+    try:
+        return urllib.parse.urlsplit(url).hostname or "?"
+    except ValueError:
+        return "?"
+
+
+def ha_payload(con, title_id, watched_date):
+    """The body Home Assistant gets: title metadata and the date, nothing editor-only. No notes, no people, no
+    attendance. `certification` is the effective one (override, else TMDB); `formats` are the distinct formats of
+    every copy in display order; `location` is the breadcrumb of the first copy that has one."""
+    t = con.execute("SELECT title, year, runtime, certification, certification_override FROM titles WHERE id=?",
+                    (title_id,)).fetchone()
+    copies = con.execute("SELECT format, location_id FROM copies WHERE title_id=? ORDER BY created_at, id",
+                         (title_id,)).fetchall()
+    paths = get_location_path_map(con)
+    return {"event": "matinee_watch_logged", "title": t["title"], "year": t["year"], "runtime": t["runtime"],
+            "certification": t["certification_override"] or t["certification"],
+            "formats": sorted_formats(c["format"] for c in copies),
+            "location": next((paths[c["location_id"]] for c in copies if c["location_id"] in paths), None),
+            "watched_date": watched_date, "title_id": title_id}
+
+
+def post_ha_event(url, payload):
+    """POST `payload` to Home Assistant. Runs on a daemon thread and never raises. A failure is one warning that
+    names the host and the kind of failure (a status or an exception class), never the URL or str(exc): both can
+    echo the webhook id."""
+    host = _ha_host(url)
+    try:
+        req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), method="POST",
+                                     headers={"Content-Type": "application/json", "User-Agent": "matinee/1.0"})
+        with urllib.request.urlopen(req, timeout=HA_WEBHOOK_TIMEOUT) as resp:
+            status = getattr(resp, "status", 200)
+        if not 200 <= status < 300:
+            app.logger.warning("Home Assistant webhook (host %s) answered HTTP %s", host, status)
+    except urllib.error.HTTPError as e:
+        app.logger.warning("Home Assistant webhook (host %s) answered HTTP %s", host, e.code)
+        try:
+            e.close()
+        except Exception:
+            pass
+    except Exception as e:
+        app.logger.warning("Home Assistant webhook (host %s) failed: %s", host, type(e).__name__)
+
+
+def fire_watch_event(con, title_id, watched_date):
+    """Tell Home Assistant a watch was logged for today. Fire and forget: the payload is built here, on the
+    request's own connection, and handed to a daemon thread; whatever goes wrong is a warning and never reaches
+    the editor."""
+    url = HA_WEBHOOK_URL
+    if not url:
+        return
+    try:
+        payload = ha_payload(con, title_id, watched_date)
+        threading.Thread(target=post_ha_event, args=(url, payload), daemon=True, name="ha-webhook").start()
+    except Exception as e:
+        app.logger.warning("Home Assistant webhook (host %s) not sent: %s", _ha_host(url), type(e).__name__)
+
+
 @app.post("/admin/api/titles/<int:title_id>/watches")
 @editor_required
 def add_watch(title_id):
@@ -2200,7 +2264,8 @@ def add_watch(title_id):
                 date_bucket = raw_bucket
 
     watched_date = None
-    if raw_date is not None and str(raw_date).strip():
+    explicit_date = raw_date is not None and bool(str(raw_date).strip())
+    if explicit_date:
         try:
             parsed = dt.date.fromisoformat(str(raw_date).strip())
             watched_date = parsed.isoformat()
@@ -2226,6 +2291,10 @@ def add_watch(title_id):
     except Exception:
         con.rollback()
         raise
+    # Home Assistant hears only about a watch dated today with no bucket: a back-filled history (an old date, a
+    # bucket, no date) must not start a "movie night". Editing a watch afterwards never gets here.
+    if explicit_date and not date_bucket and watched_date == dt.date.today().isoformat():
+        fire_watch_event(con, title_id, watched_date)
     return jsonify(ok=True, watch=watch_response(con, cur.lastrowid, title_id))
 
 
