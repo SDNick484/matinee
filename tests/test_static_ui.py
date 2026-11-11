@@ -309,3 +309,23 @@ def test_title_row_text_passes_aa_on_card():
     for var in colors:
         assert var in tok, f"{var} not a hex token"
         assert _contrast(tok[var], "#16161c") >= 4.5, f"{var} fails AA on #16161c"
+
+
+# --- CSV export link in the admin Stats view -------------------------------------------------
+
+def test_stats_export_link_is_admin_only():
+    assert JS.count("/admin/api/export.csv") == 1, "one export link, in renderStats"
+    stats = _fn_body("renderStats")
+    m = re.search(r"\$\{([^`]*?)\?\s*`\s*<a([^>]*href=\"/admin/api/export\.csv\"[^>]*)>", stats)
+    assert m, "export link missing from renderStats or not conditional"
+    assert re.fullmatch(r"\s*isAdmin\s*", m.group(1)), "the export link must be gated on isAdmin alone"
+    attrs = m.group(2)
+    assert "download" in attrs and 'id="btn-export-csv"' in attrs
+    assert "Export CSV" in stats and 'icon("download")' in stats
+
+
+def test_stats_export_link_styles_exist():
+    assert re.search(r"\bdownload: '<", JS), "ICONS.download missing"
+    for sel in (".stats-header-top",):
+        assert re.search(r"(?m)^" + re.escape(sel) + r"\s*\{", CSS), f"{sel} not defined"
+    assert "flex-wrap: wrap" in _rule(".stats-header-top")   # stays on screen at 360 px

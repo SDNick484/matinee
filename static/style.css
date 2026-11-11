@@ -640,6 +640,13 @@ main#view {
   flex-direction: column;
   gap: var(--s6);
 }
+.stats-header-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--s2);
+}
 .stats-header h1 {
   font-size: var(--fs-xl);
   font-weight: 800;
