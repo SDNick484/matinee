@@ -52,6 +52,8 @@
     },
     // GET /admin/api/me, fetched once on admin load; null = unknown/failed (no Ask entry points).
     me: null,
+    // GET /admin/api/people (editors only); [] for anonymous visitors or on any load error.
+    people: [],
     // AI search thread, JS memory only (a reload clears it). thread alternates {q}/{a};
     // results[k] holds the hydrated rows for the k-th answer.
     ask: { thread: [], results: [], draft: "", busy: false, error: null, turnsLeft: null },

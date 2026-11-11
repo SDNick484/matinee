@@ -331,3 +331,69 @@ def test_stats_export_link_styles_exist():
     for sel in (".stats-header-top",):
         assert re.search(r"(?m)^" + re.escape(sel) + r"\s*\{", CSS), f"{sel} not defined"
     assert "flex-wrap: wrap" in _rule(".stats-header-top")   # stays on screen at 360 px
+
+
+# --- People manager and person dots (per-person attendance) ----------------------------------
+
+PEOPLE_JS = (STATIC / "js" / "people.js").read_text(encoding="utf-8") if (STATIC / "js" / "people.js").exists() else ""
+
+
+def test_people_module_is_listed():
+    from conftest import JS_MODULES
+    assert "people.js" in JS_MODULES
+    assert (STATIC / "js" / "people.js").is_file()
+
+
+def test_people_button_is_admin_only():
+    router = (STATIC / "js" / "router.js").read_text(encoding="utf-8")
+    header = _fn_body("updateHeader")
+    admin_branch, _, anon_branch = header.partition("} else {")
+    assert 'id="btn-header-people"' in admin_branch and 'id="btn-header-people"' not in anon_branch
+    # loadPeople() is only ever called behind isAdmin
+    calls = [m.start() for m in re.finditer(r"loadPeople\(\)", router)]
+    assert calls, "router.js never calls loadPeople()"
+    for pos in calls:
+        assert "isAdmin" in router[max(0, pos - 200):pos], "loadPeople() call not guarded by isAdmin"
+
+
+def test_person_names_are_escaped():
+    assert PEOPLE_JS
+    interps = re.findall(r"\$\{([^}]*name[^}]*)\}", PEOPLE_JS)
+    assert interps, "no name interpolations found"
+    for expr in interps:
+        assert expr.strip().startswith("esc("), f"unescaped name in template: ${{{expr}}}"
+
+
+def test_dots_carry_full_name_labels():
+    for fn in ("personDotsHTML", "personTogglesHTML"):
+        m = re.search(rf"function {fn}\(.*?\n  \}}\n", PEOPLE_JS, re.S)
+        assert m, fn
+        body = m.group(0)
+        assert re.search(r'aria-label="\$\{esc\(p\.name\)\}', body), f"{fn} must label with the full name"
+        assert not re.search(r'aria-label="[^"]*initial', body)
+    assert "aria-pressed" in PEOPLE_JS
+
+
+def test_person_colors_pass_contrast():
+    tok = _tokens()
+    for n in range(1, 6):
+        c = tok[f"--p-user{n}"]
+        assert _contrast(c, "#0b0b0e") >= 4.5, f"--p-user{n} fails on page"
+        assert _contrast(c, "#16161c") >= 3, f"--p-user{n} fails on card"
+
+
+def test_person_toggle_tap_target():
+    decl = _rule(".person-toggle")
+    assert re.search(r"min-width:\s*44px", decl) and re.search(r"min-height:\s*44px", decl)
+
+
+def test_people_css_uses_defined_properties():
+    test_every_css_variable_used_is_defined()
+    for i, color in enumerate(("green", "blue", "red", "pink", "purple"), 1):
+        assert f"var(--p-user{i})" in _rule(f".person-{color}")
+    assert ".person-unknown" in CSS and ".people-row" in CSS
+
+
+def test_people_code_has_no_browser_storage():
+    assert PEOPLE_JS
+    assert "localStorage" not in PEOPLE_JS and "sessionStorage" not in PEOPLE_JS
