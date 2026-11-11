@@ -291,3 +291,80 @@ def test_installer_picks_the_key_matinee_mcp_needs(tmp_path, value, mode):
 def test_not_started_banner_names_the_mode_key():
     line = next(l for l in HEAD.splitlines() if l.strip().startswith("for k in MCP_PUBLIC_HOSTS"))
     assert '"$(mcp_key_name)"' in line and "MATINEE_API_KEY" not in line
+
+
+# ------------------------------------------------------------------ log rotation
+def _logrotate_fn():
+    return re.search(r"^install_logrotate\(\) \{.*?^\}$", HEAD, re.S | re.M).group(0)
+
+
+def _run_logrotate(tmp_path, *, have_logrotate=True, existing=None, conf_text="", make_dir=True):
+    """Run install_logrotate from the real installer under `set -eu`, pointed at a temp /etc/logrotate*."""
+    d = tmp_path / "logrotate.d"
+    if make_dir:
+        d.mkdir()
+    conf = tmp_path / "logrotate.conf"
+    conf.write_text(conf_text)
+    for name, text in (existing or {}).items():
+        (d / name).write_text(text)
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    if have_logrotate:
+        (bindir / "logrotate").write_text("#!/bin/sh\n")
+        (bindir / "logrotate").chmod(0o755)
+    env = {"PATH": f"{bindir}:/usr/bin:/bin" if have_logrotate else str(bindir),   # no PATH to find a real one
+           "LOGROTATE_D": str(d), "LOGROTATE_CONF": str(conf)}
+    script = f"set -eu\n{_logrotate_fn()}\ninstall_logrotate\necho done\n"
+    r = subprocess.run(["/bin/sh", "-c", script], env=env, capture_output=True, text=True)
+    return r, d / "matinee"
+
+
+def test_logrotate_is_not_a_required_package():
+    apk = next(l for l in HEAD.splitlines() if l.startswith("apk add --no-cache python3"))
+    assert "logrotate" not in apk
+    assert re.search(r"^install_logrotate$", HEAD, re.M)
+
+
+def test_logrotate_config_written_when_installed_and_unconfigured(tmp_path):
+    r, f = _run_logrotate(tmp_path, existing={"syslog": "/var/log/messages {\n    weekly\n}\n"})
+    assert r.returncode == 0 and "done" in r.stdout, r.stderr
+    text = f.read_text()
+    assert text.splitlines()[0] == "/var/log/matinee.log /var/log/matinee-mcp.log {" and text.splitlines()[-1] == "}"
+    for needle in ("weekly", "rotate 8", "copytruncate", "missingok", "notifempty"):
+        assert needle in text, needle
+
+
+def test_logrotate_skipped_when_not_installed(tmp_path):
+    r, f = _run_logrotate(tmp_path, have_logrotate=False)
+    assert r.returncode == 0 and "done" in r.stdout and not f.exists()
+
+
+@pytest.mark.parametrize("where", ["d", "conf"])
+@pytest.mark.parametrize("log", ["/var/log/matinee.log", "/var/log/matinee-mcp.log"])
+def test_logrotate_skipped_when_another_config_names_either_log(tmp_path, where, log):
+    stanza = f"{log} {{\n    daily\n    rotate 3\n}}\n"
+    kw = {"existing": {"mine": stanza}} if where == "d" else {"conf_text": stanza}
+    r, f = _run_logrotate(tmp_path, **kw)
+    assert r.returncode == 0 and "done" in r.stdout and not f.exists()
+
+
+def test_logrotate_rerun_keeps_an_edited_file(tmp_path):
+    r, f = _run_logrotate(tmp_path, existing={"matinee": "/var/log/matinee.log {\n    rotate 2\n}\n"})
+    assert r.returncode == 0 and f.read_text() == "/var/log/matinee.log {\n    rotate 2\n}\n"
+
+
+def test_logrotate_missing_config_dir_does_not_abort_the_install(tmp_path):
+    r, f = _run_logrotate(tmp_path, make_dir=False)
+    assert r.returncode == 0 and "done" in r.stdout and not f.exists()
+
+
+def test_logrotate_second_run_is_a_no_op(tmp_path):
+    r, f = _run_logrotate(tmp_path)
+    first = f.read_text()
+    assert r.returncode == 0 and first
+    d = f.parent
+    script = f"set -eu\n{_logrotate_fn()}\ninstall_logrotate\n"
+    bindir = tmp_path / "bin"
+    r2 = subprocess.run(["/bin/sh", "-c", script], capture_output=True, text=True,
+                        env={"PATH": f"{bindir}:/usr/bin:/bin", "LOGROTATE_D": str(d), "LOGROTATE_CONF": str(tmp_path / "logrotate.conf")})
+    assert r2.returncode == 0 and f.read_text() == first and "Added" not in r2.stdout
