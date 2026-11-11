@@ -496,3 +496,48 @@ def test_env_example_writes_default_is_none():
 def test_banner_prints_the_write_level():
     assert re.search(r"^\s*MCP_LEVEL=\$\(mcp_level ", HEAD, re.M)
     assert "write level: $MCP_LEVEL" in HEAD
+
+
+# ------------------------------------------------------------------ docs: write levels
+def _setup_text():
+    return (ROOT / "docs" / "mcp-setup.md").read_text(encoding="utf-8")
+
+
+def test_mcp_setup_documents_the_write_levels():
+    text = _setup_text()
+    for needle in ("MATINEE_MCP_WRITES", "`none`", "`log`", "`all`", "MATINEE_MCP_READONLY=0",
+                   "log_watch", "rate_movie", "add_movie"):
+        assert needle in text, needle
+    # the section the phone-logging recipe lives in
+    sec = text.split("### 4.4 Turning on write tools", 1)[1].split("### 4.5", 1)[0]
+    assert "MATINEE_MCP_WRITES=log" in sec and "MATINEE_MCP_READONLY=0" in sec and "rc-service matinee-mcp restart" in sec
+    assert "Paddington 2" in sec
+
+
+def test_mcp_setup_settings_table_has_the_writes_row():
+    lines = _setup_text().splitlines()
+    row = next(l for l in lines if l.startswith("| `MATINEE_MCP_WRITES` |"))
+    assert "none" in row and "log" in row and "all" in row and "MATINEE_MCP_READONLY" in row
+    ro = next(l for l in lines if l.startswith("| `MATINEE_MCP_READONLY` |"))
+    assert "MATINEE_MCP_WRITES" in ro
+
+
+def test_mcp_setup_key_table_says_the_api_key_is_used_at_log_and_all():
+    lines = _setup_text().splitlines()
+    api = next(l for l in lines if l.startswith("| `MATINEE_API_KEY` | *(empty)*"))
+    assert "`log`" in api and "`all`" in api and "MATINEE_MCP_READONLY=0" in api
+
+
+def test_mcp_setup_rollback_has_a_row_for_dropping_to_log():
+    sec = _setup_text().split("### 4.5 Rollback", 1)[1].split("\n---", 1)[0]
+    assert "MATINEE_MCP_WRITES=log" in sec
+
+
+def test_mcp_setup_write_tool_section_lists_levels():
+    sec = _setup_text().split("### 5.2 Write Tools", 1)[1].split("### 5.3", 1)[0]
+    assert "MATINEE_MCP_WRITES" in sec and "`log`" in sec and "`all`" in sec
+
+
+def test_readme_mentions_the_write_levels():
+    text = (ROOT / "README.md").read_text(encoding="utf-8")
+    assert "MATINEE_MCP_WRITES" in text

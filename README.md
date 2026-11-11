@@ -182,7 +182,9 @@ Matinee includes an official Python **Model Context Protocol (MCP)** server (`mc
 - **Certification Override**: Editors can set a title's US rating (G, PG, PG-13, R, NC-17, or NR) from the title view when TMDB's rating is wrong or missing. The override survives TMDB refreshes, and clearing it restores TMDB's value. It is written with `PUT /admin/api/titles/<id>/certification`, which requires an editor session and returns 401 for anonymous requests.
 - **Read & Write MCP Tools**: Search collection, fetch full title details, query recommendations, log watches with notes, set personal 0.0–10.0 ratings, and import movies from TMDB.
 
-See [docs/mcp-setup.md](docs/mcp-setup.md) for full configuration blocks and prompt workflows. To use the tools from the Claude app on your phone, see "Remote access from the Claude app" in the same file (a read-only `matinee-mcp` service behind Cloudflare Access).
+`MATINEE_MCP_WRITES=none|log|all` chooses which write tools the remote service offers: `log` adds `rate_movie` and `log_watch` (log a movie night from the phone), `all` also adds `add_movie` (see [docs/mcp-setup.md](docs/mcp-setup.md) §4.4).
+
+See [docs/mcp-setup.md](docs/mcp-setup.md) for full configuration blocks and prompt workflows. To use the tools from the Claude app on your phone, see "Remote access from the Claude app" in the same file (a `matinee-mcp` service behind Cloudflare Access, read-only by default).
 
 ---
 
