@@ -1,21 +1,26 @@
 # Matinee — rules for agents and contributors
 
 Self-hosted, phone-first movie collection tracker (physical discs + digital libraries). Single-file Flask app
-(`app.py`), SQLite, vanilla-JS SPA (`static/`), a FastMCP server (`mcp_server.py`, `mcp_http.py`), an Ask
-feature (`ask.py`), and an Alpine/OpenRC installer (`installer/`). Read the code before proposing changes; trust
-the code over any doc that disagrees.
+(`app.py`), SQLite, vanilla-JS SPA (`static/`, native ES modules in `static/js/`), a FastMCP server
+(`mcp_server.py`, `mcp_http.py`), an Ask feature (`ask.py`), and an Alpine/OpenRC installer (`installer/`). Read
+the code before proposing changes; trust the code over any doc that disagrees.
 
 ## Engineering rules
 
 1. **Footprint.** The Flask app's runtime dependencies are Alpine `py3-*` packages installed by `apk` (the CI
    Alpine job enforces this). The one exception is the separate `matinee-mcp` venv (`requirements-mcp.txt`).
-   No frontend framework, bundler or npm build step; plain files in `static/`.
+   No frontend framework, bundler or npm build step; plain files in `static/`. The SPA is native ES modules in
+   `static/js/` (`main.js` is the entry): import with `import { name } from "./x.js";`, list exports in one
+   `export { … };` at the end, and keep `core.js` and `icons.js` free of imports. `render_index()` versions
+   every module through an import map, so never hand-edit `?v=`. `tests/test_js_modules.py` checks the graph.
 2. **Schema.** Changes go through an idempotent `migrate()` that works from every earlier version (v1 →
    current), and `SCHEMA_VERSION` is bumped. Indexes that depend on new columns are created in `migrate()`, not
    in `SCHEMA`. No manual DB step on the host, ever.
 3. **Tests.** pytest with recorded fixtures (`tests/fixtures/tmdb/`) and no live network. Add a fixture rather
    than calling an API; external-API features test a lookup miss and quota/HTTP errors.
-4. **CI** must stay green: Python 3.10–3.13 on Ubuntu, the Alpine container job, and `node -c static/app.js`.
+4. **CI** must stay green: Python 3.10–3.13 on Ubuntu, the Alpine container job, the lint and UI smoke jobs,
+   and `node --check` on every `static/js/*.js`. `static/js/package.json` (`{"type": "module"}`) is what makes
+   Node parse them as modules; without it a broken file passes.
 5. **Auth.** Writes live under `/admin/api/` with `@editor_required`. Reads live under `/api/` and respect
    `PUBLIC_VIEW`. State whether any new data is public or editor-only.
 6. **MCP in step.** New data an assistant would want means a new or extended tool in `mcp_server.py`, a test in
@@ -48,7 +53,7 @@ Run and report all of these before opening the PR:
 
 ```sh
 python -m pytest -q
-node -c static/app.js
+for f in static/js/*.js; do node --check "$f"; done
 sh installer/build.sh && sh -n dist/setup-matinee.sh
 ```
 
