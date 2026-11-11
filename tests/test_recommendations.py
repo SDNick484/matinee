@@ -275,7 +275,6 @@ def test_titles_attendance_other_values_are_400(client, family, value):
 def test_grid_sql_unchanged_without_the_new_params(client, family, monkeypatch):
     import app as app_mod
     seen = []
-    orig = app_mod.CARD_SELECT
     real_db = app_mod.db
 
     class Spy:
@@ -291,11 +290,27 @@ def test_grid_sql_unchanged_without_the_new_params(client, family, monkeypatch):
 
     monkeypatch.setattr(app_mod, "db", lambda: Spy(real_db()))
     client.get("/admin/api/titles?q=dark")
-    assert seen and all("seen(" not in s and "watch_people" not in s for s in seen), seen
+    grid = [s for s in seen if "FROM titles t" in s]
+    assert grid, seen
+    for sql in grid:  # the plain grid query: no CTE, no people tables
+        assert not sql.lstrip().startswith("WITH"), sql
+        assert "seen" not in sql and "watch_people" not in sql, sql
+        assert sql.lstrip().startswith(app_mod.CARD_SELECT[:40])
     seen.clear()
     client.get("/admin/api/titles?unseen_by=Alice")
     assert any(s.lstrip().startswith("WITH seen(") for s in seen)
-    assert orig in app_mod.CARD_SELECT
+
+
+@pytest.mark.parametrize("qs", ["unseen_by=", "unseen_by=%20%20"])
+def test_blank_unseen_by_is_400(client, family, qs):
+    res = client.get(f"/admin/api/titles?{qs}")
+    assert res.status_code == 400 and res.get_json() == {"error": "unseen_by is empty."}
+
+
+@pytest.mark.parametrize("qs", ["audience=", "audience=%20"])
+def test_blank_audience_is_400(client, family, qs):
+    res = client.get(f"/admin/api/recommendations?{qs}")
+    assert res.status_code == 400 and res.get_json() == {"error": "audience is empty."}
 
 
 def test_public_recommendations_unchanged(client, family):
