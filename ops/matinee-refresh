@@ -1,6 +1,7 @@
 #!/bin/sh
-# Daily refresh of external movie ratings (OMDb / IMDb, Rotten Tomatoes, Metacritic).
-# Runs from /etc/periodic/daily.
+# Daily refresh of external movie data. Runs from /etc/periodic/daily.
+#   - ratings (OMDb: IMDb, Rotten Tomatoes, Metacritic), when OMDB_API_KEY is set
+#   - cached TMDB metadata older than ~6 months (certification, franchise, posters), when TMDB_READ_TOKEN is set
 # Config: /etc/conf.d/matinee
 # Log: /var/log/ops.log
 
@@ -13,4 +14,8 @@ set +a
 
 if [ -n "${OMDB_API_KEY:-}" ]; then
   python3 /opt/matinee/ops/refresh_ratings.py --limit 50 >> /var/log/ops.log 2>&1 || true
+fi
+if [ -n "${TMDB_READ_TOKEN:-}" ]; then
+  # 25 titles a night is plenty: a collection of 1,500 films turns over in two months
+  python3 /opt/matinee/ops/refresh_titles.py --limit 25 --stale-days 180 >> /var/log/ops.log 2>&1 || true
 fi
