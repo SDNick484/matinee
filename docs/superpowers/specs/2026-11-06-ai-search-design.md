@@ -418,7 +418,10 @@ CI is unchanged: Python 3.10–3.13 on Ubuntu, the Alpine job (no new `apk` pack
 
 **Deferred**
 
-- Origin/`Sec-Fetch-Site` checks in `editor_required` for every write route.
+- ~~Origin/`Sec-Fetch-Site` checks in `editor_required` for every write route.~~ Done in `fix/lan-cross-site`
+  (2026-11-11): the check now lives in `editor_required` and covers every `/admin/api/` route (the api-key
+  identity is exempt). The Ask route no longer carries its own copy; decision 9 and step 2 of §4 describe the
+  original, route-local design.
 - A shared `reads.py` for MCP DB mode, Ask and possibly the app routes (option B), after `feat/remote-mcp`
   merges.
 - Streaming, saved threads, per-person history (needs the backlog's per-person feature).

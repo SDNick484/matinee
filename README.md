@@ -76,6 +76,7 @@ CF_TEAM_DOMAIN=<your-team>.cloudflareaccess.com
 CF_AUD=<cloudflare-access-application-audience-tag>
 ADMIN_EMAILS=admin@example.com,editor@example.com
 LAN_EDIT=1
+LAN_HOSTS=
 PUBLIC_VIEW=1
 TMDB_READ_TOKEN=<tmdb-v3-api-read-access-token>
 ```
@@ -84,6 +85,40 @@ After modifying settings, restart the OpenRC service:
 ```bash
 rc-service matinee restart
 ```
+
+---
+
+## LAN Editing
+
+With `LAN_EDIT=1` (the default), a browser on your home network can edit at `http://<server-ip>:8769/admin`
+without signing in. Two checks keep that from being usable by other websites:
+
+- **Host check.** A request only counts as a LAN editor when its `Host` header is an IP address
+  (`192.168.1.50:8769`, `[fd00::50]:8769`), `localhost`, or a name listed in `LAN_HOSTS`. This blocks DNS
+  rebinding: a page on `evil.example.com` that re-points its own name at your server still sends
+  `Host: evil.example.com` and is treated as "not an editor" (401).
+- **Cross-site check.** Every editor route (`/admin/api/...`) refuses a browser request whose `Origin` is a
+  different host, or that says `Sec-Fetch-Site: cross-site`, with
+  `403 {"error": "Cross-site request refused"}`. This applies to LAN and Cloudflare Access editors alike;
+  requests authenticated with `MATINEE_API_KEY` (scripts, the MCP server) are exempt.
+
+If you reach Matinee on the LAN by a name instead of an IP (a router DNS entry, `/etc/hosts`, mDNS), list it,
+without a port, and restart:
+
+```sh
+# /etc/conf.d/matinee
+LAN_HOSTS=matinee.lan,movies.home.arpa
+```
+```bash
+rc-service matinee restart
+```
+
+Requests through the Cloudflare tunnel are unaffected: they carry `Cf-Ray` and never get the LAN identity;
+editors there sign in with Access.
+
+Every response also carries `X-Content-Type-Options: nosniff`, `Referrer-Policy: same-origin` and
+`Content-Security-Policy: frame-ancestors 'self'` (no framing by other sites). A stricter script/style CSP is
+not set, because the UI still uses inline event handlers and `style` attributes.
 
 ---
 

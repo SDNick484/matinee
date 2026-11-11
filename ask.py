@@ -3,7 +3,7 @@
 The thread comes from the browser and is untrusted; only plain question/answer text is ever turned into model
 messages. This module is imported at the bottom of app.py, once everything it needs is defined.
 """
-import http.client, json, os, secrets, time, urllib.error, urllib.parse, urllib.request
+import http.client, json, os, secrets, time, urllib.error, urllib.request
 
 from flask import g, jsonify, request
 
@@ -386,18 +386,9 @@ def answer(messages):
         return fail("error", "unexpected error", exc=True)
 
 
-def cross_site():
-    origin = (request.headers.get("Origin") or "").strip()
-    if origin and urllib.parse.urlparse(origin).netloc != request.host:
-        return True
-    return (request.headers.get("Sec-Fetch-Site") or "").lower() == "cross-site"
-
-
 @app.post("/admin/api/ask")
-@editor_required
+@editor_required  # also refuses cross-site requests (Origin / Sec-Fetch-Site) for every editor route
 def ask_route():
-    if cross_site():
-        return make_err(403, "Cross-site request refused")
     if g.editor == "api-key":
         return make_err(403, "Ask is for signed-in editors.")
     if not enabled():

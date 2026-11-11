@@ -86,6 +86,7 @@ add_setting "$CONF" CF_TEAM_DOMAIN "" "Cloudflare Access team domain, e.g. yourt
 add_setting "$CONF" CF_AUD "" "AUD tag of the Matinee Access application (path: admin)"
 add_setting "$CONF" ADMIN_EMAILS "" "Only these emails may edit (comma separated); empty = anyone the Access policy lets in"
 add_setting "$CONF" LAN_EDIT 1 "1 = direct LAN requests (not through Cloudflare) may edit"
+add_setting "$CONF" LAN_HOSTS "" "Host names LAN editing may use besides IPs and localhost, e.g. matinee.lan (comma separated)"
 add_setting "$CONF" PUBLIC_VIEW 1 "1 = anyone can browse the collection at /; 0 = everything behind /admin"
 add_setting "$CONF" TMDB_READ_TOKEN "" "TMDB API Read Access Token (themoviedb.org -> Settings -> API); adding movies needs it"
 add_setting "$CONF" OMDB_API_KEY "" "Optional OMDb API key (omdbapi.com/apikey.aspx) for IMDb, Rotten Tomatoes & Metacritic scores"
@@ -142,7 +143,7 @@ description="Matinee movie collection"
 : ${PORT:=8769}
 : ${DATA_DIR:=/var/lib/matinee}
 export HOME=/var/lib/matinee  # newer gunicorn keeps a small control socket under $HOME
-export PORT DATA_DIR CF_TEAM_DOMAIN CF_AUD ADMIN_EMAILS LAN_EDIT PUBLIC_VIEW TMDB_READ_TOKEN MATINEE_API_KEY OMDB_API_KEY ANTHROPIC_SEARCH_KEY ANTHROPIC_SEARCH_MODEL ASK_DAILY_LIMIT
+export PORT DATA_DIR CF_TEAM_DOMAIN CF_AUD ADMIN_EMAILS LAN_EDIT LAN_HOSTS PUBLIC_VIEW TMDB_READ_TOKEN MATINEE_API_KEY OMDB_API_KEY ANTHROPIC_SEARCH_KEY ANTHROPIC_SEARCH_MODEL ASK_DAILY_LIMIT
 supervisor="supervise-daemon"
 respawn_delay=5
 respawn_max=10
