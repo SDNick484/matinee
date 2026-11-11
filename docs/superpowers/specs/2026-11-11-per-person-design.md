@@ -3,7 +3,7 @@
 **Date:** 2026-11-11
 **Branch:** spec and plan merged from `feat/per-person` (PR #28); the build is on `feat/people-attendance`
 **Schema:** v8 → v9 (two new tables, no change to an existing table, column or row)
-**Status:** Approved by Nick on 2026-11-11 (design, spec and plan). No implementation has started.
+**Status:** Approved by Nick on 2026-11-11 (design, spec and plan). Implemented on `feat/people-attendance`; awaiting merge.
 **Verified against:** `matinee` `main` @ `b2f0fe3` (merge of PR #27), `python -m pytest -q` → 842 passed, 13 skipped.
 
 The feature is dormant until an editor adds the first person, so upgrading an install changes nothing by default.

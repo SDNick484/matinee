@@ -22,6 +22,7 @@
     warn: '<path d="M12 3.5 2.5 20h19z"/><path d="M12 10v4.5"/><circle cx="12" cy="17.3" r="0.6" fill="currentColor"/>',
     image: '<rect x="3.5" y="4" width="17" height="16" rx="2"/><circle cx="9" cy="9.5" r="1.7"/><path d="m20.5 15.5-5-5-10 9.5"/>',
     undo: '<path d="M4 9.5h10.5a5 5 0 0 1 0 10H8"/><path d="m7.5 6-3.5 3.5L7.5 13"/>',
+    people: '<circle cx="9" cy="8.5" r="3.2"/><path d="M3 19.5c.4-3.4 3-5.5 6-5.5s5.6 2.1 6 5.5"/><circle cx="17" cy="9.5" r="2.4"/><path d="M16.5 14.2c2.6.1 4.3 1.8 4.7 4.6"/>',
     dot: '<circle cx="12" cy="12" r="6.5" fill="currentColor" stroke="none"/>',
     chat: '<path d="M5 4.5h14A1.5 1.5 0 0 1 20.5 6v9a1.5 1.5 0 0 1-1.5 1.5h-8.5L6 20v-3.5H5A1.5 1.5 0 0 1 3.5 15V6A1.5 1.5 0 0 1 5 4.5z"/>',
     send: '<path d="M4 12 20.5 4 16 20.5l-4-6.5z"/><path d="m12 14 8.5-10"/>',

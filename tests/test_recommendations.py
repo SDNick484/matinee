@@ -151,3 +151,174 @@ def test_api_results_have_poster_and_cert(client):
     seed_title(db(), 862)
     res = client.get("/api/recommendations?mode=genre_mood").get_json()["results"][0]
     assert "poster_url" in res and res["certification"] == "G"
+
+
+# --- audience, unseen_by, attendance (people and attendance, editors only) ---------------------------------
+# Scenario: The Dark Knight (155) was watched by Nick and Lauren only; Toy Story 3 (10193) by Alice (recorded);
+# Inside Out (150540) was never watched. The family is Nick, Lauren (adults), Midge, Alice, Paige (kids).
+from conftest import seed_people, seed_title  # noqa: E402
+
+SIGN_IN = "Sign in to pick for specific people."
+PUBLIC_BODY_KEYS = {"count", "mode", "results"}  # what /api/recommendations answered before people existed
+PUBLIC_RESULT_KEYS = {"certification", "collection_name", "collection_tmdb_id", "formats", "genres", "id",
+                      "last_watched", "poster_file", "poster_url", "reason", "recommendation_reason", "runtime",
+                      "title", "tmdb_vote", "user_rating", "watch_count", "year"}
+
+
+@pytest.fixture
+def family(client):
+    con = db()
+    ids = seed_people(con)
+    tk = seed_title(con, 155)
+    ts3 = seed_title(con, 10193)
+    io = seed_title(con, 150540)
+    for tid, who in ((tk, ("Nick", "Lauren")), (ts3, ("Alice",))):
+        wid = con.execute("INSERT INTO watches (title_id, watched_date) VALUES (?, date('now', '-30 days'))",
+                          (tid,)).lastrowid
+        for name in who:
+            con.execute("INSERT INTO watch_people (watch_id, person_id) VALUES (?, ?)", (wid, ids[name]))
+    con.commit()
+    return {"people": ids, "tk": tk, "ts3": ts3, "io": io}
+
+
+def _names(res):
+    return [t["title"] for t in res.get_json()["titles"]]
+
+
+def test_admin_recommendations_audience(client, family):
+    res = client.get("/admin/api/recommendations?mode=never_watched&audience=kids&limit=50")
+    assert res.status_code == 200
+    body = res.get_json()
+    assert body["audience"]["label"] == "kids"
+    assert "Inside Out" in [r["title"] for r in body["results"]]
+    assert "Toy Story 3" not in [r["title"] for r in body["results"]]
+
+
+def test_public_audience_is_400(client, family):
+    res = client.get("/api/recommendations?audience=kids")
+    assert res.status_code == 400 and res.get_json() == {"error": SIGN_IN}
+
+
+@pytest.mark.parametrize("path", [
+    "/api/recommendations?audience=",
+    "/api/recommendations?audience=nobody",
+    "/api/recommendations?mode=bogus&max_cert=XX&audience=kids",  # the guard comes before any other validation
+    "/api/titles?unseen_by=kids",
+    "/api/titles?unseen_by=",
+    "/api/titles?attendance=unknown",
+    "/api/titles?attendance=",
+    "/api/titles?attendance=anything&q=dark",
+])
+def test_public_unseen_by_and_attendance_are_400(client, family, path):
+    res = client.get(path)
+    assert res.status_code == 400 and res.get_json() == {"error": SIGN_IN}
+
+
+def test_public_guard_applies_without_people(client):
+    for path in ("/api/titles?unseen_by=kids", "/api/titles?attendance=unknown", "/api/recommendations?audience=kids"):
+        assert client.get(path).get_json() == {"error": SIGN_IN}
+
+
+def test_unknown_person_400_lists_people(client, family):
+    for path in ("/admin/api/titles?unseen_by=Bob", "/admin/api/recommendations?audience=Bob"):
+        res = client.get(path)
+        assert res.status_code == 400
+        assert res.get_json() == {"error": "Unknown person: Bob. People: Nick, Lauren, Midge, Alice, Paige."}
+
+
+def test_titles_unseen_by(client, family):
+    res = client.get("/admin/api/titles?unseen_by=Alice,Paige")
+    assert res.status_code == 200
+    assert sorted(_names(res)) == ["Inside Out", "The Dark Knight"]
+    assert res.get_json()["count"] == 2
+    assert sorted(_names(client.get("/admin/api/titles?unseen_by=kids"))) == ["Inside Out", "The Dark Knight"]
+    assert _names(client.get("/admin/api/titles?unseen_by=everyone")) == ["Inside Out"]
+    # id tokens work too, and the filter composes with the other grid filters
+    assert _names(client.get(f"/admin/api/titles?unseen_by={family['people']['Alice']}&q=dark")) == ["The Dark Knight"]
+    assert _names(client.get("/admin/api/titles?unseen_by=Alice&watched=unwatched")) == ["Inside Out"]
+    assert _names(client.get("/admin/api/titles?unseen_by=Alice&genre=Crime")) == ["The Dark Knight"]
+    assert _names(client.get("/admin/api/titles?unseen_by=Alice&sort=title")) == ["The Dark Knight", "Inside Out"]  # sorted as "Dark Knight"
+
+
+def test_titles_unseen_by_with_no_people_is_400(client):
+    seed_title(db(), 155)
+    res = client.get("/admin/api/titles?unseen_by=kids")
+    assert res.status_code == 400
+    assert res.get_json() == {"error": "No people are set up yet. Add them under People in the admin view."}
+
+
+def test_titles_attendance_unknown(client, family):
+    con = db()
+    # an old watch with no attendees on Inside Out (assumed adults only, being over ten years old); the recorded
+    # watches on The Dark Knight and Toy Story 3 are resolved
+    con.execute("INSERT INTO watches (title_id, watched_date) VALUES (?, date('now', '-11 years'))", (family["io"],))
+    con.commit()
+    res = client.get("/admin/api/titles?attendance=unknown")
+    assert res.status_code == 200 and _names(res) == ["Inside Out"]
+    assert _names(client.get("/admin/api/titles?attendance=unknown&unseen_by=Alice")) == ["Inside Out"]
+    assert _names(client.get("/admin/api/titles?attendance=unknown&unseen_by=Alice&q=dark")) == []
+
+
+def test_titles_attendance_unknown_empty_without_people(client):
+    tid = seed_title(db(), 155, watched=["2025-01-01"])
+    assert tid
+    res = client.get("/admin/api/titles?attendance=unknown")
+    assert res.status_code == 200 and res.get_json()["titles"] == []
+
+
+@pytest.mark.parametrize("value", ["", "known", "Unknown", "all"])
+def test_titles_attendance_other_values_are_400(client, family, value):
+    res = client.get(f"/admin/api/titles?attendance={value}")
+    assert res.status_code == 400 and res.get_json() == {"error": "attendance must be unknown."}
+
+
+def test_grid_sql_unchanged_without_the_new_params(client, family, monkeypatch):
+    import app as app_mod
+    seen = []
+    real_db = app_mod.db
+
+    class Spy:
+        def __init__(self, con):
+            self.con = con
+
+        def execute(self, sql, *a):
+            seen.append(sql)
+            return self.con.execute(sql, *a)
+
+        def __getattr__(self, n):
+            return getattr(self.con, n)
+
+    monkeypatch.setattr(app_mod, "db", lambda: Spy(real_db()))
+    client.get("/admin/api/titles?q=dark")
+    grid = [s for s in seen if "FROM titles t" in s]
+    assert grid, seen
+    for sql in grid:  # the plain grid query: no CTE, no people tables
+        assert not sql.lstrip().startswith("WITH"), sql
+        assert "seen" not in sql and "watch_people" not in sql, sql
+        assert sql.lstrip().startswith(app_mod.CARD_SELECT[:40])
+    seen.clear()
+    client.get("/admin/api/titles?unseen_by=Alice")
+    assert any(s.lstrip().startswith("WITH seen(") for s in seen)
+
+
+@pytest.mark.parametrize("qs", ["unseen_by=", "unseen_by=%20%20"])
+def test_blank_unseen_by_is_400(client, family, qs):
+    res = client.get(f"/admin/api/titles?{qs}")
+    assert res.status_code == 400 and res.get_json() == {"error": "unseen_by is empty."}
+
+
+@pytest.mark.parametrize("qs", ["audience=", "audience=%20"])
+def test_blank_audience_is_400(client, family, qs):
+    res = client.get(f"/admin/api/recommendations?{qs}")
+    assert res.status_code == 400 and res.get_json() == {"error": "audience is empty."}
+
+
+def test_public_recommendations_unchanged(client, family):
+    for path in ("/api/recommendations", "/admin/api/recommendations"):
+        body = client.get(path + "?mode=never_watched&limit=50").get_json()
+        assert set(body) == PUBLIC_BODY_KEYS
+        assert body["results"] and set(body["results"][0]) == PUBLIC_RESULT_KEYS
+        text = client.get(path + "?mode=never_watched&limit=50").get_data(as_text=True)
+        for name in family["people"]:
+            assert name not in text
+        assert "audience" not in body and "seen_by" not in text

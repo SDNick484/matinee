@@ -5,6 +5,7 @@ import {
   icon
 } from "./icons.js";
 import { navigate } from "./router.js";
+import { activePeople, personDotsHTML, personTogglesHTML, readToggles } from "./people.js";
 import {
   downscaleImage, MAX_COVER_BYTES, openCopyModal, openCoverPreviewModal, openEditCopyModal
 } from "./forms.js";
@@ -97,6 +98,43 @@ import {
       : `<div class="poster-ph" style="height:100%">${esc(title.title)}</div>`;
 
     const copies = title.copies || [];
+
+    // "Who watched" (editors only, and only once a person exists): otherwise this view is exactly as before.
+    if (isAdmin && state.peopleReady) await state.peopleReady;   // started once by router.js
+    const people = isAdmin ? activePeople() : [];
+    const showWho = people.length > 0;
+    const whoLabel = "Who watched";
+    const whoRowHTML = () =>
+      `<div class="who-watched" id="who-watched-row"><span class="who-watched-label">Who watched</span>${personTogglesHTML(people.map((p) => p.id), whoLabel)}</div>`;
+    const watchDatesHTML = (w) =>
+      w.date_bucket && BUCKET_LABELS[w.date_bucket]
+        ? (w.date_bucket === "unknown"
+            ? `<span class="watch-row-date">${icon("calendar")} Watched (Date unknown)</span><span class="badge badge-subtle">Historical</span>`
+            : `<span class="watch-row-date">${icon("calendar")} Watched ${esc(BUCKET_LABELS[w.date_bucket])}</span><span class="badge badge-subtle">Estimated</span>`
+          )
+        : (w.watched_date
+            ? `<span class="watch-row-date">${icon("calendar")} ${formatReadableDate(w.watched_date)}</span><span class="watch-row-rel">(${formatRelativeDate(w.watched_date)})</span>`
+            : `<span class="watch-row-date">${icon("calendar")} Watched (Date unknown)</span><span class="badge badge-subtle">Historical</span>`
+          );
+    const watchWhoHTML = (w) => {
+      if (!showWho) return "";
+      const assumed = w.attendance === "assumed_adults" ? "adults" : w.attendance === "assumed_everyone" ? "everyone" : null;
+      return `<button type="button" class="watch-who-btn" aria-expanded="false">${personDotsHTML(w.attendees || [], { assumed })}<span class="sr-only">, change who watched</span></button>`;
+    };
+    const watchRowHTML = (w, idx) => `
+                <div class="watch-row ${idx >= 3 ? "watch-row-extra hidden" : ""}" data-watch-id="${w.id}">
+                  <div class="watch-row-main" style="display:flex;align-items:center;gap:var(--s2);flex-wrap:wrap">
+                    ${watchDatesHTML(w)}
+                    ${watchWhoHTML(w)}
+                  </div>
+                  ${w.notes ? `<div class="watch-row-notes" style="width:100%;font-size:var(--fs-xs);color:var(--ink-2);margin-top:2px;padding-left:4px">${esc(w.notes)}</div>` : ""}
+                  ${
+                    isAdmin
+                      ? `<button type="button" class="btn btn-sm btn-danger btn-delete-watch" data-id="${w.id}" title="Delete watch entry" style="margin-left:auto;padding:2px 8px;font-size:var(--fs-xs)">✕</button>`
+                      : ""
+                  }
+                </div>
+              `;
 
     // Ensure we have active titles list for adjacent navigation
     if (!state.grid.titles || !state.grid.titles.length) {
@@ -228,6 +266,7 @@ import {
             `
                 : ""
             }
+            ${showWho ? whoRowHTML() : ""}
           </div>
 
           ${
@@ -256,32 +295,7 @@ import {
               ? `<div style="color:var(--ink-2);padding:var(--s2) 0">No recorded watches yet.</div>`
               : `
             <div class="watch-log-list" id="watch-log-list">
-              ${title.watches
-                .map(
-                  (w, idx) => `
-                <div class="watch-row ${idx >= 3 ? "watch-row-extra hidden" : ""}" data-watch-id="${w.id}">
-                  <div class="watch-row-main" style="display:flex;align-items:center;gap:var(--s2);flex-wrap:wrap">
-                    ${
-                      w.date_bucket && BUCKET_LABELS[w.date_bucket]
-                        ? (w.date_bucket === "unknown"
-                            ? `<span class="watch-row-date">${icon("calendar")} Watched (Date unknown)</span><span class="badge badge-subtle">Historical</span>`
-                            : `<span class="watch-row-date">${icon("calendar")} Watched ${esc(BUCKET_LABELS[w.date_bucket])}</span><span class="badge badge-subtle">Estimated</span>`
-                          )
-                        : (w.watched_date
-                            ? `<span class="watch-row-date">${icon("calendar")} ${formatReadableDate(w.watched_date)}</span><span class="watch-row-rel">(${formatRelativeDate(w.watched_date)})</span>`
-                            : `<span class="watch-row-date">${icon("calendar")} Watched (Date unknown)</span><span class="badge badge-subtle">Historical</span>`
-                          )
-                    }
-                  </div>
-                  ${w.notes ? `<div class="watch-row-notes" style="width:100%;font-size:var(--fs-xs);color:var(--ink-2);margin-top:2px;padding-left:4px">${esc(w.notes)}</div>` : ""}
-                  ${
-                    isAdmin
-                      ? `<button type="button" class="btn btn-sm btn-danger btn-delete-watch" data-id="${w.id}" title="Delete watch entry" style="margin-left:auto;padding:2px 8px;font-size:var(--fs-xs)">✕</button>`
-                      : ""
-                  }
-                </div>
-              `
-                )
+              ${title.watches.map((w, idx) => watchRowHTML(w, idx))
                 .join("")}
               ${
                 title.watches.length > 3
@@ -544,13 +558,32 @@ import {
       // Watch history listeners
       const inputWatchDate = document.getElementById("input-watch-date");
       const btnLogWatch = document.getElementById("btn-log-watch");
+      const whoRow = document.getElementById("who-watched-row");
+      const logButtons = () => [
+        document.getElementById("btn-watched-today"),
+        btnLogWatch,
+        ...container.querySelectorAll(".btn-watch-bucket"),
+      ].filter(Boolean);
+      // With every "Who watched" toggle off there is nobody to log, so every log button is disabled.
+      const syncLogButtons = () => {
+        const none = !!whoRow && readToggles(whoRow).length === 0;
+        logButtons().forEach((b) => { b.disabled = none; });
+      };
+      // Sent with every log; absent when no people exist, so the server's default (everyone) is untouched.
+      const attendeesBody = () => (whoRow ? { attendees: readToggles(whoRow) } : {});
+      whoRow?.addEventListener("click", (e) => {
+        const t = e.target.closest(".person-toggle");
+        if (!t) return;
+        t.setAttribute("aria-pressed", t.getAttribute("aria-pressed") === "true" ? "false" : "true");
+        syncLogButtons();
+      });
 
       document.getElementById("btn-watched-today")?.addEventListener("click", async () => {
         try {
           const todayIso = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
           await api(`${apiPrefix}/titles/${titleId}/watches`, {
             method: "POST",
-            body: { watched_date: todayIso },
+            body: { watched_date: todayIso, ...attendeesBody() },
           });
           toast("Marked as watched today!");
           await renderDetail(container, titleId);
@@ -568,7 +601,7 @@ import {
         try {
           await api(`${apiPrefix}/titles/${titleId}/watches`, {
             method: "POST",
-            body: { watched_date: val },
+            body: { watched_date: val, ...attendeesBody() },
           });
           toast(`Logged watch date: ${val}`);
           await renderDetail(container, titleId);
@@ -584,7 +617,7 @@ import {
           try {
             await api(`${apiPrefix}/titles/${titleId}/watches`, {
               method: "POST",
-              body: { date_bucket: bucket },
+              body: { date_bucket: bucket, ...attendeesBody() },
             });
             toast(`Logged watch: ${label}`);
             await renderDetail(container, titleId);
@@ -594,19 +627,77 @@ import {
         });
       });
 
-      container.querySelectorAll(".btn-delete-watch").forEach((btn) => {
-        btn.addEventListener("click", async () => {
-          const watchId = btn.dataset.id;
+      // Inline "who watched" editor on a saved watch: tap the dots, adjust, Save (PUT) or Cancel.
+      const openWhoEditor = (row, w) => {
+        if (row.querySelector(".watch-who-editor")) return;
+        const editor = document.createElement("div");
+        editor.className = "watch-who-editor";
+        editor.innerHTML = `
+          ${personTogglesHTML(w.attendees || [], "Who watched this time")}
+          <div class="watch-who-actions">
+            <button type="button" class="btn btn-sm watch-who-save">Save</button>
+            <button type="button" class="btn btn-sm btn-ghost watch-who-cancel">Cancel</button>
+          </div>
+          <div class="watch-who-error" role="alert"></div>`;
+        row.classList.add("is-editing");
+        row.querySelector(".watch-who-btn")?.setAttribute("aria-expanded", "true");
+        row.appendChild(editor);
+        const save = editor.querySelector(".watch-who-save");
+        const syncSave = () => { save.disabled = readToggles(editor).length === 0; };
+        editor.querySelector(".person-toggles").addEventListener("click", (e) => {
+          const t = e.target.closest(".person-toggle");
+          if (!t) return;
+          t.setAttribute("aria-pressed", t.getAttribute("aria-pressed") === "true" ? "false" : "true");
+          syncSave();
+        });
+        editor.querySelector(".watch-who-cancel").addEventListener("click", () => refreshRow(row, w));
+        save.addEventListener("click", async () => {
+          save.disabled = true;
+          try {
+            const res = await api(`${apiPrefix}/titles/${titleId}/watches/${w.id}/attendees`, {
+              method: "PUT",
+              body: { attendees: readToggles(editor) },
+            });
+            w.attendance = res.watch.attendance;
+            w.attendees = res.watch.attendees;
+            refreshRow(row, w);
+            toast("Updated who watched");
+          } catch (err) {
+            editor.querySelector(".watch-who-error").textContent = err.message || "Could not save";
+            syncSave();
+          }
+        });
+      };
+
+      const bindWatchRow = (row) => {
+        const w = (title.watches || []).find((x) => x.id === Number(row.dataset.watchId));
+        row.querySelector(".watch-who-btn")?.addEventListener("click", () => {
+          if (w) openWhoEditor(row, w);
+        });
+        row.querySelector(".btn-delete-watch")?.addEventListener("click", async (e) => {
+          const watchId = e.currentTarget.dataset.id;
           if (!confirm("Remove this watch date?")) return;
           try {
             await api(`${apiPrefix}/titles/${titleId}/watches/${watchId}`, { method: "DELETE" });
             toast("Watch entry removed");
             await renderDetail(container, titleId);
-          } catch (e) {
-            toast(e.message || "Failed to delete watch entry");
+          } catch (err) {
+            toast(err.message || "Failed to delete watch entry");
           }
         });
-      });
+      };
+      // Re-render one saved watch in place (after Save or Cancel), keeping its place in the Show-all fold.
+      function refreshRow(row, w) {
+        const idx = title.watches.indexOf(w);
+        const hidden = row.classList.contains("hidden");
+        const tmp = document.createElement("div");
+        tmp.innerHTML = watchRowHTML(w, idx).trim();
+        const fresh = tmp.firstElementChild;
+        fresh.classList.toggle("hidden", hidden);   // keep the row's current visibility (Show all)
+        row.replaceWith(fresh);
+        bindWatchRow(fresh);
+      }
+      container.querySelectorAll(".watch-row").forEach(bindWatchRow);
     }
 
     // Toggle extra watches

@@ -3,6 +3,7 @@
 Scenario: The Dark Knight (TMDB 155), rating 9.5, one watch on 2026-11-07 with the note "girls loved it".
 """
 import re
+from pathlib import Path
 
 import pytest
 
@@ -74,3 +75,143 @@ def test_public_view_guards_every_notes_use():
     for i in uses:
         line = js[js.rfind("\n", 0, i) + 1: js.find("\n", i)]
         assert "w.notes ?" in line, line.strip()
+
+
+# ------------------------------------------------------------------ attendance is editor-only
+
+
+def _walk_keys(node):
+    if isinstance(node, dict):
+        for k, v in node.items():
+            yield k
+            yield from _walk_keys(v)
+    elif isinstance(node, list):
+        for v in node:
+            yield from _walk_keys(v)
+
+
+def test_public_detail_has_no_attendance_keys_or_names(client, dark_knight):
+    from conftest import seed_people
+    con = db()
+    seed_people(con)
+    first = con.execute("SELECT id FROM watches").fetchone()[0]
+    con.execute("INSERT INTO watch_people (watch_id, person_id) SELECT ?, id FROM people", (first,))
+    con.commit()
+    res = client.get(f"/api/titles/{dark_knight}")
+    assert res.status_code == 200
+    body = res.get_json()
+    assert not {"attendance", "attendees", "seen_by"} & set(_walk_keys(body))
+    text = res.get_data(as_text=True)
+    for name in ("Nick", "Lauren", "Midge", "Alice", "Paige"):
+        assert name not in text
+
+
+# Names that carry attendance: the keys and every helper that produces or edits them.
+ATTENDANCE_NAMES = {"attendees", "attendance", "seen_by", "watch_attendance", "title_seen_by", "watch_response",
+                    "set_attendees", "resolve_people", "put_watch_attendees", "attendance_of", "find_person",
+                    "SEEN_CTE", "watch_people", "PRIVATE_WATCH"}
+# Shared helpers that legitimately branch on `private`: function -> the branch every use must sit in
+# ("private" = inside `if private:`, "public" = inside `if not private:`, the PRIVATE_WATCH strip).
+# list_titles reads unseen_by / attendance (and SEEN_CTE) only inside `if private:`; a public request that names
+# them is answered 400 by people_params_refused(), which refers to them through PEOPLE_PARAMS alone.
+PRIVATE_BRANCHING = {"title_detail": "private", "watch_out": "public", "list_titles": "private"}
+
+
+def _app_tree():
+    import ast
+    src = (Path(__file__).resolve().parent.parent / "app.py").read_text()
+    return ast.parse(src)
+
+
+def _hits(node):
+    """(sub-node, name) for every use of an attendance name under `node`: identifiers, attributes, and string
+    constants (dict keys, SQL text)."""
+    import ast
+    for n in ast.walk(node):
+        if isinstance(n, ast.Name) and n.id in ATTENDANCE_NAMES:
+            yield n, n.id
+        elif isinstance(n, ast.Attribute) and n.attr in ATTENDANCE_NAMES:
+            yield n, n.attr
+        elif isinstance(n, ast.Constant) and isinstance(n.value, str):
+            for name in ATTENDANCE_NAMES:
+                if name in n.value:
+                    yield n, name
+        elif isinstance(n, ast.JoinedStr):
+            pass  # its Constant/Name children are visited by ast.walk
+
+
+def _public_handlers(tree):
+    """Names of functions served under /api/ (not /admin/api/): decorated routes, plus the handlers the
+    `for prefix, private in ((\"/api\", False), ...)` loop registers through _wrap(...)."""
+    import ast
+    names = set()
+    for fn in (n for n in tree.body if isinstance(n, ast.FunctionDef)):
+        for d in fn.decorator_list:
+            if (isinstance(d, ast.Call) and d.args and isinstance(d.args[0], ast.Constant)
+                    and isinstance(d.args[0].value, str) and d.args[0].value.startswith("/api/")):
+                names.add(fn.name)
+    for loop in (n for n in tree.body if isinstance(n, ast.For)):
+        if "/api" not in ast.dump(loop.iter):
+            continue
+        for call in ast.walk(loop):
+            if isinstance(call, ast.Call) and isinstance(call.func, ast.Name) and call.func.id == "_wrap":
+                names.update(a.id for a in call.args if isinstance(a, ast.Name))
+    return names
+
+
+def _reachable(tree, roots):
+    """Module functions reachable from `roots` through direct calls or by-name references."""
+    import ast
+    funcs = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
+    seen, todo = set(), list(roots)
+    while todo:
+        name = todo.pop()
+        if name in seen or name not in funcs:
+            continue
+        seen.add(name)
+        for n in ast.walk(funcs[name]):
+            if not (isinstance(n, ast.Name) and n.id in funcs):
+                continue
+            # a call made inside an allow-listed function's private branch is not a public path
+            if name in PRIVATE_BRANCHING and _in_branch(funcs[name], n, PRIVATE_BRANCHING[name]):
+                continue
+            todo.append(n.id)
+    return {n: funcs[n] for n in seen}
+
+
+def _in_branch(fn, node, branch):
+    """True when `node` sits in the body of `if private:` (branch 'private') or `if not private:` ('public')."""
+    import ast
+    parents = {}
+    for p in ast.walk(fn):
+        for c in ast.iter_child_nodes(p):
+            parents[c] = p
+    want = (lambda t: isinstance(t, ast.Name) and t.id == "private") if branch == "private" else (
+        lambda t: isinstance(t, ast.UnaryOp) and isinstance(t.op, ast.Not)
+        and isinstance(t.operand, ast.Name) and t.operand.id == "private")
+    cur = node
+    while cur in parents:
+        par = parents[cur]
+        if isinstance(par, ast.If) and want(par.test) and any(cur is b or cur in list(ast.walk(b)) for b in par.body):
+            return True
+        cur = par
+    return False
+
+
+def test_public_routes_never_touch_attendance_outside_a_private_branch():
+    """Every function served under /api/ (and everything it calls) is free of attendance names, except the shared
+    helpers in PRIVATE_BRANCHING, where every use must sit inside the matching `private` branch."""
+    tree = _app_tree()
+    roots = _public_handlers(tree)
+    assert {"get_title", "me_public"} <= roots, roots  # the walk found the routes it is meant to guard
+    reach = _reachable(tree, roots)
+    assert set(PRIVATE_BRANCHING) <= set(reach)  # the allow-list entries are really on a public path
+    for name, fn in reach.items():
+        hits = list(_hits(fn))
+        if name in PRIVATE_BRANCHING:
+            assert hits, f"{name} no longer touches attendance; drop it from PRIVATE_BRANCHING"
+            for node, used in hits:
+                assert _in_branch(fn, node, PRIVATE_BRANCHING[name]), (
+                    f"{name} uses {used} (line {node.lineno}) outside its `private` branch")
+        else:
+            assert not hits, f"public path {name} uses {hits[0][1]} (line {hits[0][0].lineno})"

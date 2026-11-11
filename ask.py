@@ -144,7 +144,8 @@ TOOLS = [
      _obj({"query": _STR, "genre": _STR, "medium": _MEDIUM,
            "format": {"type": "string", "description": "e.g. Blu-ray, 4K UHD, DVD."},
            "watched": {"type": "string", "enum": ["watched", "unwatched"]},
-           "min_rating": _NUM, "limit": _LIMIT})),
+           "min_rating": _NUM, "limit": _LIMIT,
+           "unseen_by": {"type": "string", "description": 'everyone, adults, kids, or names such as "Alice,Paige". Only films none of them has seen.'}})),
     ("get_movie", "get_movie",
      "Full details for one movie by its id, including copies and shelf locations.",
      _obj({"title_id": _INT}, ["title_id"])),
@@ -159,9 +160,11 @@ TOOLS = [
                                                "next_in_franchise", "start_franchise"]},
            "genre": _STR, "medium": _MEDIUM, "max_runtime": {"type": "integer", "description": "Minutes."},
            "min_rating": _NUM, "max_cert": {"type": "string", "enum": ["G", "PG", "PG-13", "R", "NC-17"]},
-           "limit": _LIMIT, "random": {"type": "boolean"}})),
+           "limit": _LIMIT, "random": {"type": "boolean"},
+           "audience": {"type": "string", "description": 'everyone, adults, kids, or names such as "Alice,Paige". Only films nobody in the audience has seen count as unwatched.'}})),
     ("get_collection_stats", "get_collection_stats",
      "Collection totals: movies, formats, watch coverage and ratings.", _obj()),
+    ("list_people", "list_people", "The family members and whether each is an adult or a kid.", _obj()),
 ]
 _TOOLS = {t[0]: t for t in TOOLS}
 
@@ -173,8 +176,10 @@ SHOW_RESULTS = {
         "title_ids": {"type": "array", "items": {"type": "integer"}, "maxItems": 12}}}}
 
 SYSTEM = """Matinee is the family's own collection of physical discs and digital copies. Answer from the tools only.
-- "Kids' night" or "something the kids can watch": get_recommendations(max_cert="PG-13") unless a rating is
-  named. Unrated films are left out whenever max_cert is set; say so if it matters.
+- "The girls", "the kids": audience="kids"; add max_cert="PG-13" unless a rating is named. "Us two":
+  audience="adults". A named person: audience is their name.
+  If a tool answers that no people are set up, repeat the call without audience.
+  Unrated films are left out whenever max_cert is set; say so if it matters.
 - "What's next in the series we're watching": mode="next_in_franchise". "Start a new series":
   mode="start_franchise".
 - "Where is it?": where_is(title).

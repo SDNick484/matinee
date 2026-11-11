@@ -73,6 +73,7 @@ TOOL_HINTS: Dict[str, Tuple[bool, bool, bool, bool]] = {
     "where_is": (True, False, True, False),
     "get_recommendations": (True, False, True, False),
     "get_collection_stats": (True, False, True, False),
+    "list_people": (True, False, True, False),
     "search_tmdb": (True, False, True, True),   # reads TMDB
     "rate_movie": (False, True, True, False),   # overwrites or clears the previous rating
     "log_watch": (False, False, False, False),  # appends a watch row each call
@@ -123,6 +124,42 @@ MATINEE_URL = os.environ.get("MATINEE_URL", "http://127.0.0.1:8771").rstrip("/")
 MATINEE_API_KEY = os.environ.get("MATINEE_API_KEY", "").strip()
 MATINEE_READ_KEY = os.environ.get("MATINEE_READ_KEY", "").strip()
 MATINEE_DB_PATH = os.environ.get("MATINEE_DB_PATH", "").strip()
+
+
+TOO_OLD_FOR_PEOPLE = "This Matinee server is too old to pick for specific people. Update Matinee."
+# recommend.py's wording, written out here because the REST path does not import recommend.py
+# (tests/test_mcp_server.py::test_rest_people_messages_match_the_server keeps them equal).
+NO_PEOPLE = "No people are set up yet. Add them under People in the admin view."
+_AUDIENCE_KEYWORDS = ("everyone", "adults", "kids")
+_ASCII_LOWER = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
+
+
+def _unknown_person(people: List[Dict[str, Any]], token: str) -> str:
+    """recommend.unknown_person_message for the REST client: `people` in the server's (sort_order, id) order."""
+    return f"Unknown person: {token}. People: {', '.join(p['name'] for p in people)}."
+
+
+def _people_ids(raw: str, people: List[Dict[str, Any]]) -> str:
+    """REST: an `audience` / `unseen_by` value with every name swapped for its id, so a person's name never goes
+    in a query string (and so never in the server's access log). A lone keyword and numeric ids pass as given;
+    the server still validates them. Names match as the server's COLLATE NOCASE column does (ASCII case only)."""
+    tokens = [t.strip() for t in str(raw).split(",")]
+    tokens = [t for t in tokens if t]
+    if not tokens or (len(tokens) == 1 and tokens[0].lower() in _AUDIENCE_KEYWORDS):
+        return raw
+    by_name = {str(p.get("name", "")).translate(_ASCII_LOWER): p["id"] for p in people}
+    out = []
+    for token in tokens:
+        if token.isascii() and token.isdigit():
+            out.append(token)
+            continue
+        if not people:
+            raise MatineeError(NO_PEOPLE, status=400)
+        pid = by_name.get(token.translate(_ASCII_LOWER))
+        if pid is None:
+            raise MatineeError(_unknown_person(people, token), status=400)
+        out.append(str(pid))
+    return ",".join(out)
 
 
 class MatineeClient:
@@ -207,6 +244,62 @@ class MatineeClient:
             log.warning("Matinee %s %s failed: %s", method, path.split("?")[0], type(e).__name__)
             raise MatineeError("Matinee is unreachable right now. Try again in a minute.") from None
 
+    # ------------------------------------------------------------------------ People
+    def _people_rows(self) -> List[Dict[str, Any]]:
+        """REST: the people list as the server returns it. A 404 means the server predates people."""
+        try:
+            res = self._api_request("GET", f"{self._read_prefix}/people")
+        except MatineeError as e:
+            if e.status == 404:
+                raise MatineeError(TOO_OLD_FOR_PEOPLE, status=404) from None
+            raise
+        return res.get("people", []) if isinstance(res, dict) else []
+
+    def _people_param(self, raw: str) -> str:
+        """REST: the `audience` / `unseen_by` value to send. Refuses before sending when the server predates
+        people, since it would ignore the argument and return an unfiltered list, and sends person ids rather
+        than names (_people_ids). Public mode (no key) is not probed and sends the value as given: /api/people
+        does not exist, and the server's own 400 ("Sign in to pick for specific people.") is the answer there."""
+        if not self.api_key:
+            return raw
+        return _people_ids(raw, self._people_rows())
+
+    def list_people(self) -> List[Dict[str, Any]]:
+        """The family members Matinee knows: id, name, kind (adult/kid), color, active."""
+        keys = ("id", "name", "kind", "color", "active")
+        con = self._get_db()
+        if con is not None:
+            try:
+                import recommend
+                if not recommend.has_people(con):
+                    return []  # a database older than schema v9, or nobody set up
+                return [{"id": r["id"], "name": r["name"], "kind": r["kind"], "color": r["color"],
+                         "active": bool(r["active"])}
+                        for r in con.execute("SELECT id, name, kind, color, active FROM people ORDER BY sort_order, id")]
+            finally:
+                con.close()
+        if not self.api_key:
+            raise MatineeError("People are only available with a Matinee key (MATINEE_API_KEY or MATINEE_READ_KEY).")
+        return [{k: p.get(k) for k in keys} for p in self._people_rows()]
+
+    def _name_people(self, movie: Dict[str, Any]) -> Dict[str, Any]:
+        """REST get_movie: turn the server's person ids into names and add `not_seen_by`. A response without
+        `seen_by` (public /api, or a server that predates people) is returned as it came; nothing is invented."""
+        if not isinstance(movie, dict) or "seen_by" not in movie:
+            return movie
+        people = self._people_rows()
+        names = {p["id"]: p["name"] for p in people}
+        seen_ids = set(movie.get("seen_by") or [])
+        out = dict(movie)
+        out["seen_by"] = [names[i] for i in movie.get("seen_by") or [] if i in names]
+        out["not_seen_by"] = [p["name"] for p in people if p.get("active") and p["id"] not in seen_ids]
+        out["watches"] = [
+            {**w, "attendees": [names[i] for i in w.get("attendees") or [] if i in names]}
+            if "attendees" in w else w
+            for w in movie.get("watches") or []
+        ]
+        return out
+
     # ------------------------------------------------------------------------ Reads
     def search_collection(
         self,
@@ -217,13 +310,24 @@ class MatineeClient:
         watched: Optional[str] = None,
         min_rating: Optional[float] = None,
         limit: int = 20,
+        unseen_by: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        """Search collection by keyword, genre, medium, format, watched status, or rating."""
+        """Search collection by keyword, genre, medium, format, watched status, rating, or who has not seen it."""
         con = self._get_db()
         if con is not None:
             try:
                 where = ["EXISTS (SELECT 1 FROM copies c WHERE c.title_id=t.id)"]
                 args = []
+                cte = ""
+                if unseen_by is not None:
+                    import recommend
+                    if not unseen_by.strip():
+                        raise MatineeError("unseen_by is empty.")
+                    who = recommend.resolve_audience(con, unseen_by)["people"]
+                    where.append("NOT EXISTS (SELECT 1 FROM seen s WHERE s.title_id=t.id AND s.person_id IN (%s))"
+                                 % ",".join("?" * len(who)))
+                    args += [x["id"] for x in who]
+                    cte = f"WITH {recommend.SEEN_CTE} "
 
                 for w in _words(query or ""):
                     where.append("t.search_text LIKE ? ESCAPE '\\'")
@@ -254,7 +358,7 @@ class MatineeClient:
                     args.append(min_rating)
 
                 sql = f"""
-                    SELECT t.id, t.title, t.year, t.runtime, COALESCE(t.custom_poster_file, t.poster_file) AS poster_file, t.tmdb_vote,
+                    {cte}SELECT t.id, t.title, t.year, t.runtime, COALESCE(t.custom_poster_file, t.poster_file) AS poster_file, t.tmdb_vote,
                            (SELECT rating FROM user_ratings r WHERE r.title_id=t.id) AS user_rating,
                            (SELECT MAX(watched_date) FROM watches w WHERE w.title_id=t.id) AS last_watched,
                            (SELECT count(*) FROM watches w WHERE w.title_id=t.id) AS watch_count,
@@ -284,6 +388,8 @@ class MatineeClient:
                 con.close()
 
         # Fallback to REST API
+        if unseen_by is not None:
+            unseen_by = self._people_param(unseen_by)
         params = {"limit": limit}
         if query:
             params["q"] = query
@@ -297,13 +403,21 @@ class MatineeClient:
             params["watched"] = watched
         if min_rating is not None:
             params["rating"] = str(min_rating)
+        if unseen_by is not None:
+            params["unseen_by"] = unseen_by
 
         qs = urllib.parse.urlencode(params)
         res = self._api_request("GET", f"{self._read_prefix}/titles?{qs}")
         return res.get("titles", [])[:limit]
 
     def get_movie(self, title_id: int) -> Dict[str, Any]:
-        """Fetch detailed information for a specific movie in the collection."""
+        """Fetch detailed information for a specific movie in the collection. Watches carry `attendance` and
+        `attendees` (names); the movie carries `seen_by` and `not_seen_by` (names of active people). With no people
+        set up, or on a database older than schema v9, the name lists are empty. Public REST mode has none of them."""
+        return self._get_movie(title_id, names=True)
+
+    def _get_movie(self, title_id: int, names: bool) -> Dict[str, Any]:
+        """get_movie; `names=False` skips the REST people lookup (where_is only needs the copies)."""
         con = self._get_db()
         if con is not None:
             try:
@@ -316,7 +430,7 @@ class MatineeClient:
                 ).fetchall()
                 rating_row = con.execute("SELECT rating FROM user_ratings WHERE title_id=?", (title_id,)).fetchone()
                 watches = con.execute(
-                    "SELECT id, watched_date, notes, created_at FROM watches WHERE title_id=? ORDER BY watched_date DESC, id DESC",
+                    "SELECT id, watched_date, date_bucket, notes, created_at FROM watches WHERE title_id=? ORDER BY watched_date DESC, id DESC",
                     (title_id,),
                 ).fetchall()
                 genres = [
@@ -334,7 +448,7 @@ class MatineeClient:
                     for c in copies
                 ]
                 d["user_rating"] = rating_row["rating"] if rating_row else None
-                d["watches"] = [dict(w) for w in watches]
+                d["watches"], d["seen_by"], d["not_seen_by"] = self._db_attendance(con, title_id, watches)
                 d["last_watched"] = watches[0]["watched_date"] if watches else None
                 d["watch_count"] = len(watches)
                 d["genres"] = genres
@@ -348,11 +462,35 @@ class MatineeClient:
                 con.close()
 
         try:
-            return self._api_request("GET", f"{self._read_prefix}/titles/{title_id}")
+            movie = self._api_request("GET", f"{self._read_prefix}/titles/{title_id}")
         except MatineeError as e:
             if e.status == 404:
                 raise MatineeError(f"Movie with id {title_id} not found.") from None
             raise
+        return self._name_people(movie) if names else movie
+
+    @staticmethod
+    def _db_attendance(con, title_id: int, watches) -> Tuple[List[Dict[str, Any]], List[str], List[str]]:
+        """(watches with attendance and attendee names, seen_by names, not_seen_by names). The logic is the app's:
+        recommend.watch_attendance and recommend.title_seen_by (attendance_of and SEEN_CTE)."""
+        import recommend
+        if not recommend.has_people(con):  # also a database older than schema v9, which has no people tables
+            att = {w["id"]: {"attendance": recommend.attendance_of(w, False), "attendees": []} for w in watches}
+            people, seen_ids = [], []
+        else:
+            att = recommend.watch_attendance(con, watches)
+            people = con.execute("SELECT id, name, active FROM people ORDER BY sort_order, id").fetchall()
+            seen_ids = recommend.title_seen_by(con, title_id)
+        names = {p["id"]: p["name"] for p in people}
+        out = []
+        for w in watches:
+            d = {k: w[k] for k in w.keys() if k != "date_bucket"}
+            d["attendance"] = att[w["id"]]["attendance"]
+            d["attendees"] = [names[i] for i in att[w["id"]]["attendees"]]
+            out.append(d)
+        seen = set(seen_ids)
+        return (out, [names[i] for i in seen_ids],
+                [p["name"] for p in people if p["active"] and p["id"] not in seen])
 
     def where_is(self, title: str) -> Dict[str, Any]:
         """Find where physical copies of a movie are stored or which digital services host it."""
@@ -443,7 +581,7 @@ class MatineeClient:
         pick = next((r for r in results if (r.get("title") or "").strip().lower() == wanted), None)
         if pick is None:
             pick = min(results, key=lambda r: len(r.get("title") or ""))
-        movie = self.get_movie(pick["id"])
+        movie = self._get_movie(pick["id"], names=False)
         copies = movie.get("copies", [])
         copies_list = []
         summary_parts = []
@@ -485,16 +623,19 @@ class MatineeClient:
         limit: int = 5,
         random: bool = False,
         max_cert: Optional[str] = None,
+        audience: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Query recommendation heuristics (see the get_recommendations tool for modes and filters)."""
         con = self._get_db()
         if con is not None:
             try:
                 import recommend
+                if audience is not None and not audience.strip():
+                    raise MatineeError("audience is empty.")
                 out = recommend.recommend(con, recommend.parse_params({
                     "mode": mode, "genre": genre, "medium": medium, "max_runtime": max_runtime,
                     "min_rating": min_rating, "limit": limit, "random": random,
-                    "max_cert": max_cert,
+                    "max_cert": max_cert, "audience": audience,
                 }))
                 for r in out["results"]:
                     r.pop("poster_file", None)
@@ -503,7 +644,10 @@ class MatineeClient:
             finally:
                 con.close()
 
+        sent_audience = self._people_param(audience) if audience is not None else None
         params = {"mode": mode, "limit": limit}
+        if sent_audience is not None:
+            params["audience"] = sent_audience
         if genre:
             params["genre"] = genre
         if medium:
@@ -519,6 +663,9 @@ class MatineeClient:
 
         qs = urllib.parse.urlencode(params)
         out = self._api_request("GET", f"{self._read_prefix}/recommendations?{qs}")
+        if audience is not None and isinstance(out, dict) and "audience" not in out:
+            # The server ignored it (it echoes `audience` whenever it applies one); never return an unfiltered list.
+            raise MatineeError(TOO_OLD_FOR_PEOPLE)
         if max_cert and isinstance(out, dict) and isinstance(out.get("results"), list):
             # Older Matinee servers ignore max_cert; never trust them with a kids-safety filter.
             # Written out locally: this REST path must not import recommend.py.
@@ -581,13 +728,22 @@ class MatineeClient:
         watched_date: Optional[str] = None,
         notes: Optional[str] = None,
         watched_at: Optional[str] = None,
+        attendees: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
-        """Record a watch event for a title with date and optional notes."""
+        """Record a watch event for a title with date, optional notes and optional attendees (names).
+        No `attendees` key is sent when None (the server then counts everyone); an empty list is sent as is."""
         date_val = watched_date if watched_date is not None else watched_at
         payload: Dict[str, Any] = {"watched_date": date_val}
         if notes:
             payload["notes"] = notes
-        return self._api_request("POST", f"/admin/api/titles/{title_id}/watches", payload)
+        if attendees is not None:
+            payload["attendees"] = list(attendees)
+        res = self._api_request("POST", f"/admin/api/titles/{title_id}/watches", payload)
+        watch = res.get("watch") if isinstance(res, dict) else None
+        if attendees is not None and isinstance(watch, dict) and "attendance" not in watch:
+            # A server that predates people ignored `attendees` and logged the watch anyway; say both.
+            raise MatineeError(f"{TOO_OLD_FOR_PEOPLE} The watch was logged for everyone.")
+        return res
 
     def search_tmdb(self, query: str) -> List[Dict[str, Any]]:
         """Search TMDB for movies to add to the collection."""
@@ -617,11 +773,14 @@ Matinee is the family's own collection of physical discs and digital copies.
 - Recommend only what get_recommendations or search_collection return. Use search_tmdb only when the user asks about movies they do not own.
 - "Kids' night" or "something the kids can watch": call get_recommendations(max_cert="PG-13") unless the user names a rating. Unrated films are left out whenever max_cert is set.
 - "What's next in the series we're watching": mode="next_in_franchise". "Let's start a new series": mode="start_franchise".
+- "The girls" or "the kids": audience="kids". "Us two", "date night": audience="adults". A named person: audience="Alice". After watching, pass attendees to log_watch only when someone was missing. \
+If a tool answers that no people are set up, repeat the call without audience.
 - After a pick, "where is it?": call where_is(title). After watching: call log_watch, then rate_movie if the user gives a rating.
 """
 # For build_server(writes=False): the remote read-only service has no log_watch or rate_movie to point at.
 READONLY_INSTRUCTIONS = SERVER_INSTRUCTIONS.replace(
-    " After watching: call log_watch, then rate_movie if the user gives a rating.", "")
+    " After watching: call log_watch, then rate_movie if the user gives a rating.", "").replace(
+    " After watching, pass attendees to log_watch only when someone was missing.", "")
 # Said at the levels that lack tools, in words that name none of them.
 _NO_WRITES_NOTE = ("- This connection is read-only: it cannot log watches, rate movies or add titles. "
                    "For those, tell the user to use the Matinee app.\n")
@@ -680,8 +839,11 @@ def search_collection(
     watched: Optional[str] = None,
     min_rating: Optional[float] = None,
     limit: int = 20,
+    unseen_by: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    """Search the movie collection by title, genre, medium (physical/digital), format, watched status, or rating."""
+    """Search the movie collection by title, genre, medium (physical/digital), format, watched status, or rating.
+    unseen_by: only titles none of these people has seen; same grammar as get_recommendations' audience
+    ("kids", "adults", "everyone", or names such as "Alice,Paige")."""
     return _default_client.search_collection(
         query=query,
         genre=genre,
@@ -690,11 +852,14 @@ def search_collection(
         watched=watched,
         min_rating=min_rating,
         limit=limit,
+        unseen_by=unseen_by,
     )
 
 
 def get_movie(title_id: int) -> Dict[str, Any]:
-    """Get full details for a movie in the collection including physical/digital copies, user rating, and watch history."""
+    """Get full details for a movie in the collection including physical/digital copies, user rating, and watch history.
+    Each watch lists who was there (attendance, attendees); seen_by and not_seen_by name the family members who
+    have and have not seen it (empty when no people are set up)."""
     return _default_client.get_movie(title_id)
 
 
@@ -713,6 +878,7 @@ def get_recommendations(
     max_cert: Optional[Literal["G", "PG", "PG-13", "R", "NC-17"]] = None,
     limit: int = 5,
     random: bool = False,
+    audience: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Pick movies to watch from the family's own collection (movie night, "what should we watch",
     kids' night, family-friendly, sequel, next in the series, start a franchise, quick short movie).
@@ -720,6 +886,9 @@ def get_recommendations(
     - mode=next_in_franchise: next unwatched owned film in each series someone has started (one per series)
     - mode=start_franchise: first film of an owned series (2+ films) nobody has started
     - max_cert=G|PG|PG-13|R|NC-17: rating cap; works with any mode. For "kids" with no rating named, use PG-13.
+    - audience=kids|adults|everyone or names ("Alice,Paige"): pick for who is watching. Titles anyone in the audience
+      has seen are left out (franchise modes: the next film nobody in it has seen). Results carry seen_by. Call
+      list_people to see who is set up.
     - forgotten_gems, never_watched, quick_picks (≤95 min default), genre_mood as before
     </use_case>
     <important_notes>
@@ -740,7 +909,14 @@ def get_recommendations(
         max_cert=max_cert,
         limit=limit,
         random=random,
+        audience=audience,
     )
+
+
+def list_people() -> List[Dict[str, Any]]:
+    """List the family members Matinee knows (id, name, kind adult/kid, color, active). Use it to resolve a name
+    before passing audience, unseen_by or attendees."""
+    return _default_client.list_people()
 
 
 def get_collection_stats() -> Dict[str, Any]:
@@ -758,9 +934,12 @@ def log_watch(
     watched_date: Optional[str] = None,
     notes: Optional[str] = None,
     watched_at: Optional[str] = None,
+    attendees: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
-    """Record a watch event with an optional ISO date (YYYY-MM-DD; omit or pass null for dateless/historical watch) and optional notes."""
-    return _default_client.log_watch(title_id, watched_date=watched_date, notes=notes, watched_at=watched_at)
+    """Record a watch event with an optional ISO date (YYYY-MM-DD; omit or pass null for dateless/historical watch) and optional notes.
+    attendees: names of who watched; omit it when everyone did."""
+    return _default_client.log_watch(title_id, watched_date=watched_date, notes=notes, watched_at=watched_at,
+                                     attendees=attendees)
 
 
 def search_tmdb(query: str) -> List[Dict[str, Any]]:
@@ -820,8 +999,9 @@ def prompt_log_movie_night(movie_title: str = "") -> str:
 
 
 def build_server(*, writes=True):
-    """Build a MCP server. `writes` is True (all nine tools), False (the six read tools) or a level from
-    WRITE_LEVELS: "none", "log" (adds rate_movie and log_watch) or "all". Anything else raises ValueError.
+    """Build a MCP server. `writes` is True (all ten tools), False (the seven read tools) or a level from
+    WRITE_LEVELS: "none", "log" (adds rate_movie and log_watch: nine tools) or "all" (adds add_movie: ten).
+    Anything else raises ValueError.
 
     Tool functions are module-level and read _default_client at call time.
     """
@@ -833,7 +1013,8 @@ def build_server(*, writes=True):
     def register(fn):
         server.tool(**_annotation_kwargs(FastMCP, fn.__name__))(fn)
 
-    for fn in (search_collection, get_movie, where_is, get_recommendations, get_collection_stats, search_tmdb):
+    for fn in (search_collection, get_movie, where_is, get_recommendations, get_collection_stats, list_people,
+               search_tmdb):
         register(fn)
     for fn in (rate_movie, log_watch, add_movie):
         if fn.__name__ in WRITE_LEVELS[level]:

@@ -451,18 +451,18 @@ def test_where_is_returns_title_id_db_and_rest(test_env, monkeypatch):
 
 
 ALL_TOOLS = {"search_collection", "get_movie", "where_is", "get_recommendations",
-             "get_collection_stats", "rate_movie", "log_watch", "search_tmdb", "add_movie"}
+             "get_collection_stats", "list_people", "rate_movie", "log_watch", "search_tmdb", "add_movie"}
 
 
 def _names(server):
     return {t.name for t in asyncio.run(server.list_tools())}
 
 
-def test_build_server_writes_true_lists_nine_tools():
+def test_build_server_writes_true_lists_ten_tools():
     assert _names(mcp_server.build_server(writes=True)) == ALL_TOOLS
 
 
-def test_build_server_writes_false_lists_six_tools():
+def test_build_server_writes_false_lists_seven_tools():
     assert _names(mcp_server.build_server(writes=False)) == ALL_TOOLS - set(mcp_server.WRITE_TOOLS)
 
 
@@ -657,6 +657,7 @@ EXPECTED_HINTS = {
     "where_is": (True, False, True, False),
     "get_recommendations": (True, False, True, False),
     "get_collection_stats": (True, False, True, False),
+    "list_people": (True, False, True, False),
     "search_tmdb": (True, False, True, True),
     "rate_movie": (False, True, True, False),
     "log_watch": (False, False, False, False),
@@ -693,7 +694,7 @@ def test_annotation_kwargs_guarded_on_tool_signature():
     assert "annotations" in mcp_server._annotation_kwargs(WithAnnotations, "where_is")
 
 
-def test_annotation_table_covers_exactly_the_nine_tools():
+def test_annotation_table_covers_exactly_the_ten_tools():
     assert set(mcp_server.TOOL_HINTS) == set(EXPECTED_HINTS)
 
 
@@ -754,3 +755,372 @@ def test_instructions_and_prompts_name_only_registered_tools(level):
         for tool in ALL_TOOLS:
             if re.search(rf"\b{tool}\b", text):
                 assert tool in registered, f"level {level}: text names {tool}, which is not registered"
+
+
+# --------------------------------------------------------------- people and attendance (spec 2026-11-11-per-person §8)
+def _seed_family(test_env):
+    """Five people, three owned Pixar titles, and who watched what. Returns {name: id} plus title ids."""
+    from conftest import seed_people, seed_title
+    con = db()
+    people = seed_people(con)
+    toy = seed_title(con, 862)          # Toy Story: Nick and Lauren only
+    inside = seed_title(con, 150540)    # Inside Out: Midge and Nick
+    wall = seed_title(con, 10681)       # WALL·E: nobody
+    for title, who in ((toy, ("Nick", "Lauren")), (inside, ("Midge", "Nick"))):
+        wid = con.execute("INSERT INTO watches (title_id, watched_date) VALUES (?, '2025-01-01')", (title,)).lastrowid
+        for name in who:
+            con.execute("INSERT INTO watch_people (watch_id, person_id) VALUES (?, ?)", (wid, people[name]))
+    con.commit()
+    return people, toy, inside, wall
+
+
+def _admin_rest_client(monkeypatch, key="k"):
+    """A REST-mode client whose requests go to the real Flask app (editor routes) on the same database."""
+    monkeypatch.setattr("app.LAN_EDIT", False)
+    monkeypatch.setattr("app.MATINEE_API_KEY", "k")
+    client = mcp_server.MatineeClient(api_url="http://fake-host", api_key=key, db_path="")
+    client.requested = []
+
+    def via_flask(method, path, data=None):
+        client.requested.append((method, path))
+        with app.test_client() as c:
+            res = c.open(path, method=method, json=data, headers={"Authorization": f"Bearer {key}"} if key else {})
+        if res.status_code != 200:
+            raise mcp_server.MatineeError(f"Matinee API error ({res.status_code}): "
+                                          f"{(res.get_json() or {}).get('error', '')}", status=res.status_code)
+        return res.get_json()
+
+    client._api_request = via_flask
+    return client
+
+
+def test_list_people_db_and_rest(test_env, monkeypatch):
+    _seed_family(test_env)
+    direct = mcp_server.MatineeClient(db_path=str(test_env)).list_people()
+    rest = _admin_rest_client(monkeypatch).list_people()
+    assert [p["name"] for p in direct] == ["Nick", "Lauren", "Midge", "Alice", "Paige"]
+    assert direct[0] == {"id": direct[0]["id"], "name": "Nick", "kind": "adult", "color": "green", "active": True}
+    assert set(direct[2]) == {"id", "name", "kind", "color", "active"}
+    assert rest == direct
+
+
+def test_audience_db_matches_rest(test_env, monkeypatch):
+    _seed_family(test_env)
+    rest_client = _admin_rest_client(monkeypatch)
+    for mode, audience in (("never_watched", "kids"), ("never_watched", "Alice,Paige"),
+                           ("forgotten_gems", "adults"), ("never_watched", "everyone")):
+        direct = mcp_server.MatineeClient(db_path=str(test_env)).get_recommendations(
+            mode=mode, audience=audience, limit=50)
+        rest = rest_client.get_recommendations(mode=mode, audience=audience, limit=50)
+        assert direct["audience"] == rest["audience"], audience
+        assert not [p for _, p in rest_client.requested if "Alice" in p or "Paige" in p]   # ids went out (I3)
+        assert [(r["id"], r["seen_by"]) for r in direct["results"]] == \
+               [(r["id"], r["seen_by"]) for r in rest["results"]], audience
+    kids = mcp_server.MatineeClient(db_path=str(test_env)).get_recommendations(
+        mode="never_watched", audience="kids", limit=50)
+    assert [r["title"] for r in kids["results"]] == ["WALL·E", "Toy Story"]  # Inside Out has Midge in it
+
+
+def test_unseen_by_db_matches_rest(test_env, monkeypatch):
+    _seed_family(test_env)
+    rest_client = _admin_rest_client(monkeypatch)
+    direct_client = mcp_server.MatineeClient(db_path=str(test_env))
+    for who in ("kids", "adults", "Midge", "Alice,Paige", "everyone"):
+        direct = direct_client.search_collection(unseen_by=who, limit=50)
+        rest = rest_client.search_collection(unseen_by=who, limit=50)
+        assert [t["id"] for t in direct] == [t["id"] for t in rest], who
+    assert not [p for _, p in rest_client.requested if any(n in p for n in ("Midge", "Alice", "Paige"))]
+    assert [t["title"] for t in direct_client.search_collection(unseen_by="kids")] == ["Toy Story", "WALL·E"]
+    assert [t["title"] for t in direct_client.search_collection(unseen_by="Midge")] == ["Toy Story", "WALL·E"]
+    assert direct_client.search_collection(query="inside", unseen_by="Nick") == []
+    with pytest.raises(ValueError, match="Unknown person: Grandma"):
+        direct_client.search_collection(unseen_by="Grandma")
+    with pytest.raises(mcp_server.MatineeError, match="unseen_by is empty"):
+        direct_client.search_collection(unseen_by=" ")
+
+
+def test_get_movie_names_attendees(test_env, monkeypatch):
+    people, toy, inside, wall = _seed_family(test_env)
+    con = db()
+    wid = con.execute("INSERT INTO watches (title_id, watched_date) VALUES (?, '2025-02-01')", (wall,)).lastrowid
+    for name in ("Lauren", "Nick"):  # inserted out of order: names come back in sort_order
+        con.execute("INSERT INTO watch_people (watch_id, person_id) VALUES (?, ?)", (wid, people[name]))
+    con.commit()
+    direct = mcp_server.MatineeClient(db_path=str(test_env)).get_movie(wall)
+    rest = _admin_rest_client(monkeypatch).get_movie(wall)
+    for m in (direct, rest):
+        assert m["watches"][0]["attendees"] == ["Nick", "Lauren"] and m["watches"][0]["attendance"] == "recorded"
+        assert m["seen_by"] == ["Nick", "Lauren"]
+        assert m["not_seen_by"] == ["Midge", "Alice", "Paige"]
+    assert "date_bucket" not in direct["watches"][0]
+    assert [(w["id"], w["attendance"], w["attendees"]) for w in direct["watches"]] == \
+           [(w["id"], w["attendance"], w["attendees"]) for w in rest["watches"]]
+    # An unresolved watch counts for everyone, and not_seen_by covers active people only.
+    con.execute("UPDATE people SET active=0 WHERE name='Paige'")
+    con.commit()
+    for m in (mcp_server.MatineeClient(db_path=str(test_env)).get_movie(1), _admin_rest_client(monkeypatch).get_movie(1)):
+        assert m["watches"][0]["attendance"] == "assumed_everyone"
+        assert m["watches"][0]["attendees"] == ["Nick", "Lauren", "Midge", "Alice", "Paige"]
+        assert m["seen_by"] == ["Nick", "Lauren", "Midge", "Alice", "Paige"] and m["not_seen_by"] == []
+
+
+def test_get_movie_with_no_people(test_env):
+    movie = mcp_server.MatineeClient(db_path=str(test_env)).get_movie(1)
+    assert movie["seen_by"] == [] and movie["not_seen_by"] == []
+    assert movie["watches"][0]["attendees"] == [] and movie["watches"][0]["attendance"] == "assumed_everyone"
+
+
+def test_public_rest_get_movie_has_no_people_keys(test_env):
+    _seed_family(test_env)
+    movie = _api_backed_client().get_movie(1)
+    assert not ({"seen_by", "not_seen_by"} & set(movie))
+    assert all("attendees" not in w and "attendance" not in w for w in movie["watches"])
+
+
+def test_where_is_makes_no_people_request(test_env, monkeypatch):
+    _seed_family(test_env)
+    client = _admin_rest_client(monkeypatch)
+    assert client.where_is("Inception")["found"] is True
+    assert not [p for _, p in client.requested if "/people" in p]
+
+
+def test_log_watch_sends_attendees(monkeypatch):
+    client = mcp_server.MatineeClient(api_url="http://fake-host", api_key="k", db_path="")
+    sent = []
+    monkeypatch.setattr(client, "_api_request", lambda m, p, d=None: sent.append(d) or {"ok": True})
+    client.log_watch(42, watched_date="2026-11-10", attendees=["Nick", "Lauren"])
+    assert sent[-1]["attendees"] == ["Nick", "Lauren"]
+    client.log_watch(42, watched_date="2026-11-10")
+    assert "attendees" not in sent[-1]
+    client.log_watch(42, watched_date="2026-11-10", attendees=[])
+    assert sent[-1]["attendees"] == []
+    monkeypatch.setattr(mcp_server._default_client, "_api_request", lambda m, p, d=None: sent.append(d) or {"ok": True})
+    mcp_server.log_watch(title_id=42, attendees=["Midge"])
+    assert sent[-1]["attendees"] == ["Midge"]
+
+
+def test_pre_v9_database_has_no_people(test_env):
+    con = db()
+    con.execute("DROP TABLE watch_people")
+    con.execute("DROP TABLE people")
+    con.commit()
+    client = mcp_server.MatineeClient(db_path=str(test_env))
+    assert client.list_people() == []
+    with pytest.raises(ValueError, match="No people are set up"):
+        client.get_recommendations(audience="kids")
+    with pytest.raises(ValueError, match="No people are set up"):
+        client.search_collection(unseen_by="kids")
+    assert [t["title"] for t in client.search_collection()] == ["Inception"]
+    assert client.get_recommendations(mode="never_watched")["mode"] == "never_watched"
+    movie = client.get_movie(1)
+    assert movie["seen_by"] == [] and movie["not_seen_by"] == []
+    assert movie["watches"][0]["attendees"] == []
+
+
+def _old_server_client(monkeypatch):
+    """REST client against a server that predates people: /people is 404, everything else returns fake results."""
+    client = mcp_server.MatineeClient(api_url="http://fake-host", api_key="k", db_path="")
+    paths = []
+
+    def fake(method, path, data=None):
+        paths.append(path)
+        if "/people" in path:
+            raise mcp_server.MatineeError("Matinee API error (404)", status=404)
+        return {"titles": [{"id": 1, "title": "Inception"}], "results": [{"id": 1, "title": "Inception"}]}
+
+    monkeypatch.setattr(client, "_api_request", fake)
+    return client, paths
+
+
+def test_older_rest_server_is_refused(monkeypatch):
+    client, paths = _old_server_client(monkeypatch)
+    msg = "This Matinee server is too old to pick for specific people. Update Matinee."
+    with pytest.raises(mcp_server.MatineeError) as e:
+        client.get_recommendations(audience="kids")
+    assert str(e.value) == msg
+    with pytest.raises(mcp_server.MatineeError) as e:
+        client.search_collection(unseen_by="kids")
+    assert str(e.value) == msg
+    assert paths == ["/admin/api/people", "/admin/api/people"]  # refused before the real request was sent
+    # without those arguments nothing is probed
+    assert client.get_recommendations()["results"] and client.search_collection()
+    assert not [p for p in paths[2:] if "/people" in p]
+
+
+def test_rest_response_without_audience_echo_is_refused(monkeypatch):
+    client = mcp_server.MatineeClient(api_url="http://fake-host", api_key="k", db_path="")
+    monkeypatch.setattr(client, "_api_request", lambda m, p, d=None: (
+        {"people": []} if p.endswith("/people") else {"mode": "never_watched", "results": [{"id": 1}]}))
+    with pytest.raises(mcp_server.MatineeError, match="too old to pick for specific people"):
+        client.get_recommendations(audience="kids")
+    # public mode (no key): no probe, but an unechoed audience is still refused
+    public = mcp_server.MatineeClient(api_url="http://fake-host", api_key="", db_path="")
+    monkeypatch.setattr(public, "_api_request", lambda m, p, d=None: {"mode": "never_watched", "results": [{"id": 1}]})
+    with pytest.raises(mcp_server.MatineeError, match="too old to pick for specific people"):
+        public.get_recommendations(audience="kids")
+
+
+def test_public_rest_mode_does_not_probe_and_surfaces_the_400(monkeypatch):
+    client = mcp_server.MatineeClient(api_url="http://fake-host", api_key="", db_path="")
+    paths = []
+
+    def fake(method, path, data=None):
+        paths.append(path)
+        raise mcp_server.MatineeError("Matinee API error (400): Sign in to pick for specific people.", status=400)
+
+    monkeypatch.setattr(client, "_api_request", fake)
+    for call in (lambda: client.get_recommendations(audience="kids"), lambda: client.search_collection(unseen_by="kids")):
+        with pytest.raises(mcp_server.MatineeError, match="Sign in to pick for specific people"):
+            call()
+    assert len(paths) == 2 and all(p.startswith("/api/") and "/people" not in p for p in paths)
+    with pytest.raises(mcp_server.MatineeError, match="only available with a Matinee key"):
+        client.list_people()
+
+
+# Paige is inactive here: a name still resolves to its id whether or not the person is active.
+REST_PEOPLE = [{"id": i, "name": n, "kind": k, "color": c, "sort_order": i - 1, "active": i != 5, "watch_count": 0}
+               for i, (n, k, c) in enumerate((("Nick", "adult", "green"), ("Lauren", "adult", "blue"),
+                                              ("Midge", "kid", "red"), ("Alice", "kid", "pink"),
+                                              ("Paige", "kid", "purple")), 1)]
+
+
+def _people_rest_client(monkeypatch, people=REST_PEOPLE):
+    """REST client whose /people answers `people` and whose other reads echo an audience; returns (client, paths)."""
+    client = mcp_server.MatineeClient(api_url="http://fake-host", api_key="k", db_path="")
+    seen = []
+    monkeypatch.setattr(client, "_api_request", lambda m, p, d=None: seen.append(p) or (
+        {"people": people} if p.endswith("/people") else {"results": [], "audience": {"label": "x"}, "titles": []}))
+    return client, seen
+
+
+def _sent(paths, key):
+    return [urllib.parse.parse_qs(urllib.parse.urlparse(p).query).get(key) for p in paths if "?" in p]
+
+
+def test_rest_forwards_audience_and_unseen_by(monkeypatch):
+    client, seen = _people_rest_client(monkeypatch)
+    client.get_recommendations(audience="Alice,Paige")
+    client.search_collection(unseen_by="kids")
+    assert _sent(seen, "audience") == [["4,5"], None] and _sent(seen, "unseen_by") == [None, ["kids"]]
+
+
+@pytest.mark.parametrize("given,sent", [
+    ("Alice,Paige", "4,5"), ("alice, PAIGE", "4,5"), ("Midge", "3"), ("Paige", "5"),     # inactive people resolve too
+    ("Nick,4", "1,4"), ("3", "3"), ("99", "99"),                                         # ids pass as given
+    ("kids", "kids"), ("Adults", "Adults"), ("everyone", "everyone"),                   # keywords pass as given
+])
+def test_rest_sends_person_ids_not_names(monkeypatch, given, sent):
+    """Names never reach the server's query string (and so its access log): REST mode sends ids (I3)."""
+    client, seen = _people_rest_client(monkeypatch)
+    client.get_recommendations(audience=given)
+    client.search_collection(unseen_by=given)
+    assert _sent(seen, "audience")[0] == [sent] and _sent(seen, "unseen_by")[1] == [sent]
+    assert all(name not in p for p in seen for name in ("Alice", "alice", "Paige", "PAIGE", "Midge"))
+
+
+def test_rest_unknown_person_is_refused_before_sending(monkeypatch):
+    client, seen = _people_rest_client(monkeypatch)
+    msg = "Unknown person: Grandma. People: Nick, Lauren, Midge, Alice, Paige."
+    for call in (lambda: client.get_recommendations(audience="Alice,Grandma"),
+                 lambda: client.search_collection(unseen_by="Grandma")):
+        with pytest.raises(mcp_server.MatineeError) as e:
+            call()
+        assert str(e.value) == msg
+    assert all(p.endswith("/people") for p in seen)          # only the people probe went out
+    # nobody set up: the server's own text, and still nothing sent with the name in it
+    client, seen = _people_rest_client(monkeypatch, people=[])
+    with pytest.raises(mcp_server.MatineeError) as e:
+        client.get_recommendations(audience="Alice")
+    assert str(e.value) == "No people are set up yet. Add them under People in the admin view."
+    assert all(p.endswith("/people") for p in seen)
+
+
+def test_rest_people_messages_match_the_server(test_env):
+    """The REST client words its refusals exactly as recommend.py does (it cannot import it on that path)."""
+    import recommend
+    from conftest import seed_people
+    con = db()
+    seed_people(con)
+    rows = [dict(r) for r in con.execute("SELECT id, name FROM people ORDER BY sort_order, id")]
+    assert mcp_server._unknown_person(rows, "Bob") == recommend.unknown_person_message(con, "Bob")
+    assert mcp_server.NO_PEOPLE == recommend._NO_PEOPLE
+
+
+def test_public_rest_mode_sends_audience_unchanged(monkeypatch):
+    client = mcp_server.MatineeClient(api_url="http://fake-host", api_key="", db_path="")
+    seen = []
+    monkeypatch.setattr(client, "_api_request", lambda m, p, d=None: seen.append(p) or {"results": [], "audience": {}})
+    client.get_recommendations(audience="Alice")
+    assert len(seen) == 1 and _sent(seen, "audience") == [["Alice"]]   # no probe; the server's 400 answers it
+
+
+def test_log_watch_with_attendees_refuses_an_older_server(monkeypatch):
+    client = mcp_server.MatineeClient(api_url="http://fake-host", api_key="k", db_path="")
+    old = {"ok": True, "watch": {"id": 88, "title_id": 42, "watched_date": "2026-11-10", "notes": None}}
+    monkeypatch.setattr(client, "_api_request", lambda m, p, d=None: old)
+    with pytest.raises(mcp_server.MatineeError) as e:
+        client.log_watch(42, watched_date="2026-11-10", attendees=["Nick", "Lauren"])
+    assert str(e.value) == ("This Matinee server is too old to pick for specific people. Update Matinee. "
+                            "The watch was logged for everyone.")
+    assert client.log_watch(42, watched_date="2026-11-10") == old          # no attendees: nothing to check
+    new = {"ok": True, "watch": dict(old["watch"], attendance="recorded", attendees=[1, 2])}
+    monkeypatch.setattr(client, "_api_request", lambda m, p, d=None: new)
+    assert client.log_watch(42, watched_date="2026-11-10", attendees=["Nick", "Lauren"]) == new
+
+
+def test_tool_lists_per_level():
+    sizes = {level: _names(mcp_server.build_server(writes=level)) for level in ("none", "log", "all")}
+    assert (len(sizes["none"]), len(sizes["log"]), len(sizes["all"])) == (7, 9, 10)
+    assert "list_people" in sizes["none"]
+    assert sizes["log"] - sizes["none"] == {"rate_movie", "log_watch"}
+    assert sizes["all"] - sizes["log"] == {"add_movie"}
+
+
+def test_readonly_instructions_name_no_write_tool():
+    for level in ("none", False):
+        text = mcp_server.instructions_for(level)
+        assert "log_watch" not in text and "attendees" not in text and "rate_movie" not in text
+        assert 'audience="kids"' in text
+    assert mcp_server.SERVER_INSTRUCTIONS.count("pass attendees to log_watch only when someone was missing") == 1
+    assert '"The girls" or "the kids": audience="kids". "Us two", "date night": audience="adults". ' \
+           'A named person: audience="Alice".' in mcp_server.SERVER_INSTRUCTIONS
+
+
+def test_instructions_say_to_drop_audience_when_nobody_is_set_up():
+    fallback = "If a tool answers that no people are set up, repeat the call without audience."
+    after_full = ('A named person: audience="Alice". After watching, pass attendees to log_watch only when someone '
+                  f'was missing. {fallback}')
+    assert mcp_server.SERVER_INSTRUCTIONS.count(fallback) == 1 and after_full in mcp_server.SERVER_INSTRUCTIONS
+    for level in ("none", "log", "all"):
+        text = mcp_server.instructions_for(level)
+        assert text.count(fallback) == 1, level
+    assert f'A named person: audience="Alice". {fallback}' in mcp_server.instructions_for("none")
+
+
+def test_tool_schemas_carry_the_new_arguments():
+    def props(name):
+        t = _tool(name)
+        return (getattr(t, "inputSchema", None) or t.input_schema)["properties"]
+    assert "audience" in props("get_recommendations")
+    assert "unseen_by" in props("search_collection")
+    assert "attendees" in props("log_watch")
+
+
+def test_assumed_adults_attendance_db_matches_rest(test_env, monkeypatch):
+    people, toy, inside, wall = _seed_family(test_env)
+    con = db()
+    old_day = con.execute("SELECT date('now', '-11 years')").fetchone()[0]
+    a = con.execute("INSERT INTO watches (title_id, watched_date, date_bucket) VALUES (?, NULL, 'over_10_years')",
+                    (wall,)).lastrowid
+    b = con.execute("INSERT INTO watches (title_id, watched_date) VALUES (?, ?)", (wall, old_day)).lastrowid
+    con.commit()
+    direct = mcp_server.MatineeClient(db_path=str(test_env)).get_movie(wall)
+    rest = _admin_rest_client(monkeypatch).get_movie(wall)
+    for m in (direct, rest):
+        by_id = {w["id"]: w for w in m["watches"]}
+        for wid in (a, b):
+            assert by_id[wid]["attendance"] == "assumed_adults"
+            assert by_id[wid]["attendees"] == ["Nick", "Lauren"]
+        assert m["seen_by"] == ["Nick", "Lauren"] and m["not_seen_by"] == ["Midge", "Alice", "Paige"]
+    assert [(w["id"], w["attendance"], w["attendees"]) for w in direct["watches"]] == \
+           [(w["id"], w["attendance"], w["attendees"]) for w in rest["watches"]]

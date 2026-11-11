@@ -188,6 +188,27 @@ See [docs/mcp-setup.md](docs/mcp-setup.md) for full configuration blocks and pro
 
 ---
 
+## People and who watched
+
+Editors can keep a short list of people (for example Nick, Lauren, Midge, Alice and Paige) under **People** in the admin view. Each person is an adult or a kid, has one of five colors (green, blue, red, pink, purple), and at most 8 can be active at once. Every watch then records who was there: logging a watch defaults to everyone, and the title view shows a colored dot per attendee. Nothing changes until the first person is added.
+
+**Editor-only.** People and attendance are never public. The public `/api` has no people route, shows watch dates only, and answers 400 `Sign in to pick for specific people.` to any request carrying `audience`, `unseen_by` or `attendance`. The read key may read them, as it can already read watch notes.
+
+**Older watches.** A watch with no attendance recorded is treated as "assumed everyone". If it is in the "10+ Years" bucket, or its date is more than ten years back, it is "assumed adults" instead, because the kids were too young to have seen it. Open the grid, choose Watched, then the "Who watched: unknown" filter to list the watches still to resolve, and fix each one with the row editor.
+
+**Audiences.** Movie Night, the MCP `get_recommendations` and `search_collection` tools, and Ask pick for an audience:
+
+| Value | Meaning |
+|---|---|
+| `everyone` | All active people |
+| `adults` | Active adults |
+| `kids` | Active kids |
+| `Alice,Paige` or `4,5` | The named people or ids, case-insensitive; these may include inactive people |
+
+A title counts as unwatched for an audience only if nobody in it has seen it, so Movie Night with Kids and Never Watched offers films none of the kids has seen. The grid has a matching "Unseen by" filter. A person's name cannot be `everyone`, `adults` or `kids`, contain a comma, or be all digits. See [docs/mcp-setup.md](docs/mcp-setup.md) for the MCP side.
+
+---
+
 ## AI search (Ask)
 
 **Ask** lets signed-in editors question the collection in plain language ("Which 4K discs do we own that nobody has watched?") at `https://movies.example.com/admin#/ask`. It is editor-only and stays off until an API key is set. Headless callers using `MATINEE_API_KEY` or `MATINEE_READ_KEY` are refused.
@@ -212,7 +233,7 @@ See [docs/mcp-setup.md](docs/mcp-setup.md) for full configuration blocks and pro
 - Worst case: one question can reach roughly 100-150k input tokens (several tool calls per round, each result up to 12k characters), about $0.02-0.04. It is still bounded by 5 rounds, the daily cap and an Anthropic Console spend limit.
 - At the default cap of 200 a day: about $0.26 a day typically, and at most about $8 a day if every question hit the worst case.
 
-**Data sent to Anthropic**: each question and the results of the collection lookups the model makes, which can include personal ratings and watch notes. No images are sent. Question text is not stored locally; token counts are logged per question in the `ask_log` table.
+**Data sent to Anthropic**: each question and the results of the collection lookups the model makes, which can include personal ratings and watch notes. When a tool result carries them, people's first names and who watched what are sent too. No images are sent. Question text is not stored locally; token counts are logged per question in the `ask_log` table.
 
 ---
 

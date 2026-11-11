@@ -1,7 +1,7 @@
 // Matinee — hash router, header, /admin/api/me and handleRoute.
 import { api, isAdmin, state } from "./core.js";
 import { icon } from "./icons.js";
-import { renderGrid } from "./grid.js";
+import { hashWithoutPeopleFilters, renderGrid } from "./grid.js";
 import { renderDetail } from "./detail.js";
 import { renderAdd, stopBarcodeScanner } from "./add.js";
 import { closeModal } from "./forms.js";
@@ -10,6 +10,7 @@ import { renderAbout, renderNotFound } from "./about.js";
 import { renderAsk } from "./ask.js";
 import { openMovieNightModal } from "./movie-night.js";
 import { openLocationsManagerModal } from "./locations.js";
+import { loadPeople, openPeopleModal } from "./people.js";
 
   // ================================================================= Router
   function parseHash(hashStr) {
@@ -63,6 +64,9 @@ import { openLocationsManagerModal } from "./locations.js";
         <button type="button" class="btn btn-sm btn-ghost" id="btn-header-locations" title="Manage Shelves &amp; Locations">
           ${icon("pin")} Locations
         </button>
+        <button type="button" class="btn btn-sm btn-ghost" id="btn-header-people" title="Manage People">
+          ${icon("people")} People
+        </button>
         <a href="#/stats" class="btn btn-sm btn-ghost" id="btn-header-stats">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
           Stats
@@ -89,6 +93,7 @@ import { openLocationsManagerModal } from "./locations.js";
     }
     document.getElementById("btn-header-movie-night")?.addEventListener("click", () => openMovieNightModal());
     document.getElementById("btn-header-locations")?.addEventListener("click", () => openLocationsManagerModal());
+    document.getElementById("btn-header-people")?.addEventListener("click", () => openPeopleModal());
 
     // Header admin bar is a swipeable row on phones; mark and reveal the current page's button.
     const activeId = { "/ask": "btn-header-ask", "/stats": "btn-header-stats", "/add": "btn-header-add" }[state.route?.path];
@@ -103,7 +108,7 @@ import { openLocationsManagerModal } from "./locations.js";
           <a href="#/">Collection</a> &nbsp;·&nbsp;
           <a href="#/stats">Stats</a> &nbsp;·&nbsp;
           <a href="#/about">About &amp; TMDB Attribution</a> &nbsp;·&nbsp;
-          <a href="/${location.hash || ""}">Public View</a>
+          <a href="/${location.hash ? hashWithoutPeopleFilters(location.hash) : ""}">Public View</a>
         `;
       } else {
         footerLinks.innerHTML = `
@@ -160,6 +165,8 @@ import { openLocationsManagerModal } from "./locations.js";
   mePromise.then(() => {
     if (isAdmin) updateHeader();
   });
+  // People (editors only): never awaited, so it cannot hold first paint.
+  if (isAdmin) state.peopleReady = loadPeople();
 
   async function handleRoute() {
     closeModal();

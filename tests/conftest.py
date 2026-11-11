@@ -13,7 +13,7 @@ FIXTURES_TMDB = Path(__file__).parent / "fixtures" / "tmdb"
 # (constants and state first, initialization last). tests/test_js_modules.py checks this list is complete.
 JS_DIR = Path(__file__).resolve().parent.parent / "static" / "js"
 JS_MODULES = ["core.js", "icons.js", "router.js", "grid.js", "detail.js", "add.js", "forms.js", "stats.js",
-              "about.js", "ask.js", "movie-night.js", "locations.js", "main.js"]
+              "about.js", "ask.js", "movie-night.js", "locations.js", "people.js", "main.js"]
 
 
 def frontend_js():
@@ -40,3 +40,16 @@ def seed_title(con, tmdb_id, *, copies=("Blu-ray",), digital=(), watched=(), rat
         con.execute("INSERT INTO user_ratings (title_id, rating) VALUES (?, ?)", (title_id, rating))
     con.commit()
     return title_id
+
+
+def seed_people(con):
+    """Insert Nick, Lauren (adults) and Midge, Alice, Paige (kids) with colors green, blue, red, pink, purple and
+    sort_order 0-4; returns {name: id}."""
+    rows = [("Nick", "adult", "green"), ("Lauren", "adult", "blue"), ("Midge", "kid", "red"),
+            ("Alice", "kid", "pink"), ("Paige", "kid", "purple")]
+    ids = {}
+    for order, (name, kind, color) in enumerate(rows):
+        ids[name] = con.execute("INSERT INTO people (name, kind, color, sort_order) VALUES (?, ?, ?, ?)",
+                                (name, kind, color, order)).lastrowid
+    con.commit()
+    return ids
