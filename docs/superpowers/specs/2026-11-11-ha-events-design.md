@@ -3,7 +3,7 @@
 **Date:** 2026-11-11
 **Branch:** `feat/ha-events` (one PR)
 **Schema:** unchanged (v9)
-**Status:** proposed.
+**Status:** proposed in PR #31 (decisions from Nick's prompt 13, 2026-11-11).
 **Verified against:** `matinee` `main` @ `225af12` (merge of PR #30).
 
 ## 1. Intent
