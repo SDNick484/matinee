@@ -212,3 +212,16 @@ def test_lan_edit_off_still_wins(client, monkeypatch):
     monkeypatch.setattr("app.LAN_EDIT", False)
     assert client.get("/admin/api/me", headers={"Host": LAN_IP}).status_code == 401
 
+
+# ------------------------------------------------------------------- response headers
+@pytest.mark.parametrize("path", ["/", "/admin", "/api/titles", "/admin/api/me", "/healthz", "/static/app.js"])
+def test_security_headers_on_every_response(client, path):
+    r = client.get(path)
+    assert r.headers["X-Content-Type-Options"] == "nosniff"
+    assert r.headers["Referrer-Policy"] == "same-origin"
+    assert r.headers["Content-Security-Policy"] == "frame-ancestors 'self'"
+
+
+def test_security_headers_on_errors(client):
+    r = client.delete("/admin/api/titles/1", headers={"Host": "evil.example.com"})
+    assert r.status_code == 401 and r.headers["X-Content-Type-Options"] == "nosniff"

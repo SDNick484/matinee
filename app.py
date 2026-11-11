@@ -550,6 +550,16 @@ def editor_required(fn):
     return inner
 
 
+@app.after_request
+def security_headers(resp):
+    """Baseline headers on every response. No script-src/style-src policy: app.js renders inline
+    onclick/onerror handlers and style="" attributes, which a strict CSP would block."""
+    resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+    resp.headers.setdefault("Referrer-Policy", "same-origin")
+    resp.headers.setdefault("Content-Security-Policy", "frame-ancestors 'self'")
+    return resp
+
+
 def who():
     e = getattr(g, "editor", None)
     return None if e in (None, "access-user") else e  # 'lan' is kept: the spec records LAN adds as such
