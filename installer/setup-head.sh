@@ -73,6 +73,9 @@ add_setting() {  # add_setting FILE KEY VALUE COMMENT — only if KEY isn't ther
   printf '\n# %s\n%s=%s\n' "$4" "$2" "$3" >> "$1"
   ADDED="${ADDED:-} $2"
 }
+gen_key() {  # 43 URL-safe characters (256 bits) for a new API key
+  python3 -c 'import secrets; print(secrets.token_urlsafe(32))'
+}
 
 if [ ! -f "$CONF" ]; then
   echo "==> Writing $CONF"
@@ -91,6 +94,7 @@ add_setting "$CONF" PUBLIC_VIEW 1 "1 = anyone can browse the collection at /; 0 
 add_setting "$CONF" TMDB_READ_TOKEN "" "TMDB API Read Access Token (themoviedb.org -> Settings -> API); adding movies needs it"
 add_setting "$CONF" OMDB_API_KEY "" "Optional OMDb API key (omdbapi.com/apikey.aspx) for IMDb, Rotten Tomatoes & Metacritic scores"
 add_setting "$CONF" MATINEE_API_KEY "" "Optional API key for headless automation and MCP server (Authorization: Bearer <key>)"
+add_setting "$CONF" MATINEE_READ_KEY "$(gen_key)" "Key that may only GET /admin/api (watch notes included); read-only matinee-mcp uses it. Keep it different from MATINEE_API_KEY"
 add_setting "$CONF" ANTHROPIC_SEARCH_KEY "" "Anthropic API key for Ask (AI search); empty = Ask is off"
 add_setting "$CONF" ANTHROPIC_SEARCH_MODEL "claude-haiku-5-5" "Model Ask uses"
 add_setting "$CONF" ASK_DAILY_LIMIT "200" "Ask questions per day across all editors"
@@ -143,7 +147,7 @@ description="Matinee movie collection"
 : ${PORT:=8771}
 : ${DATA_DIR:=/var/lib/matinee}
 export HOME=/var/lib/matinee  # newer gunicorn keeps a small control socket under $HOME
-export PORT DATA_DIR CF_TEAM_DOMAIN CF_AUD ADMIN_EMAILS LAN_EDIT LAN_HOSTS PUBLIC_VIEW TMDB_READ_TOKEN MATINEE_API_KEY OMDB_API_KEY ANTHROPIC_SEARCH_KEY ANTHROPIC_SEARCH_MODEL ASK_DAILY_LIMIT
+export PORT DATA_DIR CF_TEAM_DOMAIN CF_AUD ADMIN_EMAILS LAN_EDIT LAN_HOSTS PUBLIC_VIEW TMDB_READ_TOKEN MATINEE_API_KEY MATINEE_READ_KEY OMDB_API_KEY ANTHROPIC_SEARCH_KEY ANTHROPIC_SEARCH_MODEL ASK_DAILY_LIMIT
 supervisor="supervise-daemon"
 respawn_delay=5
 respawn_max=10
@@ -164,8 +168,14 @@ description="Matinee MCP server (Streamable HTTP, behind Cloudflare Access)"
 [ -r /etc/conf.d/matinee ] && . /etc/conf.d/matinee
 : ${PORT:=8771}
 : ${MATINEE_URL:=http://127.0.0.1:${PORT}}
-# Only what this service needs: TMDB_READ_TOKEN and OMDB_API_KEY deliberately stay out of its environment.
-export MATINEE_URL MATINEE_API_KEY MATINEE_MCP_READONLY MCP_HTTP_BIND MCP_HTTP_PORT MCP_HTTP_PATH MCP_PUBLIC_HOSTS CF_ACCESS_TEAM_DOMAIN CF_ACCESS_AUD MCP_ALLOWED_EMAILS CF_TEAM_DOMAIN
+# Only what this service needs: TMDB_READ_TOKEN and OMDB_API_KEY deliberately stay out of its environment,
+# and it gets one Matinee key: the GET-only MATINEE_READ_KEY while read-only (mirrors mcp_http.readonly()),
+# MATINEE_API_KEY only when MATINEE_MCP_READONLY is 0/false/no/off.
+case "$(printf '%s' "${MATINEE_MCP_READONLY:-}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]')" in
+  0|false|no|off) unset MATINEE_READ_KEY; export MATINEE_API_KEY ;;
+  *) unset MATINEE_API_KEY; export MATINEE_READ_KEY ;;
+esac
+export MATINEE_URL MATINEE_MCP_READONLY MCP_HTTP_BIND MCP_HTTP_PORT MCP_HTTP_PATH MCP_PUBLIC_HOSTS CF_ACCESS_TEAM_DOMAIN CF_ACCESS_AUD MCP_ALLOWED_EMAILS CF_TEAM_DOMAIN
 supervisor="supervise-daemon"
 respawn_delay=5
 respawn_max=10
@@ -208,8 +218,14 @@ echo "==> Taking a first backup"
 /etc/periodic/daily/matinee-backup || echo "    (backup reported a problem; see /var/log/ops.log)"
 
 conf_val() { sed -n "s/^$1=//p" "$CONF" | head -n1 | tr -d "\"'"; }
+mcp_key_name() {  # the key matinee-mcp needs in its configured mode (same rule as its init script)
+  case "$(conf_val MATINEE_MCP_READONLY | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]')" in
+    0|false|no|off) echo MATINEE_API_KEY ;;
+    *) echo MATINEE_READ_KEY ;;
+  esac
+}
 MCP_STATE=off
-if [ "${MCP_OK:-0}" = 1 ] && [ -n "$(conf_val CF_ACCESS_AUD)" ] && [ -n "$(conf_val MCP_PUBLIC_HOSTS)" ] && [ -n "$(conf_val MATINEE_API_KEY)" ]; then
+if [ "${MCP_OK:-0}" = 1 ] && [ -n "$(conf_val CF_ACCESS_AUD)" ] && [ -n "$(conf_val MCP_PUBLIC_HOSTS)" ] && [ -n "$(conf_val "$(mcp_key_name)")" ]; then
   echo "==> Starting matinee-mcp"
   rc-service matinee-mcp start || true
   MCP_STATE=failed
@@ -244,8 +260,8 @@ case "$MCP_STATE" in
   *)
     echo "Matinee MCP (remote access from the Claude app) was NOT started:"
     [ "${MCP_OK:-0}" = 1 ] || echo "  - The MCP venv could not be built (see the warning above); re-run when PyPI is reachable"
-    for k in MCP_PUBLIC_HOSTS CF_ACCESS_AUD MATINEE_API_KEY; do
-      [ -n "$(conf_val $k)" ] || echo "  - Set $k in $CONF"
+    for k in MCP_PUBLIC_HOSTS CF_ACCESS_AUD "$(mcp_key_name)"; do
+      [ -n "$(conf_val "$k")" ] || echo "  - Set $k in $CONF"
     done
     echo "  - Then start it:  rc-service matinee-mcp start && rc-update add matinee-mcp default"
     echo "  - (re-run this installer afterwards to add it to HEALTH_CHECKS)"
