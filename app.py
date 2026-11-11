@@ -2032,6 +2032,16 @@ def resolve_people(con, items):
     return ids
 
 
+def default_attendees(con, date_bucket):
+    """Who a log without `attendees` records: every active person, or only the active adults for a "10+ Years"
+    watch (ruling R21, the same rule as an old unrecorded watch). With nobody to record (no people, or no active
+    adult for an old watch) it is no rows, so the watch reads as assumed, as before people existed."""
+    active = list_people(con, active_only=True)
+    if date_bucket == "over_10_years":
+        return [p["id"] for p in active if p["kind"] == "adult"]
+    return [p["id"] for p in active]
+
+
 def set_attendees(con, watch_id, person_ids):
     """Replace a watch's attendance. The caller commits."""
     con.execute("DELETE FROM watch_people WHERE watch_id = ?", (watch_id,))
@@ -2198,8 +2208,8 @@ def add_watch(title_id):
     notes = clean(data.get("notes"))
     if "attendees" in data:
         attendees = resolve_people(con, data["attendees"])  # validated before anything is written
-    else:  # the default is everyone active; with nobody set up that is no rows, as before people existed
-        attendees = [p["id"] for p in list_people(con, active_only=True)]
+    else:
+        attendees = default_attendees(con, date_bucket)
     try:
         cur = con.execute("INSERT INTO watches(title_id, watched_date, notes, date_bucket) VALUES (?, ?, ?, ?)",
                           (title_id, watched_date, notes, date_bucket))

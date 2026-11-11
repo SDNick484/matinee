@@ -240,7 +240,7 @@ Ordered by `sort_order, id`. `watch_count` counts recorded attendance only.
 
 | Body | Result |
 |---|---|
-| `attendees` absent | All active people. With no people set up: no rows, as today. |
+| `attendees` absent | All active people; for `"date_bucket": "over_10_years"`, the active adults only (ruling R21, 2026-11-11: the same rule as an old unrecorded watch). With no people set up, or no active adult for a "10+ Years" log: no rows, as today. |
 | `"attendees": [1, 2]` or `["Nick", "Lauren"]` | Exactly those people. |
 | `"attendees": []` | 400 `A watch needs at least one person.` |
 | Unknown id or name | 400 `Unknown person: Bob. People: Nick, Lauren, Midge, Alice, Paige.` |
@@ -252,8 +252,15 @@ The response gains two keys; nothing else changes:
                        "date_bucket": null, "attendance": "recorded", "attendees": [1, 2]}}
 ```
 
-A request that sends no `attendees` (the current SPA, an older MCP client, a `curl`) therefore records
-everyone. That is the agreed default, and it is why the upgrade needs no client change to stay correct.
+A request that sends no `attendees` (the SPA with its toggles left at the default, an older MCP client, a `curl`)
+therefore records everyone, or the adults for a "10+ Years" watch. That is the agreed default, and it is why the
+upgrade needs no client change to stay correct.
+
+**Scenario (R21).** Logging *The Princess Bride* as `{"date_bucket": "over_10_years"}` records Nick and Lauren,
+so "has Paige seen The Princess Bride?" answers no. `{"date_bucket": "over_10_years", "attendees": [1, 2, 3]}`
+records Nick, Lauren and Midge as sent. `{"watched_date": "<today>"}` still records all five. An explicit
+`watched_date` more than ten years back still defaults to everyone (open decision D2 in
+`.superpowers/review/2026-11-11-roadmap-prs.md`).
 
 ### 6.3 Correcting a watch
 
@@ -305,9 +312,14 @@ load, beside `/admin/api/me`, and refreshed after any change here.
 
 A **Who watched** row sits directly under "+ Watched Today": one dot per active person, in order, each a
 filled circle in the person's color with their initial (N L M A P) and `aria-pressed`. All start on.
-Tapping a dot turns that person off for the next log (outlined, dimmed). Every log button in the section
-(Watched Today, Log Date, the six buckets) sends the current selection as `attendees`. After a successful
-log the selection resets to everyone. With every dot off, the log buttons are disabled.
+Tapping a dot turns that person off for the next log (outlined, dimmed). Watched Today and Log Date send the
+selection as `attendees` only when it differs from everyone active (otherwise the server's default applies).
+With this row present a bucket button chooses a bucket rather than logging at once: the toggles switch to that
+bucket's default (the kids off for "10+ Years", everyone for the other five), the editor can switch anyone back
+on, and a **Log 10+ Years** button (44 px) sends it, with `attendees` only when the toggles differ from the
+bucket's default (ruling R21). Tapping the chosen bucket again unchooses it. After a successful log the
+selection resets. With every dot off, Watched Today, Log Date and the bucket's Log button are disabled. Without
+people the buckets still log on one tap.
 
 This row is its own line, not inline with the button: each dot needs a 44 px tap target, and five of them
 are 220 px, which does not fit beside "+ Watched Today" at 412 px. It costs editors about 48 px of height in
@@ -349,7 +361,7 @@ in the same color with `--ink-2` text. Color is never the only signal: the initi
 | `get_recommendations` | New `audience: Optional[str]` (§5). The result carries `audience` and per-result `seen_by`. |
 | `search_collection` | New `unseen_by: Optional[str]`, same grammar. |
 | `get_movie` | Each watch gains `attendance` and `attendees` as names. The movie gains `seen_by` and `not_seen_by` (names of active people). |
-| `log_watch` | New `attendees: Optional[List[str]]` (names). Omitted means everyone. Stays in the `log` and `all` levels. |
+| `log_watch` | New `attendees: Optional[List[str]]` (names). Omitted means everyone. Stays in the `log` and `all` levels. New `date_bucket` (`past_year` … `over_10_years`, `unknown`) for an undated watch; with `over_10_years` and no `attendees` the adults are recorded (R21). |
 
 - **DB mode** reads `people` and `watch_people` directly and uses `recommend.SEEN_CTE`. A database older
   than v9 has no `people` table; DB mode checks `sqlite_master` and treats that as "no people".

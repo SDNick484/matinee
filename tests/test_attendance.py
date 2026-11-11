@@ -262,3 +262,72 @@ def test_read_key_cannot_put_attendees(client, tk, people, monkeypatch):
     assert res.status_code in (401, 403)
     assert len(rows_for(wid)) == 5
     assert client.get(f"/admin/api/titles/{tk}", headers=h).status_code == 200
+
+
+# ------------------------------------------------------------------ ruling R21: "10+ Years" defaults to the adults
+# Scenario: The Princess Bride (TMDB 2493), watched long before the kids were born.
+
+
+@pytest.fixture
+def princess_bride(client):
+    return seed_title(db(), 2493)
+
+
+def log_bucket(client, tid, bucket, **body):
+    return client.post(f"/admin/api/titles/{tid}/watches", json={"date_bucket": bucket, **body})
+
+
+def seen_by_names(client, tid):
+    d = client.get(f"/admin/api/titles/{tid}").get_json()
+    names = {p["id"]: p["name"] for p in client.get("/admin/api/people").get_json()["people"]}
+    return [names[i] for i in d["seen_by"]]
+
+
+@pytest.mark.parametrize("bucket", ["over_10_years", "10+ Years"])
+def test_ten_plus_years_without_attendees_records_the_active_adults(client, princess_bride, people, bucket):
+    res = log_bucket(client, princess_bride, bucket)
+    assert res.status_code == 200
+    w = res.get_json()["watch"]
+    assert w["date_bucket"] == "over_10_years"
+    assert w["attendance"] == "recorded" and w["attendees"] == [people["Nick"], people["Lauren"]]
+    assert rows_for(w["id"]) == sorted([people["Nick"], people["Lauren"]])
+    assert seen_by_names(client, princess_bride) == ["Nick", "Lauren"]   # "has Paige seen it?" -> no
+
+
+def test_ten_plus_years_with_midge_switched_on_is_stored_as_sent(client, princess_bride, people):
+    sent = [people["Nick"], people["Lauren"], people["Midge"]]
+    w = log_bucket(client, princess_bride, "over_10_years", attendees=sent).get_json()["watch"]
+    assert w["attendees"] == sent
+    assert seen_by_names(client, princess_bride) == ["Nick", "Lauren", "Midge"]
+
+
+def test_ten_plus_years_explicit_everyone_is_stored_as_sent(client, princess_bride, people):
+    everyone = [people[n] for n in ("Nick", "Lauren", "Midge", "Alice", "Paige")]
+    w = log_bucket(client, princess_bride, "over_10_years", attendees=everyone).get_json()["watch"]
+    assert w["attendees"] == everyone
+
+
+def test_ten_plus_years_skips_an_inactive_adult(client, princess_bride, people):
+    client.put(f"/admin/api/people/{people['Lauren']}", json={"active": False})
+    w = log_bucket(client, princess_bride, "over_10_years").get_json()["watch"]
+    assert w["attendees"] == [people["Nick"]]
+
+
+def test_ten_plus_years_with_no_active_adult_stays_assumed_adults(client, princess_bride, people):
+    for n in ("Nick", "Lauren"):
+        client.put(f"/admin/api/people/{people[n]}", json={"active": False})
+    w = log_bucket(client, princess_bride, "over_10_years").get_json()["watch"]
+    assert rows_for(w["id"]) == []
+    assert w["attendance"] == "assumed_adults"
+
+
+@pytest.mark.parametrize("body", [{"watched_date": dt.date.today().isoformat()}, {"date_bucket": "5_10_years"},
+                                  {"date_bucket": "unknown"}, {"date_bucket": "past_year"}])
+def test_other_logs_still_default_to_everyone(client, princess_bride, people, body):
+    w = client.post(f"/admin/api/titles/{princess_bride}/watches", json=body).get_json()["watch"]
+    assert w["attendees"] == [people[n] for n in ("Nick", "Lauren", "Midge", "Alice", "Paige")]
+
+
+def test_ten_plus_years_with_no_people_writes_no_rows(client, princess_bride):
+    w = log_bucket(client, princess_bride, "over_10_years").get_json()["watch"]
+    assert rows_for(w["id"]) == [] and w["attendees"] == []

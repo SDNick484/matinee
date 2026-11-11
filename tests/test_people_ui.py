@@ -150,17 +150,26 @@ def test_who_watched_log_and_row_editor_at_412_and_360(server, browser):
     for pid in (1, 2, 3, 4, 5):
         page.click(f'#who-watched-row .person-toggle[data-person-id="{pid}"]')
     assert page.is_disabled("#btn-watched-today") and page.is_disabled("#btn-log-watch")
-    assert all(page.locator(".btn-watch-bucket").nth(i).is_disabled() for i in range(6))
-    page.click('#who-watched-row .person-toggle[data-person-id="5"]')
-    _mark_stale(page)
+    # a bucket button only chooses a bucket (it resets the toggles), so it stays enabled; its Log button would not
+    assert not any(page.locator(".btn-watch-bucket").nth(i).is_disabled() for i in range(6))
+    # with people, a bucket is chosen first (its default fills the toggles), then logged with the Log button
     page.click('.btn-watch-bucket[data-bucket="past_year"]')
+    assert page.get_attribute('.btn-watch-bucket[data-bucket="past_year"]', "aria-pressed") == "true"
+    assert [toggles.nth(i).get_attribute("aria-pressed") for i in range(5)] == ["true"] * 5
+    for pid in (1, 2, 3, 4):
+        page.click(f'#who-watched-row .person-toggle[data-person-id="{pid}"]')
+    assert page.inner_text("#btn-log-bucket").strip() == "Log Past Year"
+    assert page.locator("#btn-log-bucket").bounding_box()["height"] >= 44
+    _mark_stale(page)
+    page.click("#btn-log-bucket")
     _settled(page, posts, 2)
     assert posts[-1] == {"date_bucket": "past_year", "attendees": [5]}
+    # everyone on is the default for a dated log, so no attendees key is sent (the server records everyone)
     page.fill("#input-watch-date", "2026-11-01")
     _mark_stale(page)
     page.click("#btn-log-watch")
     _settled(page, posts, 3)
-    assert posts[-1] == {"watched_date": "2026-11-01", "attendees": [1, 2, 3, 4, 5]}
+    assert posts[-1] == {"watched_date": "2026-11-01"}
 
     # saved watches: recorded shows dots; the old one shows ? and "assumed adults"
     recorded, old = page.locator('.watch-row[data-watch-id="88"]'), page.locator('.watch-row[data-watch-id="12"]')
@@ -665,4 +674,52 @@ def test_people_modal_escape_after_a_change_refreshes_the_grid(server, browser):
     page.keyboard.press("Escape")
     _wait(page, lambda: len(titles) > n, "grid refresh after Escape")
     assert page.locator("#add-person-form").count() == 0
+    assert errors == []
+
+
+def test_ten_plus_years_switches_the_kids_off_and_sends_only_a_change(server, browser):
+    """Ruling R21. Logging The Princess Bride as "10+ Years" with nothing changed sends no attendees (the server
+    records Nick and Lauren); switching Midge back on sends the two adults and Midge. Today still means everyone."""
+    page, posts, puts, errors = _open(browser, server, PEOPLE)
+    toggles = page.locator("#who-watched-row .person-toggle")
+    pressed = lambda: [toggles.nth(i).get_attribute("aria-pressed") for i in range(5)]  # noqa: E731
+
+    page.click('.btn-watch-bucket[data-bucket="over_10_years"]')
+    assert pressed() == ["true", "true", "false", "false", "false"]
+    assert page.inner_text("#btn-log-bucket").strip() == "Log 10+ Years"
+    _mark_stale(page)
+    page.click("#btn-log-bucket")
+    _settled(page, posts, 1)
+    assert posts[-1] == {"date_bucket": "over_10_years"}
+
+    page.click('.btn-watch-bucket[data-bucket="over_10_years"]')
+    page.click('#who-watched-row .person-toggle[data-person-id="3"]')     # Midge back on
+    _mark_stale(page)
+    page.click("#btn-log-bucket")
+    _settled(page, posts, 2)
+    assert posts[-1] == {"date_bucket": "over_10_years", "attendees": [1, 2, 3]}
+
+    # choosing 10+ then another bucket restores everyone; tapping the chosen bucket again unchooses it
+    page.click('.btn-watch-bucket[data-bucket="over_10_years"]')
+    page.click('.btn-watch-bucket[data-bucket="5_10_years"]')
+    assert pressed() == ["true"] * 5
+    page.click('.btn-watch-bucket[data-bucket="5_10_years"]')
+    assert page.locator("#btn-log-bucket").is_hidden()
+
+    _mark_stale(page)
+    page.click("#btn-watched-today")
+    _settled(page, posts, 3)
+    assert set(posts[-1]) == {"watched_date"}
+    assert errors == []
+
+
+def test_buckets_still_log_on_one_tap_without_people(server, browser):
+    page, posts, puts, errors = _open(browser, server, [])
+    assert page.locator("#who-watched-row").count() == 0 and page.locator("#btn-log-bucket").count() == 0
+    page.click('.btn-watch-bucket[data-bucket="over_10_years"]')
+    for _ in range(250):
+        if posts:
+            break
+        page.wait_for_timeout(20)
+    assert posts == [{"date_bucket": "over_10_years"}]
     assert errors == []

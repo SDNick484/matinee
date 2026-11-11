@@ -1124,3 +1124,53 @@ def test_assumed_adults_attendance_db_matches_rest(test_env, monkeypatch):
         assert m["seen_by"] == ["Nick", "Lauren"] and m["not_seen_by"] == ["Midge", "Alice", "Paige"]
     assert [(w["id"], w["attendance"], w["attendees"]) for w in direct["watches"]] == \
            [(w["id"], w["attendance"], w["attendees"]) for w in rest["watches"]]
+
+
+# ------------------------------------------------------------------ ruling R21: "10+ Years" defaults to the adults
+
+
+def _princess_bride():
+    from conftest import seed_title
+    return seed_title(db(), 2493)
+
+
+@pytest.mark.parametrize("mode", ["rest", "db"])
+def test_log_watch_ten_plus_years_defaults_to_the_adults(test_env, monkeypatch, mode):
+    """Logging The Princess Bride as "10+ years ago" with no attendees records Nick and Lauren in both modes, and
+    get_movie then says Paige has not seen it. With Midge named, the adults and Midge are recorded as sent."""
+    people, *_ = _seed_family(test_env)
+    pb = _princess_bride()
+    rest = _admin_rest_client(monkeypatch)
+    client = rest if mode == "rest" else mcp_server.MatineeClient(api_url="http://fake-host", api_key="k",
+                                                                  db_path=str(test_env))
+    client._api_request = rest._api_request   # DB mode reads the file but writes through the API
+    res = client.log_watch(pb, date_bucket="over_10_years")
+    assert res["watch"]["date_bucket"] == "over_10_years"
+    assert res["watch"]["attendees"] == [people["Nick"], people["Lauren"]]
+    movie = client.get_movie(pb)
+    assert movie["seen_by"] == ["Nick", "Lauren"] and "Paige" in movie["not_seen_by"]
+
+    res = client.log_watch(pb, date_bucket="over_10_years", attendees=["Nick", "Lauren", "Midge"])
+    assert res["watch"]["attendees"] == [people["Nick"], people["Lauren"], people["Midge"]]
+
+
+def test_log_watch_sends_date_bucket_only_when_given(monkeypatch):
+    client = mcp_server.MatineeClient(api_url="http://fake-host", api_key="k", db_path="")
+    sent = []
+    monkeypatch.setattr(client, "_api_request", lambda m, p, d=None: sent.append(d) or {"ok": True})
+    client.log_watch(42, watched_date="2026-11-10")
+    assert "date_bucket" not in sent[-1]
+    client.log_watch(42, date_bucket="over_10_years")
+    assert sent[-1] == {"watched_date": None, "date_bucket": "over_10_years"}
+    monkeypatch.setattr(mcp_server._default_client, "_api_request", lambda m, p, d=None: sent.append(d) or {"ok": True})
+    mcp_server.log_watch(title_id=42, date_bucket="over_10_years")
+    assert sent[-1]["date_bucket"] == "over_10_years"
+
+
+def test_log_watch_schema_offers_the_buckets():
+    t = _tool("log_watch")
+    schema = (getattr(t, "inputSchema", None) or t.input_schema)["properties"]["date_bucket"]
+    import json
+    text = json.dumps(schema)
+    for bucket in ("past_year", "1_2_years", "2_5_years", "5_10_years", "over_10_years", "unknown"):
+        assert bucket in text
