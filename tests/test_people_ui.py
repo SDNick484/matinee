@@ -723,3 +723,29 @@ def test_buckets_still_log_on_one_tap_without_people(server, browser):
         page.wait_for_timeout(20)
     assert posts == [{"date_bucket": "over_10_years"}]
     assert errors == []
+
+
+@pytest.mark.parametrize("hash_,keeps", [("#/add", "#tmdb-search-input"), ("#/stats", ".stats-view"),
+                                         ("#/about", ".about-view")])
+def test_people_modal_close_leaves_views_without_people_alone(server, browser, hash_, keeps):
+    """Review F3: closing the People modal after a change re-ran handleRoute on every route, which reset the Add
+    form (a half-typed search, the scanner) and redrew Stats. Only the grid and the title view show people."""
+    people = []
+    page, title_gets, errors = _open_title_with_people_api(browser, server, people)
+    page.evaluate(f"location.hash = '{hash_}'")
+    page.wait_for_selector(keeps)
+    if hash_ == "#/add":
+        page.fill("#tmdb-search-input", "paddington")
+    page.evaluate(f"document.querySelector('{keeps}').dataset.kept = '1'")
+    page.click("#btn-header-people")
+    page.wait_for_selector("#add-person-form")
+    page.fill("#person-add-name", "Midge")
+    page.select_option("#person-add-kind", "kid")
+    page.click("#add-person-form button[type=submit]")
+    page.wait_for_selector('.people-row .people-name[aria-label="Name for Midge"]')
+    page.locator("#modal-root .modal-actions .btn").click()
+    page.wait_for_timeout(300)
+    assert page.locator(f"{keeps}[data-kept]").count() == 1, "the view was re-rendered"
+    if hash_ == "#/add":
+        assert page.input_value("#tmdb-search-input") == "paddington"
+    assert errors == []
