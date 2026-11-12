@@ -476,3 +476,62 @@ def test_grid_unseen_by_and_attendance_are_editor_only():
     assert GRID_JS.index("const showWho") < GRID_JS.index('data-facet="unseen_by"') < GRID_JS.index('data-facet="attendance"')
     for key in ("unseen_by", "attendance"):
         assert f'q.delete("{key}")' in GRID_JS, key
+
+
+# --- Copy details (schema v10): the "More" disclosure, money helpers, editor-only line -------------------------------
+
+def test_copy_forms_share_one_closed_by_default_more_disclosure():
+    assert JS.count("moreFieldsHTML(") == 3   # the definition, the add form, the edit form
+    assert 'moreFieldsHTML("add-", { kind: initialKind })' in JS   # nothing is filled in on a new copy: closed
+    assert 'moreFieldsHTML("edit-", copy)' in JS
+    assert '<details class="copy-more"' in JS and "${filled ? \" open\" : \"\"}" in JS
+
+
+def test_more_fields_sit_in_the_modal_without_a_sideways_scroll():
+    assert "minmax(0, 1fr) minmax(0, 1fr)" in _rule(".copy-more-row")   # two columns that can shrink on 360 px
+    assert "min-height: 44px" in _rule(".copy-more > summary")           # a tap target
+    assert re.search(r"(?m)^\.copy-more-row \.form-group,\n\.copy-more-body \.form-input \{\s*min-width: 0;", CSS)
+
+
+def test_edit_form_never_sends_editor_fields_it_could_not_show():
+    assert 'const hasDetails = "code_status" in copy;' in JS
+    assert "delete more.price_cents;" in JS
+
+
+def test_a_digital_copy_always_sends_code_status_none():
+    assert 'code_status: formState.kind === "physical" ? formState.code_status : "none"' in JS
+
+
+def test_price_is_converted_in_the_browser_and_sent_as_cents():
+    assert "dollarsToCents(priceInput?.value)" in JS and "price_cents: price" in JS
+    core = (STATIC / "js" / "core.js").read_text(encoding="utf-8")
+    assert re.search(r"(?s)export \{[^}]*\bdollarsToCents\b[^}]*\}", core)
+    assert re.search(r"(?s)export \{[^}]*\bcentsToDollars\b[^}]*\}", core)
+    body = core.split("function dollarsToCents")[1].split("function centsToDollars")[0]
+    assert "parseFloat" not in body and "toFixed" not in body   # 24.99 is read as text: whole dollars and cents
+
+
+def test_only_the_admin_title_view_renders_the_editor_line():
+    detail = (STATIC / "js" / "detail.js").read_text(encoding="utf-8")
+    assert detail.count("copyExtraHTML(") == 2   # the definition and one call
+    assert '${isAdmin ? copyExtraHTML(cp) : ""}' in detail
+    assert '<span class="copy-edition">' in detail   # the edition is public: no isAdmin around it
+    assert "isAdmin ? `<span class=\"copy-edition\"" not in detail
+
+
+def test_stats_codes_line_is_editor_only_and_plain_text_at_zero():
+    stats = (STATIC / "js" / "stats.js").read_text(encoding="utf-8")
+    assert "${isAdmin ? unredeemedCodesLine(data.unredeemed_codes) : \"\"}" in stats
+    assert 'typeof n !== "number"' in stats   # an older server sends no count: no line
+    assert "n > 0 ?" in stats and 'href="#/?code=unredeemed"' in stats
+    assert "price" not in stats.lower().split("function unredeemedcodesline")[1].split("</p>")[0]   # no spending totals
+
+
+def test_grid_code_filter_is_editor_only_like_the_people_filters():
+    assert 'const EDITOR_FILTERS = ["unseen_by", "attendance", "code"];' in GRID_JS
+    assert 'const codeActive = isAdmin && state.grid.code === "unredeemed";' in GRID_JS
+    assert "if (!isAdmin && hasEditorFilter(state.route.query)) dropEditorFilters();" in GRID_JS   # a visitor loses it
+    assert "isAdmin && !retried && err.status === 400 && hasEditorFilter(state.route.query)" in GRID_JS   # and an editor's bad value
+    assert 'q.delete("code");' in GRID_JS and GRID_JS.count('q.delete("code");') == 2   # the chip and Reset
+    router = (STATIC / "js" / "router.js").read_text(encoding="utf-8")
+    assert "hashWithoutEditorFilters(location.hash)" in router   # "Public View" drops it from the link

@@ -18,6 +18,11 @@ Matinee separates the *movie* from the *copies owned*:
   - `kind`: `physical` or `digital`.
   - `format`: `4K UHD`, `Blu-ray`, `3D Blu-ray`, `DVD`, `VHS` (for physical) or `Digital 4K`, `Digital HD`, `Digital SD` (for digital).
   - `service`: `Movies Anywhere`, `Apple TV`, `Fandango at Home`, `Amazon`, `Google Play`, `Plex/Jellyfin`, `Other` (digital only; physical copies have no service).
+  - `edition`: optional free text up to 60 characters (`Steelbook`, `Criterion Collection`, `Extended Edition`), shown next to the format.
+  - `code_status`: for a disc with a digital code, `none` (the default), `unredeemed`, `redeemed` or `expired`. Digital copies are always `none`. Editor-only.
+  - `purchased_on` and `price_cents`: an optional purchase date and price, entered and shown as dollars (`24.99` is stored as `2499`). Editor-only.
+
+  On the Add and Edit copy forms these four sit under a **More** disclosure, closed on a new copy so the form stays one screen on a phone. Editors also see **Unredeemed digital codes: N** on the Stats page, linking to the grid filtered with `#/?code=unredeemed`.
 
 Titles without owned copies are retained in the database but do not appear in the public poster grid.
 
@@ -139,7 +144,7 @@ not set, because the UI still uses inline event handlers and `style` attributes.
 
 **What the public sees.** With `PUBLIC_VIEW=1`, `/` and `/api` show titles, copies, shelves, the family's ratings,
 and when each title was watched and how often. Watch notes ("girls loved it") are editor-only: they appear at
-`/admin` and `/admin/api`, never on `/api`. Copies' `added_by` is editor-only as well. `PUBLIC_VIEW=0` hides
+`/admin` and `/admin/api`, never on `/api`. A copy's `edition` is public; its `added_by`, `code_status`, `purchased_on` and `price_cents` are editor-only as well, and so is the `code=unredeemed` grid filter (a public request that names it gets a 400). `PUBLIC_VIEW=0` hides
 everything behind `/admin`.
 
 ---
@@ -173,7 +178,7 @@ Take the collection out as a spreadsheet: one row per owned copy, so *The Dark K
 - **In the app**: open `https://movies.example.com/admin#/stats` and tap **Export CSV**. It downloads `matinee-YYYY-MM-DD.csv`.
 - **From a script**: `GET /admin/api/export.csv`. It needs an editor session, `MATINEE_API_KEY` or `MATINEE_READ_KEY` (a read-only key may use it, since it only reads); anonymous requests get 401.
 - **From cron**: `python3 /opt/matinee/ops/export_csv.py -o /var/backups/matinee/` writes the same dated file there (atomically, mode 0600, reading the database read-only); with no `-o` it prints to stdout. The installer does not schedule it. For a weekly copy, add this line with `crontab -e` as root: `0 3 * * 0 python3 /opt/matinee/ops/export_csv.py -o /var/backups/matinee/`.
-- **Columns**: `title, year, tmdb_id, imdb_id, certification, runtime, kind, format, service, location_path, user_rating, watch_count, last_watched, added_on`. `certification` is the editor override when there is one; `added_on` is the date that copy was added; the rating and watch columns repeat on each of a title's rows.
+- **Columns**: `title, year, tmdb_id, imdb_id, certification, runtime, kind, format, service, location_path, user_rating, watch_count, last_watched, added_on, edition, code_status, purchased_on, price`. `certification` is the editor override when there is one; `added_on` is the date that copy was added; the rating and watch columns repeat on each of a title's rows. The last four describe the copy: `code_status` is `none`, `unredeemed`, `redeemed` or `expired`, and `price` is dollars with two decimals (`24.99`).
 - **File format**: UTF-8 with a byte-order mark (Excel then shows accents such as "Amélie" correctly), RFC 4180 quoting and CRLF line endings. A text cell that starts with `=`, `+`, `-` or `@` gets a leading `'` so a spreadsheet never runs it as a formula.
 - **Not exported**: watch notes (editor-only data) and titles with no copies.
 

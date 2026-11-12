@@ -52,7 +52,12 @@ CREATE TABLE IF NOT EXISTS copies (
   service TEXT,
   location_id INTEGER REFERENCES locations(id) ON DELETE SET NULL,
   added_by TEXT,
-  created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  -- v10 copy details, last so a migrated table has the same columns in the same order (COPY_DETAIL_COLUMNS)
+  edition TEXT CHECK (edition IS NULL OR length(edition) <= 60),
+  code_status TEXT NOT NULL DEFAULT 'none' CHECK (code_status IN ('none', 'unredeemed', 'redeemed', 'expired')),
+  purchased_on TEXT,
+  price_cents INTEGER CHECK (price_cents IS NULL OR price_cents >= 0)
 );
 CREATE INDEX IF NOT EXISTS copies_title ON copies(title_id);
 CREATE TABLE IF NOT EXISTS upc_cache (
@@ -96,7 +101,18 @@ CREATE TABLE IF NOT EXISTS omdb_ratings (
 );
 CREATE INDEX IF NOT EXISTS omdb_ratings_fetched ON omdb_ratings(fetched_at);
 """
-SCHEMA_VERSION = "9"
+SCHEMA_VERSION = "10"
+
+# v10 copy details. The limits mirror the CHECKs on `copies`; the app validates first and answers 400 with a sentence.
+CODE_STATUSES = ("none", "unredeemed", "redeemed", "expired")   # a physical copy's digital code; digital copies stay "none"
+EDITION_MAX = 60                                                # characters
+PRICE_MAX_CENTS = 10_000_000                                    # $100,000.00; stops a huge integer reaching SQLite
+COPY_DETAIL_COLUMNS = (
+    ("edition", "TEXT CHECK (edition IS NULL OR length(edition) <= 60)"),
+    ("code_status", "TEXT NOT NULL DEFAULT 'none' CHECK (code_status IN ('none', 'unredeemed', 'redeemed', 'expired'))"),
+    ("purchased_on", "TEXT"),
+    ("price_cents", "INTEGER CHECK (price_cents IS NULL OR price_cents >= 0)"),
+)
 
 # Checked in the app (not the schema) so a new format or service needs no table rebuild.
 FORMATS = {"physical": ["4K UHD", "Blu-ray", "3D Blu-ray", "DVD", "VHS"],
@@ -281,6 +297,12 @@ def migrate(con):
     ) WITHOUT ROWID;
     CREATE INDEX IF NOT EXISTS watch_people_person ON watch_people(person_id);
     """)
+
+    # v10: copy details. After the copies rebuild above, so every earlier version ends with the same table.
+    copy_cols = {r[1] for r in con.execute("PRAGMA table_info(copies)")}
+    for col, ddl in COPY_DETAIL_COLUMNS:
+        if copy_cols and col not in copy_cols:
+            con.execute(f"ALTER TABLE copies ADD COLUMN {col} {ddl}")
 
 
 def init_db():

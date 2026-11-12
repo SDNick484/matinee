@@ -225,7 +225,9 @@ def test_public_routes_never_touch_attendance_outside_a_private_branch():
 # lands, with people, recorded and assumed attendance and a note in the database.
 
 NAMES = ("Nick", "Lauren", "Midge", "Alice", "Paige")
-PRIVATE_KEYS = {"notes", "attendance", "attendees", "seen_by", "not_seen_by", "people", "audience"}
+PRIVATE_KEYS = {"notes", "attendance", "attendees", "seen_by", "not_seen_by", "people", "audience",
+                "code_status", "purchased_on", "price_cents", "unredeemed_codes"}
+COPY_SECRETS = ("unredeemed", "2026-10-31", "2499")   # the Dark Knight Steelbook's code status, purchase date, price
 RECOMMEND_MODES = ("forgotten_gems", "never_watched", "quick_picks", "genre_mood", "next_in_franchise",
                    "start_franchise")
 
@@ -240,6 +242,8 @@ def family_with_history(client):
     con.execute("UPDATE people SET active = 0 WHERE id = ?", (people["Paige"],))
     ids = [seed_title(con, 155, rating=9.5), seed_title(con, 671, rating=8.5), seed_title(con, 672),
            seed_title(con, 862, digital=("Digital HD",))]
+    con.execute("INSERT INTO copies (title_id, kind, format, edition, code_status, purchased_on, price_cents) "
+                "VALUES (?, 'physical', '4K UHD', 'Steelbook', 'unredeemed', '2026-10-31', 2499)", (ids[0],))
     rows = [(ids[0], "2026-11-07", None), (ids[1], "2015-06-01", None), (ids[1], None, "over_10_years"),
             (ids[3], "2024-12-25", None)]
     for tid, day, bucket in rows:
@@ -280,10 +284,19 @@ def test_no_public_route_carries_notes_people_or_attendance(client, family_with_
         assert res.status_code == 200, (url, res.status_code)
         text = res.get_data(as_text=True)
         assert NOTE not in text, url
+        for secret in COPY_SECRETS:
+            assert secret not in text, (url, secret)
         for name in NAMES:
             assert name not in text, (url, name)
         body = res.get_json()
         assert not PRIVATE_KEYS & set(_walk_keys(body)), (url, PRIVATE_KEYS & set(_walk_keys(body)))
+
+
+def test_the_public_detail_still_shows_the_edition(client, family_with_history):
+    """The sweep above is not vacuous: the Steelbook is on the page, as an edition and nothing more."""
+    d = client.get(f"/api/titles/{family_with_history[0]}").get_json()
+    [steel] = [c for c in d["copies"] if c["edition"]]
+    assert steel["edition"] == "Steelbook" and steel["format"] == "4K UHD"
 
 
 @pytest.mark.parametrize("param", ["audience=kids", "unseen_by=kids", "attendance=unknown", "audience=1",

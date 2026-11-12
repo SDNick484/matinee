@@ -15,7 +15,7 @@ from images import image_name, image_url, poster_file_of
 
 
 # ======================================================================= serializers
-PRIVATE_COPY = ("added_by",)
+PRIVATE_COPY = ("added_by", "code_status", "purchased_on", "price_cents")
 PRIVATE_WATCH = ("notes", "attendance", "attendees")  # family diary text and who was there: editors only; dates and counts stay public
 TITLE_COLS = ("tmdb_id", "imdb_id", "title", "sort_title", "search_text", "year", "release_date", "runtime",
               "overview", "certification", "collection_tmdb_id", "collection_name", "tmdb_vote", "tmdb_votes",
@@ -273,12 +273,31 @@ def people_params_refused(private):
     return None
 
 
+# The grid filter for copies whose digital code is still unredeemed. Editors only, like the code status itself: a
+# public filter would reveal which titles have a code left. Only "unredeemed" is accepted.
+CODE_PARAM_PUBLIC_ERROR = "Sign in to filter by digital code."
+CODE_PARAM_VALUE_ERROR = "code must be unredeemed."
+
+
+def code_param_refused(private):
+    """The 400 for a public request that names `code` (even empty), or an editor's `code` other than unredeemed."""
+    if "code" not in request.args:
+        return None
+    if not private:
+        return make_err(400, CODE_PARAM_PUBLIC_ERROR)
+    if request.args["code"].strip().lower() != "unredeemed":
+        return make_err(400, CODE_PARAM_VALUE_ERROR)
+    return None
+
+
 def list_titles(private):
-    refused = people_params_refused(private)
+    refused = people_params_refused(private) or code_param_refused(private)
     if refused:
         return refused
     a = request.args
     where, args = ["EXISTS (SELECT 1 FROM copies c WHERE c.title_id=t.id)"], []
+    if "code" in a:   # code_param_refused() let only an editor's "unredeemed" through
+        where.append("EXISTS (SELECT 1 FROM copies c WHERE c.title_id=t.id AND c.code_status='unredeemed')")
     cte = ""
     for w in words(a.get("q")):
         where.append("t.search_text LIKE ? ESCAPE '\\'")
@@ -514,7 +533,12 @@ def collection_stats(private):
         "high_rated_count": high_rated,
     }
 
+    extra = {}
+    if private:   # editor-only: how many physical copies still have a digital code to redeem
+        extra["unredeemed_codes"] = con.execute(
+            "SELECT count(*) FROM copies WHERE code_status='unredeemed'").fetchone()[0]
     return jsonify(
+        **extra,
         overview={
             "titles_count": titles_count,
             "physical_count": physical_count,

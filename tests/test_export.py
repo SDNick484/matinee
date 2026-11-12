@@ -20,6 +20,8 @@ NOTE = "girls loved it"
 BOM = b"\xef\xbb\xbf"
 HEADER = ["title", "year", "tmdb_id", "imdb_id", "certification", "runtime", "kind", "format", "service",
           "location_path", "user_rating", "watch_count", "last_watched", "added_on"]
+DETAILS = ["edition", "code_status", "purchased_on", "price"]   # appended in schema v10; nothing before them moved
+
 
 
 @pytest.fixture
@@ -68,12 +70,12 @@ def test_dark_knight_gives_one_row_per_copy(client, dark_knight):
     res = client.get("/admin/api/export.csv", headers=bearer(API_KEY))
     assert res.status_code == 200
     rows = rows_of(res)
-    assert rows[0] == HEADER
+    assert rows[0] == HEADER + DETAILS
     assert rows[1:] == [
         ["The Dark Knight", "2008", "155", "tt0468569", "PG-13", "152", "physical", "4K UHD", "",
-         "Family Room › Media Cabinet › Shelf 1", "9.5", "1", "2026-11-07", "2026-11-02"],
+         "Family Room › Media Cabinet › Shelf 1", "9.5", "1", "2026-11-07", "2026-11-02", "", "none", "", ""],
         ["The Dark Knight", "2008", "155", "tt0468569", "PG-13", "152", "digital", "Digital HD",
-         "Movies Anywhere", "", "9.5", "1", "2026-11-07", "2026-11-03"],
+         "Movies Anywhere", "", "9.5", "1", "2026-11-07", "2026-11-03", "", "none", "", ""],
     ]
 
 
@@ -93,6 +95,42 @@ def test_amelie_accent_round_trips_with_bom(client):
 def test_watch_notes_are_not_exported(client, dark_knight):
     res = client.get("/admin/api/export.csv", headers=bearer(API_KEY))
     assert NOTE.encode() not in res.data
+
+
+# ------------------------------------------------------------------------------------- copy details
+
+def test_dark_knight_steelbook_row_ends_with_its_details(client, dark_knight):
+    db().execute("UPDATE copies SET edition='Steelbook', code_status='unredeemed', purchased_on='2026-10-31', "
+                 "price_cents=2499 WHERE title_id=? AND kind='physical'", (dark_knight,))
+    db().commit()
+    rows = rows_of(client.get("/admin/api/export.csv", headers=bearer(API_KEY)))
+    assert rows[1][-4:] == ["Steelbook", "unredeemed", "2026-10-31", "24.99"]
+    assert rows[1][:14] == ["The Dark Knight", "2008", "155", "tt0468569", "PG-13", "152", "physical", "4K UHD", "",
+                            "Family Room › Media Cabinet › Shelf 1", "9.5", "1", "2026-11-07", "2026-11-02"]
+    assert rows[2][-4:] == ["", "none", "", ""]   # the digital copy: no edition, no code, no price
+
+
+@pytest.mark.parametrize("cents, text", [(0, "0.00"), (5, "0.05"), (100, "1.00"), (1499, "14.99"),
+                                         (2499, "24.99"), (10_000_000, "100000.00")])
+def test_price_is_dollars_with_two_decimals(client, cents, text):
+    con = db()
+    seed_title(con, 155)
+    con.execute("UPDATE copies SET price_cents=?", (cents,))
+    con.commit()
+    assert rows_of(client.get("/admin/api/export.csv", headers=bearer(API_KEY)))[1][-1] == text
+
+
+def test_an_edition_that_looks_like_a_formula_is_quoted(client):
+    con = db()
+    seed_title(con, 155)
+    con.execute("UPDATE copies SET edition='=HYPERLINK(\"http://x\",\"y\")'")
+    con.commit()
+    assert rows_of(client.get("/admin/api/export.csv", headers=bearer(API_KEY)))[1][-4] == \
+        "'=" + 'HYPERLINK("http://x","y")'
+
+
+def test_old_columns_keep_their_positions():
+    assert matinee.EXPORT_COLUMNS[:14] == tuple(HEADER) and matinee.EXPORT_COLUMNS[14:] == tuple(DETAILS)
 
 
 # ------------------------------------------------------------------------------------- auth
@@ -197,14 +235,14 @@ def test_negative_number_cells_stay_numbers(client):
 def test_empty_collection_is_header_only(client):
     res = client.get("/admin/api/export.csv", headers=bearer(API_KEY))
     assert res.status_code == 200
-    assert rows_of(res) == [HEADER]
+    assert rows_of(res) == [HEADER + DETAILS]
 
 
 def test_title_with_no_copies_is_absent(client, dark_knight):
     con = db()
     con.execute("DELETE FROM copies WHERE title_id=?", (dark_knight,))
     con.commit()
-    assert rows_of(client.get("/admin/api/export.csv", headers=bearer(API_KEY))) == [HEADER]
+    assert rows_of(client.get("/admin/api/export.csv", headers=bearer(API_KEY))) == [HEADER + DETAILS]
 
 
 def test_certification_override_wins(client):

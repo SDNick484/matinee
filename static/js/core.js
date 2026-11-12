@@ -140,6 +140,28 @@
     return await res.json();
   }
 
+  // Money is stored as whole cents and typed as dollars. "24.99", "$24.99" and "1,499" give 2499 and 149900; blank
+  // gives null (no price); anything else gives undefined (the form says so instead of guessing). Parsed from the
+  // text, not through a float, and clamped one cent past the server's $100,000.00 cap so an absurd amount still
+  // reaches the server and gets its own message.
+  const PRICE_CLAMP_CENTS = 10_000_001;
+  function dollarsToCents(text) {
+    const t = String(text ?? "").trim();
+    if (!t) return null;
+    const m = /^\$?\s*(\d{1,3}(?:,\d{3})+|\d*)(?:\.(\d{1,2}))?$/.exec(t);
+    if (!m) return undefined;
+    const whole = m[1].replace(/,/g, "");
+    const frac = m[2] || "";
+    if (!whole && !frac) return undefined; // "$" or "."
+    return Math.min(Number(whole || "0") * 100 + Number((frac + "0").slice(0, 2)), PRICE_CLAMP_CENTS);
+  }
+
+  // 2499 -> "$24.99", 149900 -> "$1,499.00"; null or a non-number -> "".
+  function centsToDollars(cents) {
+    if (typeof cents !== "number" || !Number.isFinite(cents)) return "";
+    return `$${Math.floor(cents / 100).toLocaleString("en-US")}.${String(cents % 100).padStart(2, "0")}`;
+  }
+
   function formatRuntime(minutes) {
     if (!minutes || minutes <= 0) return "";
     const h = Math.floor(minutes / 60);
@@ -162,6 +184,6 @@
   }
 
 export {
-  api, certSlotHtml, esc, formatRuntime, FORMATS, getChipClass, isAdmin, SERVICES, state, TMDB_IMG_THUMB,
+  api, centsToDollars, certSlotHtml, dollarsToCents, esc, formatRuntime, FORMATS, getChipClass, isAdmin, SERVICES, state, TMDB_IMG_THUMB,
   toast
 };

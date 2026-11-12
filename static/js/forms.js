@@ -1,9 +1,96 @@
 // Matinee — copy form modal, custom covers, closeModal and global key/click handlers.
-import { api, esc, FORMATS, SERVICES, state, toast } from "./core.js";
+import { api, centsToDollars, dollarsToCents, esc, FORMATS, SERVICES, state, toast } from "./core.js";
 import { icon } from "./icons.js";
 import { navigate } from "./router.js";
 import { renderDetail } from "./detail.js";
 import { resumeBarcodeScanner } from "./add.js";
+
+  // ================================================================= "More": edition, digital code, date, price
+  // One disclosure shared by the add and edit forms (ids start with `p`: "add-" or "edit-"). Closed on a new copy,
+  // open on an existing one that already has something in it. The code applies to discs only; edition, date and
+  // price apply to every copy.
+  const CODE_CHOICES = [["none", "None"], ["unredeemed", "Unredeemed"], ["redeemed", "Redeemed"], ["expired", "Expired"]];
+
+  function moreFieldsHTML(p, v) {
+    const filled = v.edition || v.purchased_on || v.price_cents != null || (v.code_status && v.code_status !== "none");
+    const price = typeof v.price_cents === "number" ? centsToDollars(v.price_cents).slice(1).replace(/,/g, "") : "";
+    return `
+      <details class="copy-more" id="${p}more"${filled ? " open" : ""}>
+        <summary>More <span class="copy-more-hint">edition, code, date, price</span></summary>
+        <div class="copy-more-body">
+          <div class="form-group">
+            <label class="form-label" for="${p}edition">Edition</label>
+            <input type="text" id="${p}edition" class="form-input" maxlength="60" autocomplete="off"
+                   placeholder="Steelbook, Criterion Collection…" value="${esc(v.edition || "")}">
+          </div>
+          <div class="form-group" id="${p}code-group" style="${v.kind === "physical" ? "" : "display:none"}">
+            <label class="form-label">Digital code</label>
+            <div class="chip-select-grid" id="${p}code-grid"></div>
+          </div>
+          <div class="copy-more-row">
+            <div class="form-group">
+              <label class="form-label" for="${p}purchased">Purchased</label>
+              <input type="date" id="${p}purchased" class="form-input" value="${esc(v.purchased_on || "")}">
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="${p}price">Price</label>
+              <input type="text" id="${p}price" class="form-input" inputmode="decimal" autocomplete="off"
+                     placeholder="24.99" value="${esc(price)}">
+            </div>
+          </div>
+        </div>
+      </details>`;
+  }
+
+  function renderCodeGrid(p, formState) {
+    const grid = document.getElementById(`${p}code-grid`);
+    if (!grid) return;
+    grid.innerHTML = CODE_CHOICES.map(
+      ([code, label]) =>
+        `<button type="button" class="select-chip ${code === formState.code_status ? "active" : ""}" data-code="${code}">${label}</button>`
+    ).join("");
+    grid.querySelectorAll(".select-chip").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        formState.code_status = btn.dataset.code;
+        renderCodeGrid(p, formState);
+      });
+    });
+  }
+
+  // The code chips follow the Physical/Digital toggle.
+  function showCodeGroup(p, kind) {
+    const group = document.getElementById(`${p}code-group`);
+    if (group) group.style.display = kind === "physical" ? "flex" : "none";
+  }
+
+  // The four values for the request body, or null (after saying why) when the price can't be read. A digital copy
+  // always sends code_status "none": the server refuses anything else for it.
+  function readMoreFields(p, formState) {
+    const priceInput = document.getElementById(`${p}price`);
+    const price = dollarsToCents(priceInput?.value);
+    if (price === undefined) {
+      const more = document.getElementById(`${p}more`);
+      if (more) more.open = true;
+      priceInput?.focus();
+      toast("Price must look like 24.99.");
+      return null;
+    }
+    return {
+      edition: (document.getElementById(`${p}edition`)?.value || "").trim() || null,
+      code_status: formState.kind === "physical" ? formState.code_status : "none",
+      purchased_on: document.getElementById(`${p}purchased`)?.value || null,
+      price_cents: price,
+    };
+  }
+
+  function clearMoreFields(p, formState) {
+    for (const id of ["edition", "purchased", "price"]) {
+      const el = document.getElementById(`${p}${id}`);
+      if (el) el.value = "";
+    }
+    formState.code_status = "none";
+    renderCodeGrid(p, formState);
+  }
 
   // ================================================================= Copy Form Modal (8.2)
   async function openCopyModal(movie, prefill = {}) {
@@ -76,6 +163,8 @@ import { resumeBarcodeScanner } from "./add.js";
               </select>
             </div>
 
+            ${moreFieldsHTML("add-", { kind: initialKind })}
+
             <div class="form-actions">
               <button type="button" class="btn btn-ghost" id="btn-modal-cancel">Cancel</button>
               <button type="submit" class="btn" id="btn-save-copy">Save Copy</button>
@@ -92,6 +181,7 @@ import { resumeBarcodeScanner } from "./add.js";
       kind: initialKind,
       format: initialFormat,
       service: initialService,
+      code_status: "none",
       ownedCopies: [],
     };
 
@@ -178,6 +268,7 @@ import { resumeBarcodeScanner } from "./add.js";
         if (locGroup) {
           locGroup.style.display = formState.kind === "physical" ? "flex" : "none";
         }
+        showCodeGroup("add-", formState.kind);
         updateFormatGrid();
         updateServiceGrid();
         checkDuplicateWarning();
@@ -186,6 +277,7 @@ import { resumeBarcodeScanner } from "./add.js";
 
     updateFormatGrid();
     updateServiceGrid();
+    renderCodeGrid("add-", formState);
 
     // Check what is already owned from TMDB API
     try {
@@ -224,12 +316,15 @@ import { resumeBarcodeScanner } from "./add.js";
     async function submitCopy(andAddAnother = false) {
       const locSelect = document.getElementById("select-copy-location");
       const locVal = locSelect?.value ? parseInt(locSelect.value, 10) : null;
+      const more = readMoreFields("add-", formState);
+      if (!more) return; // an unreadable price: said so, nothing sent
       const payload = {
         tmdb_id: formState.tmdb_id,
         kind: formState.kind,
         format: formState.format,
         service: formState.kind === "digital" ? formState.service : null,
         location_id: formState.kind === "physical" ? locVal : null,
+        ...more,
       };
 
       const saveBtn = document.getElementById("btn-save-copy");
@@ -262,6 +357,7 @@ import { resumeBarcodeScanner } from "./add.js";
           } catch {
             // ignore
           }
+          clearMoreFields("add-", formState); // the next copy has its own edition, code, date and price
           if (saveBtn) saveBtn.disabled = false;
           if (addAnotherBtn) addAnotherBtn.disabled = false;
         } else {
@@ -343,6 +439,8 @@ import { resumeBarcodeScanner } from "./add.js";
               </select>
             </div>
 
+            ${moreFieldsHTML("edit-", copy)}
+
             <div class="form-actions">
               <button type="button" class="btn btn-ghost" id="btn-modal-cancel">Cancel</button>
               <button type="submit" class="btn" id="btn-edit-save">Save Changes</button>
@@ -356,6 +454,7 @@ import { resumeBarcodeScanner } from "./add.js";
       kind: copy.kind,
       format: copy.format,
       service: copy.service || (copy.kind === "digital" ? SERVICES[0] : null),
+      code_status: copy.code_status || "none",
     };
 
     function updateFormatGrid() {
@@ -423,6 +522,7 @@ import { resumeBarcodeScanner } from "./add.js";
         if (locGroup) {
           locGroup.style.display = formState.kind === "physical" ? "flex" : "none";
         }
+        showCodeGroup("edit-", formState.kind);
         updateFormatGrid();
         updateServiceGrid();
       });
@@ -430,6 +530,7 @@ import { resumeBarcodeScanner } from "./add.js";
 
     updateFormatGrid();
     updateServiceGrid();
+    renderCodeGrid("edit-", formState);
 
     document.getElementById("btn-modal-close")?.addEventListener("click", closeModal);
     document.getElementById("btn-modal-cancel")?.addEventListener("click", closeModal);
@@ -441,6 +542,16 @@ import { resumeBarcodeScanner } from "./add.js";
       e.preventDefault();
       const locSelect = document.getElementById("edit-select-copy-location");
       const locVal = locSelect?.value ? parseInt(locSelect.value, 10) : null;
+      const more = readMoreFields("edit-", formState);
+      if (!more) return; // an unreadable price: said so, nothing sent
+      // The code status, date and price are editor-only: a copy that arrived without them (it never does under
+      // /admin) is saved without touching them, so a form that could not show them cannot wipe them.
+      const hasDetails = "code_status" in copy;
+      if (!hasDetails) {
+        delete more.code_status;
+        delete more.purchased_on;
+        delete more.price_cents;
+      }
       try {
         await api(`/admin/api/copies/${copy.id}`, {
           method: "PUT",
@@ -449,6 +560,7 @@ import { resumeBarcodeScanner } from "./add.js";
             format: formState.format,
             service: formState.kind === "digital" ? formState.service : null,
             location_id: formState.kind === "physical" ? locVal : null,
+            ...more,
           },
         });
         toast("Copy updated");

@@ -1,5 +1,5 @@
 // Matinee — title view: copies, ratings, watches, neighbours (7.3).
-import { api, certSlotHtml, esc, formatRuntime, getChipClass, isAdmin, state, toast } from "./core.js";
+import { api, centsToDollars, certSlotHtml, esc, formatRuntime, getChipClass, isAdmin, state, toast } from "./core.js";
 import {
   BUCKET_LABELS, formatCopyLabel, formatLastWatched, formatReadableDate, formatRelativeDate, getChipIcon,
   icon
@@ -11,6 +11,18 @@ import {
 } from "./forms.js";
 
   // ================================================================= 7.3 Detail Page
+  // Editor-only line under a copy: the digital code (discs only, and only while it says something), the purchase date
+  // and the price. The server never sends these three to a visitor, and only the admin title view calls this.
+  const CODE_LABELS = { unredeemed: "Unredeemed code", redeemed: "Redeemed code", expired: "Expired code" };
+
+  function copyExtraHTML(cp) {
+    const parts = [];
+    if (cp.kind === "physical" && CODE_LABELS[cp.code_status]) parts.push(CODE_LABELS[cp.code_status]);
+    if (cp.purchased_on) parts.push(`Bought ${formatReadableDate(cp.purchased_on)}`);
+    if (typeof cp.price_cents === "number") parts.push(centsToDollars(cp.price_cents));
+    return parts.length ? `<span class="copy-meta copy-extra">${esc(parts.join(" · "))}</span>` : "";
+  }
+
   async function renderDetail(container, titleId) {
     const seq = state.routeSeq;   // see core.js: stop after an await once the user has navigated away
     window.scrollTo({ top: 0, behavior: "instant" });
@@ -335,6 +347,7 @@ import {
                     cp.kind === "physical" && cp.location_path
                       ? `<span class="copy-location">${icon("pin")}${esc(cp.location_path)}</span>`
                       : "";
+                  const edition = cp.edition ? `<span class="copy-edition">${esc(cp.edition)}</span>` : "";
                   const addedInfo = cp.added_by
                     ? `<span class="copy-meta">Added by ${esc(cp.added_by)}</span>`
                     : "";
@@ -343,7 +356,9 @@ import {
                     <div class="copy-row" data-copy-id="${cp.id}">
                       <div class="copy-info">
                         <span class="chip ${chipCls}">${getChipIcon(cp.format)} ${esc(label)}</span>
+                        ${edition}
                         ${locBadge}
+                        ${isAdmin ? copyExtraHTML(cp) : ""}
                         ${addedInfo}
                       </div>
                       ${

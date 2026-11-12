@@ -45,6 +45,11 @@ def _like_escape(s: str) -> str:
     return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
+def _format_edition(fmt, edition) -> str:
+    """'4K UHD' + 'Steelbook' -> '4K UHD Steelbook'; the format alone when the copy has no edition."""
+    return f"{fmt} {edition}" if edition else f"{fmt}"
+
+
 def _location_paths(con) -> Dict[int, str]:
     """Map location id -> 'Parent › Child' breadcrumb (cycle-safe)."""
     by_id = {r["id"]: dict(r) for r in con.execute("SELECT id, parent_id, name FROM locations").fetchall()}
@@ -197,6 +202,15 @@ class MatineeClient:
             return con
         except Exception:
             return None
+
+    @staticmethod
+    def _edition_col(con) -> str:
+        """`edition` for the copies SELECT, or `NULL AS edition` on a database older than schema v10: this server
+        opens the file read-only and may start before the app has migrated it. Only the public edition is read here;
+        the editor-only code status, purchase date and price stay out of direct-SQLite mode (Ask runs on it and
+        sends the results to Anthropic's API) and come only through the keyed /admin/api path."""
+        has = any(r[1] == "edition" for r in con.execute("PRAGMA table_info(copies)"))
+        return "edition" if has else "NULL AS edition"
 
     @property
     def _read_prefix(self) -> str:
@@ -425,7 +439,8 @@ class MatineeClient:
                 if not t:
                     raise MatineeError(f"Movie with id {title_id} not found.")
                 copies = con.execute(
-                    "SELECT id, kind, format, service, location_id, created_at FROM copies WHERE title_id=? ORDER BY created_at, id",
+                    f"SELECT id, kind, format, service, location_id, created_at, {self._edition_col(con)} "
+                    "FROM copies WHERE title_id=? ORDER BY created_at, id",
                     (title_id,),
                 ).fetchall()
                 rating_row = con.execute("SELECT rating FROM user_ratings WHERE title_id=?", (title_id,)).fetchone()
@@ -527,7 +542,8 @@ class MatineeClient:
                 paths = _location_paths(con)
 
                 copies_rows = con.execute(
-                    "SELECT id, kind, format, service, location_id FROM copies WHERE title_id=? ORDER BY created_at, id",
+                    f"SELECT id, kind, format, service, location_id, {self._edition_col(con)} "
+                    "FROM copies WHERE title_id=? ORDER BY created_at, id",
                     (title_id,),
                 ).fetchall()
 
@@ -539,17 +555,19 @@ class MatineeClient:
                         "id": c["id"],
                         "kind": c["kind"],
                         "format": c["format"],
+                        "edition": c["edition"],
                         "service": c["service"],
                         "location_id": c["location_id"],
                         "location_path": loc_path,
                     }
                     copies_list.append(cp_dict)
+                    label = _format_edition(c["format"], c["edition"])
                     if c["kind"] == "physical":
                         loc_str = loc_path or "Unassigned shelf"
-                        summary_parts.append(f"{c['format']} at {loc_str}")
+                        summary_parts.append(f"{label} at {loc_str}")
                     else:
                         srv_str = c["service"] or "Digital"
-                        summary_parts.append(f"{c['format']} on {srv_str}")
+                        summary_parts.append(f"{label} on {srv_str}")
 
                 summary_str = f"{title_name} ({year}): " + "; ".join(summary_parts) if summary_parts else f"{title_name}: No copies recorded."
                 return {
@@ -590,17 +608,19 @@ class MatineeClient:
                 "id": c.get("id"),
                 "kind": c.get("kind"),
                 "format": c.get("format"),
+                "edition": c.get("edition"),
                 "service": c.get("service"),
                 "location_id": c.get("location_id"),
                 "location_path": c.get("location_path"),
             }
             copies_list.append(cp_dict)
+            label = _format_edition(c.get("format"), c.get("edition"))
             if c.get("kind") == "physical":
                 loc_str = c.get("location_path") or "Unassigned shelf"
-                summary_parts.append(f"{c.get('format')} at {loc_str}")
+                summary_parts.append(f"{label} at {loc_str}")
             else:
                 srv_str = c.get("service") or "Digital"
-                summary_parts.append(f"{c.get('format')} on {srv_str}")
+                summary_parts.append(f"{label} on {srv_str}")
 
         year_str = f" ({movie.get('year')})" if movie.get("year") else ""
         summary_str = f"{movie.get('title')}{year_str}: " + "; ".join(summary_parts) if summary_parts else f"{movie.get('title')}: No copies recorded."
@@ -869,7 +889,8 @@ def get_movie(title_id: int) -> Dict[str, Any]:
 
 
 def where_is(title: str) -> Dict[str, Any]:
-    """Find where physical copies of a movie are stored (shelf/cabinet/room) or which digital services host it."""
+    """Find where physical copies of a movie are stored (shelf/cabinet/room) or which digital services host it.
+    Each copy has an edition (such as Steelbook) when it has one, and the summary says it."""
     return _default_client.where_is(title)
 
 
