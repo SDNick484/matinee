@@ -517,3 +517,21 @@ def test_only_the_admin_title_view_renders_the_editor_line():
     assert '${isAdmin ? copyExtraHTML(cp) : ""}' in detail
     assert '<span class="copy-edition">' in detail   # the edition is public: no isAdmin around it
     assert "isAdmin ? `<span class=\"copy-edition\"" not in detail
+
+
+def test_stats_codes_line_is_editor_only_and_plain_text_at_zero():
+    stats = (STATIC / "js" / "stats.js").read_text(encoding="utf-8")
+    assert "${isAdmin ? unredeemedCodesLine(data.unredeemed_codes) : \"\"}" in stats
+    assert 'typeof n !== "number"' in stats   # an older server sends no count: no line
+    assert "n > 0 ?" in stats and 'href="#/?code=unredeemed"' in stats
+    assert "price" not in stats.lower().split("function unredeemedcodesline")[1].split("</p>")[0]   # no spending totals
+
+
+def test_grid_code_filter_is_editor_only_like_the_people_filters():
+    assert 'const EDITOR_FILTERS = ["unseen_by", "attendance", "code"];' in GRID_JS
+    assert 'const codeActive = isAdmin && state.grid.code === "unredeemed";' in GRID_JS
+    assert "if (!isAdmin && hasEditorFilter(state.route.query)) dropEditorFilters();" in GRID_JS   # a visitor loses it
+    assert "isAdmin && !retried && err.status === 400 && hasEditorFilter(state.route.query)" in GRID_JS   # and an editor's bad value
+    assert 'q.delete("code");' in GRID_JS and GRID_JS.count('q.delete("code");') == 2   # the chip and Reset
+    router = (STATIC / "js" / "router.js").read_text(encoding="utf-8")
+    assert "hashWithoutEditorFilters(location.hash)" in router   # "Public View" drops it from the link

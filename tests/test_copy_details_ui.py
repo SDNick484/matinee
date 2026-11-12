@@ -275,3 +275,89 @@ def test_a_visitor_sees_the_edition_and_nothing_else(server, browser, dark_knigh
     assert page.locator(".btn-edit-copy").count() == 0
     assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
     assert errors == []
+
+
+# ------------------------------------------------------------------------------------- Stats line and grid filter
+# Scenario: The Dark Knight's 4K UHD disc has an unredeemed code; Amelie (TMDB 194) has a plain Blu-ray.
+
+@pytest.fixture
+def two_titles(server, dark_knight):
+    from app import db
+    from conftest import seed_title
+    con = db()
+    con.execute("UPDATE copies SET code_status='unredeemed' WHERE title_id=?", (dark_knight,))
+    seed_title(con, 194)
+    con.commit()
+    return dark_knight
+
+
+@pytest.mark.parametrize("width", WIDTHS)
+def test_stats_line_links_to_the_filtered_grid(server, browser, two_titles, width):
+    page = browser.new_page(viewport={"width": width, "height": 915})
+    errors = []
+    page.on("pageerror", lambda e: errors.append(str(e)))
+    page.goto(f"{server}/admin#/stats")
+    page.wait_for_selector(".stats-grid-overview")
+    line = page.locator("#stats-codes")
+    assert line.inner_text().strip() == "Unredeemed digital codes: 1"
+    assert line.locator("a").get_attribute("href") == "#/?code=unredeemed"
+    assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+    line.locator("a").click()
+    page.wait_for_selector("#filter-code-btn")
+    assert page.locator("#filter-code-btn").inner_text().strip() == "Unredeemed codes ✕"
+    assert "code=unredeemed" in page.url
+    page.wait_for_function("document.querySelectorAll('#grid-container img, #grid-container .poster-ph').length === 1")
+    grid_text = page.locator("#grid-container").inner_text()
+    assert "The Dark Knight" in grid_text and "Am" not in grid_text   # Amelie has no code
+    assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+    # the chip clears just that filter
+    page.click("#filter-code-btn")
+    page.wait_for_function("!location.hash.includes('code=')")
+    page.wait_for_function("document.querySelectorAll('#grid-container img, #grid-container .poster-ph').length === 2")
+    assert page.locator("#filter-code-btn").count() == 0
+    assert errors == []
+
+
+def test_stats_line_is_plain_text_at_zero(server, browser, dark_knight):
+    page = browser.new_page(viewport={"width": 412, "height": 915})
+    page.goto(f"{server}/admin#/stats")
+    page.wait_for_selector(".stats-grid-overview")
+    line = page.locator("#stats-codes")
+    assert line.inner_text().strip() == "Unredeemed digital codes: 0"
+    assert line.locator("a").count() == 0
+
+
+def test_reset_clears_the_code_filter_with_the_others(server, browser, two_titles):
+    page = browser.new_page(viewport={"width": 412, "height": 915})
+    page.goto(f"{server}/admin#/?code=unredeemed&watched=unwatched")
+    page.wait_for_selector("#filter-code-btn")
+    page.click("#filter-reset-btn")
+    page.wait_for_function("!location.hash.includes('code=') && !location.hash.includes('watched=')")
+    assert page.locator("#filter-code-btn").count() == 0
+
+
+def test_an_editor_code_value_the_server_refuses_falls_back_to_the_full_grid(server, browser, two_titles):
+    page = browser.new_page(viewport={"width": 412, "height": 915})
+    errors = []
+    page.on("pageerror", lambda e: errors.append(str(e)))
+    page.goto(f"{server}/admin#/?code=redeemed")
+    page.wait_for_function("!location.hash.includes('code=')")
+    page.wait_for_function("document.querySelectorAll('#grid-container img, #grid-container .poster-ph').length === 2")
+    assert page.locator("#filter-code-btn").count() == 0
+    assert errors == []
+
+
+def test_a_visitor_has_no_stats_line_and_loses_the_code_filter(server, browser, two_titles):
+    page = browser.new_page(viewport={"width": 412, "height": 915})
+    errors = []
+    page.on("pageerror", lambda e: errors.append(str(e)))
+    page.goto(f"{server}/#/stats")
+    page.wait_for_selector(".stats-grid-overview")
+    assert page.locator("#stats-codes").count() == 0
+    assert "nredeemed" not in page.content()
+    page.goto(f"{server}/#/?code=unredeemed")
+    page.wait_for_function("!location.hash.includes('code=')")
+    page.wait_for_function("document.querySelectorAll('#grid-container img, #grid-container .poster-ph').length === 2")
+    assert page.locator("#filter-code-btn").count() == 0
+    assert "Unable to load" not in page.content()
+    assert errors == []

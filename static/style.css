@@ -676,6 +676,20 @@ main#view {
     grid-template-columns: repeat(4, 1fr);
   }
 }
+.stats-codes {
+  margin-top: var(--s3);
+  font-size: var(--fs-sm);
+  color: var(--ink-2);
+}
+.stats-codes a {
+  color: var(--accent);
+  font-weight: 700;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+}
+
 .stat-card {
   background: var(--card);
   border: 1px solid var(--line);

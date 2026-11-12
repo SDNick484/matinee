@@ -2,6 +2,14 @@
 import { api, esc, getChipClass, isAdmin, state } from "./core.js";
 import { getChipIcon, icon } from "./icons.js";
 
+  // Editor-only: how many discs still have a digital code to redeem, linking to the grid filtered to them. Plain text
+  // at zero (nothing to show), and absent when the server did not send the count. No spending totals.
+  function unredeemedCodesLine(n) {
+    if (typeof n !== "number") return "";
+    const text = `Unredeemed digital codes: ${n}`;
+    return `<p class="stats-codes" id="stats-codes">${n > 0 ? `<a href="#/?code=unredeemed">${text}</a>` : text}</p>`;
+  }
+
   // ================================================================= 8.1 Stats View
   async function renderStats(container) {
     const seq = state.routeSeq;
@@ -78,6 +86,7 @@ import { getChipIcon, icon } from "./icons.js";
               <div class="stat-lbl">Dual-Owned</div>
             </div>
           </div>
+          ${isAdmin ? unredeemedCodesLine(data.unredeemed_codes) : ""}
         </section>
 
         <!-- Quality Breakdown -->

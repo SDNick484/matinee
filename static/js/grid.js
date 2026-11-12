@@ -3,38 +3,39 @@ import { api, esc, getChipClass, isAdmin, state, toast } from "./core.js";
 import { activePeople } from "./people.js";
 import { getChipIcon, icon } from "./icons.js";
 
-  // The editor-only people filters (spec 2026-11-11-per-person §6.4): /api answers 400 for either one.
-  const PEOPLE_FILTERS = ["unseen_by", "attendance"];
+  // The editor-only filters: the people filters (spec 2026-11-11-per-person §6.4) and `code` (unredeemed digital codes,
+  // spec 2026-11-11-copy-details §4). /api answers 400 for any of them.
+  const EDITOR_FILTERS = ["unseen_by", "attendance", "code"];
 
-  function hasPeopleFilter(query) {
-    return PEOPLE_FILTERS.some((k) => query.has(k));
+  function hasEditorFilter(query) {
+    return EDITOR_FILTERS.some((k) => query.has(k));
   }
 
-  // A location hash ("#/?unseen_by=kids&sort=year") without the people filters ("#/?sort=year").
-  function hashWithoutPeopleFilters(hash) {
+  // A location hash ("#/?unseen_by=kids&code=unredeemed&sort=year") without the editor filters ("#/?sort=year").
+  function hashWithoutEditorFilters(hash) {
     const raw = String(hash || "").replace(/^#/, "");
     const [path, query] = raw.split("?");
     const q = new URLSearchParams(query || "");
-    PEOPLE_FILTERS.forEach((k) => q.delete(k));
+    EDITOR_FILTERS.forEach((k) => q.delete(k));
     const qStr = q.toString();
     return `#${path || "/"}${qStr ? `?${qStr}` : ""}`;
   }
 
-  // Drop the people filters from the current route and the address bar, without a new history entry or a
+  // Drop the editor filters from the current route and the address bar, without a new history entry or a
   // hashchange (the caller renders straight away).
-  function dropPeopleFilters() {
-    const hash = hashWithoutPeopleFilters(location.hash || "#/");
+  function dropEditorFilters() {
+    const hash = hashWithoutEditorFilters(location.hash || "#/");
     history.replaceState(history.state, "", hash);
-    PEOPLE_FILTERS.forEach((k) => state.route.query.delete(k));
+    EDITOR_FILTERS.forEach((k) => state.route.query.delete(k));
     state.grid.lastHash = hash;
   }
 
   // ================================================================= 7.2 Poster Grid
   async function renderGrid(container, { retried = false } = {}) {
     const seq = state.routeSeq;   // see core.js
-    // A visitor cannot use the people filters (an editor's shared link, or Public View from a filtered grid):
+    // A visitor cannot use the editor filters (an editor's shared link, or Public View from a filtered grid):
     // drop them rather than let /api answer 400 with no way back.
-    if (!isAdmin && hasPeopleFilter(state.route.query)) dropPeopleFilters();
+    if (!isAdmin && hasEditorFilter(state.route.query)) dropEditorFilters();
     const q = state.route.query.get("q") || "";
     const mediumStr = state.route.query.get("medium") || "";
     const qualityStr = state.route.query.get("quality") || "";
@@ -72,6 +73,7 @@ import { getChipIcon, icon } from "./icons.js";
     state.grid.watched = watched;
     state.grid.unseen_by = state.route.query.get("unseen_by") || "";
     state.grid.attendance = state.route.query.get("attendance") || "";
+    state.grid.code = state.route.query.get("code") || "";
     state.grid.location_id = locationId;
     state.grid.kind = kind;
     state.grid.both = both;
@@ -155,10 +157,11 @@ import { getChipIcon, icon } from "./icons.js";
       }
     } catch (err) {
       if (seq !== state.routeSeq) return;
-      // An editor's people filter the server rejects (a deleted person, or nobody set up): retry once without it.
-      if (isAdmin && !retried && err.status === 400 && hasPeopleFilter(state.route.query)) {
-        dropPeopleFilters();
-        toast(err.message || "That people filter no longer applies.");
+      // An editor's filter the server rejects (a deleted person, nobody set up, or a code value it doesn't know):
+      // retry once without it.
+      if (isAdmin && !retried && err.status === 400 && hasEditorFilter(state.route.query)) {
+        dropEditorFilters();
+        toast(err.message || "That filter no longer applies.");
         await renderGrid(container, { retried: true });
         return;
       }
@@ -250,10 +253,12 @@ import { getChipIcon, icon } from "./icons.js";
     const attendance = state.grid.attendance || "";
     const showWho = isAdmin && activePeople().length > 0;   // editor-only: both filters need people
     const whoActive = Boolean(unseenBy) || Boolean(attendance);
+    const codeActive = isAdmin && state.grid.code === "unredeemed";   // editor-only, like the people filters
     const locationId = state.grid.location_id || "";
 
     const hasFilters =
       whoActive ||
+      codeActive ||
       medium.length > 0 ||
       quality.length > 0 ||
       genre.length > 0 ||
@@ -442,6 +447,7 @@ import { getChipIcon, icon } from "./icons.js";
           : ""
       }
 
+      ${codeActive ? `<button type="button" class="filter-btn active" id="filter-code-btn">Unredeemed codes ✕</button>` : ""}
       ${hasFilters ? `<button type="button" class="filter-reset-btn" id="filter-reset-btn">✕ Reset</button>` : ""}
     `;
 
@@ -570,6 +576,14 @@ import { getChipIcon, icon } from "./icons.js";
       });
     });
 
+    // The active "Unredeemed codes" chip clears just that filter
+    document.getElementById("filter-code-btn")?.addEventListener("click", () => {
+      const q = new URLSearchParams(state.route.query);
+      q.delete("code");
+      const qStr = q.toString();
+      location.hash = qStr ? `#/?${qStr}` : "#/";
+    });
+
     // Reset button
     const resetBtn = document.getElementById("filter-reset-btn");
     resetBtn?.addEventListener("click", () => {
@@ -582,6 +596,7 @@ import { getChipIcon, icon } from "./icons.js";
       q.delete("watched");
       q.delete("unseen_by");
       q.delete("attendance");
+      q.delete("code");
       q.delete("kind");
       q.delete("both");
       q.delete("format");
@@ -609,6 +624,7 @@ import { getChipIcon, icon } from "./icons.js";
         Boolean(state.grid.watched) ||
         Boolean(state.grid.unseen_by) ||
         Boolean(state.grid.attendance) ||
+        Boolean(state.grid.code) ||
         state.grid.kind ||
         state.grid.both ||
         state.grid.format ||
@@ -696,4 +712,4 @@ import { getChipIcon, icon } from "./icons.js";
     `;
   }
 
-export { hashWithoutPeopleFilters, renderGrid };
+export { hashWithoutEditorFilters, renderGrid };
