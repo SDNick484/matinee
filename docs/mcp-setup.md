@@ -255,7 +255,7 @@ At `log` and `all` the service holds `MATINEE_API_KEY`, which can do everything 
 The remote service offers these only while `MATINEE_MCP_READONLY=0` and `MATINEE_MCP_WRITES` allows them: `rate_movie` and `log_watch` at `log` and `all`, `add_movie` at `all` (section 4.4). Over stdio all three are always available.
 - **`rate_movie`**: Set, update, or clear personal 0.0–10.0 ratings in 0.5 increments.
 - **`log_watch`**: Log a movie watch event with an ISO date (`YYYY-MM-DD`; with no date the watch is recorded as dateless, so pass today's date for a film that was just watched), optional notes, optional `attendees` (a list of names), and an optional `date_bucket` for a watch with no exact date (`past_year`, `1_2_years`, `2_5_years`, `5_10_years`, `over_10_years`, `unknown`). Leave `attendees` out when everyone watched; an empty list is refused by Matinee with a 400. For a watch more than ten years ago (`date_bucket="over_10_years"`, or a `watched_date` more than ten years back) with no `attendees`, Matinee records the adults only ("we saw The Princess Bride ages ago" → Nick and Lauren).
-  When `HA_WEBHOOK_URL` is set, a watch logged with today's date (and no `date_bucket`) also posts a webhook to Home Assistant, in both running modes: Mode B's SQLite connection is read-only, so the write always goes through Matinee's API, which is what sends it. A dateless, past or bucketed watch sends nothing. See [home-assistant.md](home-assistant.md).
+  `log_watch` never pings Home Assistant, even with today's date: only the web UI's **+ Watched Today** button does (see [home-assistant.md](home-assistant.md)).
 - **`add_movie`**: Add a movie from TMDB into the library with physical/digital copy details.
 
 ### 5.3 Resources

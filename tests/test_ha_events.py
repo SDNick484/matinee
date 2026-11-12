@@ -81,6 +81,11 @@ def seed_paddington(*, certification="PG", override=None, year=2017, runtime=103
 
 
 def log(client, **body):
+    """Default to what the + Watched Today button sends; pass live=None to leave the flag out."""
+    if body.get("live", True) is None:
+        del body["live"]
+    else:
+        body.setdefault("live", True)
     return client.post("/admin/api/titles/42/watches", json=body)
 
 
@@ -110,6 +115,29 @@ def test_watched_at_alias_counts_as_a_date(client, posts):
     seed_paddington()
     assert log(client, watched_at=TODAY).status_code == 200
     assert len(posts) == 1
+
+
+@pytest.mark.parametrize("live", [None, False, "true", 1, "yes"], ids=["absent", "false", "string", "one", "yes"])
+def test_without_the_live_flag_today_does_not_fire(client, posts, live):
+    # Log Date, MCP and API clients send today's date without live: true; only + Watched Today does.
+    seed_paddington()
+    assert log(client, watched_date=TODAY, live=live).status_code == 200
+    assert posts == [] and FakeThread.created == []
+    assert watch_count() == 1
+
+
+def test_the_live_flag_alone_is_not_enough(client, posts):
+    seed_paddington()
+    assert log(client, watched_date="2019-07-04", live=True).status_code == 200
+    assert log(client, watched_date=TODAY, date_bucket="past_year", live=True).status_code == 200
+    assert log(client, live=True).status_code == 200
+    assert posts == []
+
+
+def test_the_live_flag_is_not_stored(client, posts):
+    seed_paddington()
+    body = log(client, watched_date=TODAY).get_json()
+    assert "live" not in body["watch"]
 
 
 def test_the_response_is_the_same_with_the_feature_on(client, posts, monkeypatch):
@@ -301,3 +329,11 @@ def test_the_url_is_never_served(client, posts):
     for path in ("/healthz", "/api/stats", "/api/facets", "/admin/api/stats", "/admin/api/me", "/admin/api/titles/42"):
         res = client.get(path)
         assert WEBHOOK_ID not in res.get_data(as_text=True), path
+
+
+def test_only_the_watched_today_button_sends_the_live_flag():
+    import pathlib
+    src = pathlib.Path(__file__).resolve().parent.parent.joinpath("static/js/detail.js").read_text()
+    assert src.count("live: true") == 1
+    today = src.index('getElementById("btn-watched-today")?.addEventListener')
+    assert today < src.index("live: true") < today + 900, "the flag belongs to the + Watched Today handler"
