@@ -726,7 +726,10 @@ def test_buckets_still_log_on_one_tap_without_people(server, browser):
     assert errors == []
 
 
-@pytest.mark.parametrize("hash_,keeps", [("#/add", "#tmdb-search-input"), ("#/stats", ".stats-view"),
+# The Stats view paints a "Loading statistics" shell inside .stats-view and then replaces the whole view once
+# /admin/api/stats answers, so marking .stats-view could tag the shell and fail on a slow run (about 1 in 4 locally).
+# .stats-grid-overview only exists once the real view is drawn.
+@pytest.mark.parametrize("hash_,keeps", [("#/add", "#tmdb-search-input"), ("#/stats", ".stats-grid-overview"),
                                          ("#/about", ".about-view")])
 def test_people_modal_close_leaves_views_without_people_alone(server, browser, hash_, keeps):
     """Review F3: closing the People modal after a change re-ran handleRoute on every route, which reset the Add
