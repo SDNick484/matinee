@@ -112,6 +112,7 @@ add_setting "$CONF" MATINEE_READ_KEY "$(gen_key)" "Key that may only GET /admin/
 add_setting "$CONF" ANTHROPIC_SEARCH_KEY "" "Anthropic API key for Ask (AI search); empty = Ask is off"
 add_setting "$CONF" ANTHROPIC_SEARCH_MODEL "claude-haiku-5-5" "Model Ask uses"
 add_setting "$CONF" ASK_DAILY_LIMIT "200" "Ask questions per day across all editors"
+add_setting "$CONF" HA_WEBHOOK_URL "" "Optional Home Assistant webhook URL, a secret: a watch logged for today is POSTed to it (docs/home-assistant.md); empty = off"
 # Remote MCP (matinee-mcp). MCP_HTTP_BIND must be this host's LAN address because cloudflared runs in Docker.
 add_setting "$CONF" MATINEE_MCP_READONLY 1 "1 = the Claude app can only read (MATINEE_MCP_WRITES is ignored); 0 = MATINEE_MCP_WRITES decides what it may write"
 # A host that already runs with writes on (READONLY=0) keeps all nine tools; every other host starts at none.
@@ -164,7 +165,7 @@ description="Matinee movie collection"
 : ${PORT:=8771}
 : ${DATA_DIR:=/var/lib/matinee}
 export HOME=/var/lib/matinee  # newer gunicorn keeps a small control socket under $HOME
-export PORT DATA_DIR CF_TEAM_DOMAIN CF_AUD ADMIN_EMAILS LAN_EDIT LAN_HOSTS PUBLIC_VIEW TMDB_READ_TOKEN MATINEE_API_KEY MATINEE_READ_KEY OMDB_API_KEY ANTHROPIC_SEARCH_KEY ANTHROPIC_SEARCH_MODEL ASK_DAILY_LIMIT
+export PORT DATA_DIR CF_TEAM_DOMAIN CF_AUD ADMIN_EMAILS LAN_EDIT LAN_HOSTS PUBLIC_VIEW TMDB_READ_TOKEN MATINEE_API_KEY MATINEE_READ_KEY OMDB_API_KEY ANTHROPIC_SEARCH_KEY ANTHROPIC_SEARCH_MODEL ASK_DAILY_LIMIT HA_WEBHOOK_URL
 supervisor="supervise-daemon"
 respawn_delay=5
 respawn_max=10
