@@ -21,7 +21,7 @@ Environment (see /etc/conf.d/matinee and .env.example):
   MATINEE_READ_KEY,
   ANTHROPIC_SEARCH_KEY, ANTHROPIC_SEARCH_MODEL, ASK_DAILY_LIMIT
 """
-import csv, datetime as dt, hashlib, hmac, io, ipaddress, json, os, re, sys, threading, time, types
+import datetime as dt, hashlib, hmac, ipaddress, json, os, re, sys, threading, time, types
 import urllib.error, urllib.parse, urllib.request
 from functools import wraps
 
@@ -50,6 +50,7 @@ from browse import get_descendant_location_ids, copy_label, copy_out, watch_out,
 from browse import like_escape, QUALITY_MAP, CARD_SELECT, _card, title_cards, PEOPLE_PARAMS  # noqa: F401
 from browse import PEOPLE_PARAMS_PUBLIC_ERROR, people_params_refused, list_titles, get_title, facets  # noqa: F401
 from browse import api_locations, collection_stats, recommendations  # noqa: F401
+from export import EXPORT_COLUMNS, FORMULA_LEAD, csv_cell, export_rows, export_csv  # noqa: F401
 
 
 # ===================================================================== split modules
@@ -58,7 +59,7 @@ from browse import api_locations, collection_stats, recommendations  # noqa: F40
 # tests, `matinee.TMDB_READ_TOKEN = ...` in ops/import_titles.py) also rebinds X in each split module that holds
 # it, so moved code reads the new value as it did when it lived here. db.db() rebinds _standalone_db itself, so
 # app keeps no copy of it and forwards reads and writes to db.py. Patch app.X, not the split module.
-_SPLIT_MODULES = ("settings", "common", "db", "clients", "images", "people", "browse")
+_SPLIT_MODULES = ("settings", "common", "db", "clients", "images", "people", "browse", "export")
 _FORWARDED = {"_standalone_db": "db"}
 
 
@@ -353,52 +354,6 @@ def fetch_images(t):
 
 
 # ============================================================================ export
-EXPORT_COLUMNS = ("title", "year", "tmdb_id", "imdb_id", "certification", "runtime", "kind", "format", "service",
-                  "location_path", "user_rating", "watch_count", "last_watched", "added_on")
-FORMULA_LEAD = ("=", "+", "-", "@", "\t", "\r")   # a spreadsheet would run a text cell that starts like this
-
-
-def csv_cell(v):
-    """One CSV cell: None is blank, numbers pass through, and text that could be read as a formula gets a
-    leading quote (OWASP "CSV injection"). Titles and services are user-controlled text; numbers never are."""
-    if v is None:
-        return ""
-    if isinstance(v, str) and v.startswith(FORMULA_LEAD):
-        return "'" + v
-    return v
-
-
-def export_rows(con):
-    """One row per owned copy, in EXPORT_COLUMNS order, sorted so two exports diff cleanly. Watch notes are
-    editor-only and deliberately absent; the title's household rating and watch history repeat on each row."""
-    paths = get_location_path_map(con)
-    rows = []
-    for r in con.execute(
-            """SELECT t.title, t.year, t.tmdb_id, t.imdb_id, t.certification, t.certification_override, t.runtime,
-                      c.kind, c.format, c.service, c.location_id, c.created_at,
-                      (SELECT rating FROM user_ratings u WHERE u.title_id=t.id) AS user_rating,
-                      (SELECT count(*) FROM watches w WHERE w.title_id=t.id) AS watch_count,
-                      (SELECT MAX(watched_date) FROM watches w WHERE w.title_id=t.id) AS last_watched
-               FROM copies c JOIN titles t ON t.id=c.title_id
-               ORDER BY t.sort_title, t.year, c.created_at, c.id"""):
-        rows.append([r["title"], r["year"], r["tmdb_id"], r["imdb_id"],
-                     r["certification_override"] or r["certification"], r["runtime"],
-                     r["kind"], r["format"], r["service"], paths.get(r["location_id"]),
-                     r["user_rating"], r["watch_count"], r["last_watched"], (r["created_at"] or "")[:10]])
-    return rows
-
-
-def export_csv(con, today=None):
-    """(body, filename): UTF-8 with a BOM so Excel reads accents, RFC 4180 quoting, CRLF line endings."""
-    out = io.StringIO(newline="")
-    w = csv.writer(out)             # default dialect: CRLF, quote only where needed, "" for a quote
-    w.writerow(EXPORT_COLUMNS)
-    for row in export_rows(con):
-        w.writerow([csv_cell(v) for v in row])
-    day = (today or dt.date.today()).isoformat()
-    return b"\xef\xbb\xbf" + out.getvalue().encode("utf-8"), f"matinee-{day}.csv"
-
-
 @app.get("/admin/api/export.csv")
 @editor_required
 def export_csv_route():
