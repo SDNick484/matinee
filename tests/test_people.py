@@ -51,7 +51,7 @@ def test_schema_v9_is_additive_and_idempotent(client):
     matinee.migrate(con)
     matinee.migrate(con)
     assert [con.execute(f"SELECT count(*) FROM {t}").fetchone()[0] for t in tables] == before
-    assert con.execute("SELECT v FROM meta WHERE k='schema'").fetchone()[0] == "9"
+    assert con.execute("SELECT v FROM meta WHERE k='schema'").fetchone()[0] == "10"
     assert con.execute("SELECT count(*) FROM people").fetchone()[0] == 0
     assert con.execute("SELECT count(*) FROM watch_people").fetchone()[0] == 0
 
@@ -60,7 +60,7 @@ def test_constants():
     assert matinee.PERSON_KINDS == ("adult", "kid")
     assert matinee.PERSON_COLORS == ("green", "blue", "red", "pink", "purple")
     assert matinee.MAX_ACTIVE_PEOPLE == 8
-    assert matinee.SCHEMA_VERSION == "9"
+    assert matinee.SCHEMA_VERSION == "10"
 
 
 def test_watch_people_cascades_from_watch_and_restricts_person(client):
@@ -256,7 +256,7 @@ def test_migration_from_every_earlier_version(tmp_path, monkeypatch, version):
     assert con.execute("SELECT count(*) FROM people").fetchone()[0] == 0
     assert con.execute("SELECT count(*) FROM watch_people").fetchone()[0] == 0
     # the app stamps the current version whatever the file said (init_db INSERT OR REPLACE)
-    assert con.execute("SELECT v FROM meta WHERE k='schema'").fetchone()[0] == matinee.SCHEMA_VERSION == "9"
+    assert con.execute("SELECT v FROM meta WHERE k='schema'").fetchone()[0] == matinee.SCHEMA_VERSION == "10"
     for table, (cols, rows) in before.items():
         # migrate() only adds columns (notes, date_bucket, location_id, ...); compare what the old file had
         sel = ", ".join(cols)
@@ -300,7 +300,7 @@ def test_migrate_twice_on_v9_keeps_people_and_attendance(tmp_path, monkeypatch):
     matinee.migrate(con)
     matinee.migrate(con)
     assert snapshot(con) == before
-    assert con.execute("SELECT v FROM meta WHERE k='schema'").fetchone()[0] == "9"
+    assert con.execute("SELECT v FROM meta WHERE k='schema'").fetchone()[0] == "10"
     assert con.execute("PRAGMA foreign_key_check").fetchall() == []
     con.close()
 

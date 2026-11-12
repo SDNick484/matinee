@@ -3,7 +3,7 @@
 **Date:** 2026-11-11
 **Branch:** `feat/copy-details` (one PR)
 **Schema:** v9 → v10 (confirmed: `SCHEMA_VERSION = "9"` on `main`)
-**Status:** in progress
+**Status:** decisions from Nick's request of 2026-11-11; implementing in PR #34.
 **Verified against:** `matinee` `main` @ `b884d3b` (merge of PR #33, app modules).
 
 ## 1. Intent
