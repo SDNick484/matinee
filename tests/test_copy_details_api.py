@@ -182,3 +182,61 @@ def test_anonymous_cannot_write_any_of_it(client, dark_knight):
     res = client.post("/admin/api/copies", json={"title_id": dark_knight, "kind": "physical", "format": "4K UHD",
                                                   "price_cents": 2499})
     assert res.status_code == 401
+
+
+# ------------------------------------------------------------------------------------- filter and stats
+
+@pytest.fixture
+def two_titles(client, dark_knight):
+    """The Dark Knight owns one unredeemed code (the Steelbook); Amélie (TMDB 194) owns a plain Blu-ray."""
+    steelbook(client, dark_knight)
+    return dark_knight, seed_title(db(), 194)
+
+
+def titles_for(client, query):
+    """(response, titles' names) of an editor's GET /admin/api/titles; no names when the request was refused."""
+    res = client.get(f"/admin/api/titles{query}", headers=bearer())
+    return res, ([t["title"] for t in res.get_json()["titles"]] if res.status_code == 200 else [])
+
+
+def test_editor_filter_lists_only_titles_with_an_unredeemed_code(client, two_titles):
+    res, names = titles_for(client, "?code=unredeemed")
+    assert res.status_code == 200
+    assert names == ["The Dark Knight"]
+    assert sorted(titles_for(client, "")[1]) == ["Amélie", "The Dark Knight"]
+
+
+def test_a_redeemed_code_drops_out_of_the_filter(client, two_titles):
+    tid, _ = two_titles
+    cid = [c for c in client.get(f"/admin/api/titles/{tid}", headers=bearer()).get_json()["copies"]
+           if c["edition"] == "Steelbook"][0]["id"]
+    client.put(f"/admin/api/copies/{cid}", json={"code_status": "redeemed"}, headers=bearer())
+    assert titles_for(client, "?code=unredeemed")[1] == []
+
+
+@pytest.mark.parametrize("value", ["redeemed", "expired", "none", "", "UNREDEEMED-ish"])
+def test_other_code_values_are_400_for_an_editor(client, two_titles, value):
+    res = client.get(f"/admin/api/titles?code={value}", headers=bearer())
+    assert res.status_code == 400 and res.get_json() == {"error": "code must be unredeemed."}
+
+
+@pytest.mark.parametrize("query", ["?code=unredeemed", "?code=", "?code=redeemed", "?q=dark&code=unredeemed"])
+def test_a_public_request_naming_code_is_400(client, two_titles, query):
+    res = client.get(f"/api/titles{query}")
+    assert res.status_code == 400 and res.get_json() == {"error": "Sign in to filter by digital code."}
+
+
+def test_editor_stats_count_unredeemed_codes_and_public_stats_do_not(client, two_titles):
+    assert client.get("/admin/api/stats", headers=bearer()).get_json()["unredeemed_codes"] == 1
+    assert "unredeemed_codes" not in client.get("/api/stats").get_json()
+
+
+def test_stats_count_codes_not_titles(client, two_titles):
+    tid, _ = two_titles
+    steelbook(client, tid, edition="Best Buy exclusive", price_cents=None)   # a second code on the same title
+    assert client.get("/admin/api/stats", headers=bearer()).get_json()["unredeemed_codes"] == 2
+    assert titles_for(client, "?code=unredeemed")[1] == ["The Dark Knight"]
+
+
+def test_stats_are_zero_with_no_codes(client, dark_knight):
+    assert client.get("/admin/api/stats", headers=bearer()).get_json()["unredeemed_codes"] == 0
