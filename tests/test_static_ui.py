@@ -434,7 +434,7 @@ def test_who_watched_renders_only_for_editors_with_people():
 
 
 def test_all_three_log_calls_send_attendees():
-    for body in ("{ watched_date: todayIso, ...attendeesBody({ date: todayIso }) }",
+    for body in ("{ watched_date: todayIso, live: true, ...attendeesBody({ date: todayIso }) }",
                  "{ watched_date: val, ...attendeesBody({ date: val }) }",
                  "{ date_bucket: bucket, ...attendeesBody({ bucket }) }"):
         assert body in DETAIL_JS, body

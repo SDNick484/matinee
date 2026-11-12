@@ -1192,7 +1192,8 @@ def test_log_watch_old_date_defaults_to_the_adults(test_env, monkeypatch):
 # ------------------------------------------------------------------------ Home Assistant webhook (feat/ha-events)
 # MatineeClient.log_watch has one implementation, a POST to /admin/api/titles/<id>/watches, in REST mode and in
 # direct-database mode alike (MATINEE_DB_PATH only speeds up reads, through a mode=ro connection). So Flask's
-# add_watch is the only place that fires, and the MCP server needs no hook of its own.
+# add_watch is the only place that fires, and only for the web UI's + Watched Today button (live: true).
+# The MCP client cannot send that flag, so log_watch never fires.
 
 HA_URL = "http://homeassistant.local:8123/api/webhook/k3Qx9-Zr7wLmPv2T-movie-night"
 
@@ -1218,18 +1219,15 @@ def _today():
     return dt.date.today().isoformat()
 
 
-def test_log_watch_rest_mode_fires_once(test_env, monkeypatch, ha_posts):
+def test_log_watch_rest_mode_never_fires_even_for_today(test_env, monkeypatch, ha_posts):
+    # Only the web UI's "+ Watched Today" button sends live: true; an assistant logging today's date does not.
     client = _admin_rest_client(monkeypatch)
     res = client.log_watch(1, watched_date=_today())
     assert res["ok"] is True
-    assert len(ha_posts) == 1
-    url, body = ha_posts[0]
-    assert url == HA_URL
-    assert (body["title"], body["year"], body["runtime"], body["formats"], body["watched_date"], body["title_id"]) == \
-           ("Inception", 2010, 148, ["4K UHD"], _today(), 1)
+    assert ha_posts == []
 
 
-def test_log_watch_direct_database_mode_fires_once_and_cannot_write_itself(test_env, monkeypatch, ha_posts):
+def test_log_watch_direct_database_mode_cannot_write_and_never_fires(test_env, monkeypatch, ha_posts):
     import sqlite3
     client = _admin_rest_client(monkeypatch)
     client.db_path = str(test_env)                      # MATINEE_DB_PATH set: Mode B
@@ -1243,13 +1241,13 @@ def test_log_watch_direct_database_mode_fires_once_and_cannot_write_itself(test_
     before = db().execute("SELECT count(*) FROM watches").fetchone()[0]
     client.log_watch(1, watched_date=_today())
     assert db().execute("SELECT count(*) FROM watches").fetchone()[0] == before + 1   # the write went over REST
-    assert len(ha_posts) == 1, "one watch, one webhook: the REST write fires, a second hook would double it"
+    assert ha_posts == []
 
 
-def test_log_watch_tool_function_fires(test_env, monkeypatch, ha_posts):
+def test_log_watch_tool_function_never_fires(test_env, monkeypatch, ha_posts):
     monkeypatch.setattr(mcp_server, "_default_client", _admin_rest_client(monkeypatch))
     assert mcp_server.log_watch(title_id=1, watched_date=_today())["ok"] is True
-    assert len(ha_posts) == 1
+    assert ha_posts == []
 
 
 @pytest.mark.parametrize("kwargs", [
@@ -1262,12 +1260,3 @@ def test_log_watch_tool_function_fires(test_env, monkeypatch, ha_posts):
 def test_log_watch_history_and_dateless_never_fire(test_env, monkeypatch, ha_posts, kwargs):
     assert _admin_rest_client(monkeypatch).log_watch(1, **kwargs)["ok"] is True
     assert ha_posts == []
-
-
-def test_log_watch_attendees_and_notes_stay_out_of_the_payload(test_env, monkeypatch, ha_posts):
-    _seed_family(test_env)
-    client = _admin_rest_client(monkeypatch)
-    client.log_watch(1, watched_date=_today(), notes="Alice cried at the end", attendees=["Nick", "Alice"])
-    body = ha_posts[0][1]
-    assert "attendees" not in body and "notes" not in body
-    assert "Alice" not in str(body) and "cried" not in str(body)
