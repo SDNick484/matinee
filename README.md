@@ -18,6 +18,11 @@ Matinee separates the *movie* from the *copies owned*:
   - `kind`: `physical` or `digital`.
   - `format`: `4K UHD`, `Blu-ray`, `3D Blu-ray`, `DVD`, `VHS` (for physical) or `Digital 4K`, `Digital HD`, `Digital SD` (for digital).
   - `service`: `Movies Anywhere`, `Apple TV`, `Fandango at Home`, `Amazon`, `Google Play`, `Plex/Jellyfin`, `Other` (digital only; physical copies have no service).
+  - `edition`: optional free text up to 60 characters (`Steelbook`, `Criterion Collection`, `Extended Edition`), shown next to the format.
+  - `code_status`: for a disc with a digital code, `none` (the default), `unredeemed`, `redeemed` or `expired`. Digital copies are always `none`. Editor-only.
+  - `purchased_on` and `price_cents`: an optional purchase date and price, entered and shown as dollars (`24.99` is stored as `2499`). Editor-only.
+
+  On the Add and Edit copy forms these four sit under a **More** disclosure, closed on a new copy so the form stays one screen on a phone. Editors also see **Unredeemed digital codes: N** on the Stats page, linking to the grid filtered with `#/?code=unredeemed`.
 
 Titles without owned copies are retained in the database but do not appear in the public poster grid.
 
@@ -139,7 +144,7 @@ not set, because the UI still uses inline event handlers and `style` attributes.
 
 **What the public sees.** With `PUBLIC_VIEW=1`, `/` and `/api` show titles, copies, shelves, the family's ratings,
 and when each title was watched and how often. Watch notes ("girls loved it") are editor-only: they appear at
-`/admin` and `/admin/api`, never on `/api`. Copies' `added_by` is editor-only as well. `PUBLIC_VIEW=0` hides
+`/admin` and `/admin/api`, never on `/api`. A copy's `edition` is public; its `added_by`, `code_status`, `purchased_on` and `price_cents` are editor-only as well, and so is the `code=unredeemed` grid filter (a public request that names it gets a 400). `PUBLIC_VIEW=0` hides
 everything behind `/admin`.
 
 ---
