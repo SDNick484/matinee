@@ -1260,3 +1260,113 @@ def test_log_watch_tool_function_never_fires(test_env, monkeypatch, ha_posts):
 def test_log_watch_history_and_dateless_never_fire(test_env, monkeypatch, ha_posts, kwargs):
     assert _admin_rest_client(monkeypatch).log_watch(1, **kwargs)["ok"] is True
     assert ha_posts == []
+
+
+# --------------------------------------------------------------- copy details (schema v10)
+# The Dark Knight owns a 4K UHD "Steelbook" on Family Room > Media Cabinet > Shelf 1 with an unredeemed code, bought
+# 2026-10-31 for $24.99. The edition is public; the code status, purchase date and price are editor-only.
+
+PRIVATE_COPY_KEYS = ("code_status", "purchased_on", "price_cents")
+
+
+@pytest.fixture
+def steelbook_env(test_env):
+    from conftest import seed_title
+    con = db()
+    con.execute("INSERT INTO locations (id, parent_id, name) VALUES (10, NULL, 'Family Room'), "
+                "(11, 10, 'Media Cabinet'), (12, 11, 'Shelf 1')")
+    tid = seed_title(con, 155, copies=("4K UHD",))
+    con.execute("UPDATE copies SET edition='Steelbook', code_status='unredeemed', purchased_on='2026-10-31', "
+                "price_cents=2499, location_id=12 WHERE title_id=?", (tid,))
+    con.commit()
+    return test_env, tid
+
+
+def _flask_client(key):
+    """A REST-mode client whose requests run against the real Flask app, with or without the write key."""
+    client = mcp_server.MatineeClient(api_url="http://fake-host", api_key=key, db_path="")
+
+    def via_flask(method, path, data=None):
+        with app.test_client() as c:
+            res = c.open(path, method=method, json=data, headers={"Authorization": f"Bearer {key}"} if key else {})
+        assert res.status_code == 200, (path, res.status_code)
+        return res.get_json()
+
+    client._api_request = via_flask
+    return client
+
+
+def test_get_movie_direct_has_edition_and_none_of_the_editor_fields(steelbook_env):
+    path, tid = steelbook_env
+    [copy] = mcp_server.MatineeClient(db_path=str(path)).get_movie(tid)["copies"]
+    assert copy["edition"] == "Steelbook"
+    assert not set(PRIVATE_COPY_KEYS) & set(copy)
+
+
+def test_get_movie_direct_plain_copy_has_edition_none(test_env):
+    assert mcp_server.MatineeClient(db_path=str(test_env)).get_movie(1)["copies"][0]["edition"] is None
+
+
+@pytest.mark.parametrize("key,exposed", [("", False), ("k", True)])
+def test_rest_get_movie_editor_fields_only_with_the_key(steelbook_env, monkeypatch, key, exposed):
+    """Unkeyed reads go to /api (edition only); keyed reads go to /admin/api (all four)."""
+    monkeypatch.setattr("app.LAN_EDIT", False)
+    monkeypatch.setattr("app.MATINEE_API_KEY", "k")
+    _, tid = steelbook_env
+    copy = _flask_client(key).get_movie(tid)["copies"][-1]
+    assert copy["edition"] == "Steelbook"
+    assert (copy.get("code_status"), copy.get("purchased_on"), copy.get("price_cents")) == \
+           (("unredeemed", "2026-10-31", 2499) if exposed else (None, None, None))
+
+
+def test_where_is_says_the_edition_in_the_summary_and_the_copy(steelbook_env):
+    path, _ = steelbook_env
+    direct = mcp_server.MatineeClient(db_path=str(path)).where_is("The Dark Knight")
+    assert direct["summary"] == "The Dark Knight (2008): 4K UHD Steelbook at Family Room › Media Cabinet › Shelf 1"
+    [copy] = direct["copies"]
+    assert copy["edition"] == "Steelbook" and copy["format"] == "4K UHD"
+    assert not set(PRIVATE_COPY_KEYS) & set(copy)
+
+
+@pytest.mark.parametrize("key", ["", "k"])
+def test_where_is_rest_matches_direct_and_never_leaks_editor_fields(steelbook_env, monkeypatch, key):
+    monkeypatch.setattr("app.LAN_EDIT", False)
+    monkeypatch.setattr("app.MATINEE_API_KEY", "k")
+    path, _ = steelbook_env
+    direct = mcp_server.MatineeClient(db_path=str(path)).where_is("The Dark Knight")
+    rest = _flask_client(key).where_is("The Dark Knight")
+    assert rest["summary"] == direct["summary"]
+    assert rest["copies"] == direct["copies"]   # even a keyed client's where_is lists no code status, date or price
+
+
+def test_where_is_without_an_edition_reads_as_before(test_env):
+    out = mcp_server.MatineeClient(db_path=str(test_env)).where_is("Inception")
+    assert out["summary"] == "Inception (2010): 4K UHD at Unassigned shelf"
+    assert out["copies"][0]["edition"] is None
+
+
+def test_a_database_older_than_v10_still_answers(tmp_path):
+    """The MCP server opens the file read-only and may start before the app has migrated it."""
+    from test_copy_details import old_database
+    path = tmp_path / "v9.db"
+    old_database(path, 9).close()
+    client = mcp_server.MatineeClient(db_path=str(path))
+    assert [c["edition"] for c in client.get_movie(1)["copies"]] == [None, None]
+    out = client.where_is("The Dark Knight")
+    assert out["found"] and [c["edition"] for c in out["copies"]] == [None, None]
+    assert "Steelbook" not in out["summary"]
+
+
+def test_ask_cannot_see_the_editor_fields(steelbook_env):
+    """Ask's LocalClient is direct SQLite and sends tool results to Anthropic's API, so what it returns is what leaves
+    the house: the edition, and nothing the public /api would withhold."""
+    import ask
+    _, tid = steelbook_env
+    with app.app_context():
+        lc = ask.LocalClient()
+        movie, found = lc.get_movie(tid), lc.where_is("The Dark Knight")
+    for payload in (movie, found):
+        text = repr(payload)
+        assert "Steelbook" in text
+        for secret in ("unredeemed", "2026-10-31", "2499", *PRIVATE_COPY_KEYS):
+            assert secret not in text, secret
