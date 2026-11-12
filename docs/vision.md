@@ -26,7 +26,7 @@ Editors can list the people in the household (Nick, Lauren, Midge, Alice, Paige)
 
 ## Principles
 
-1. **Small footprint.** One Flask file, one SQLite file, a vanilla JS single-page app. No framework, no bundler, no npm build step.
+1. **Small footprint.** One Flask app (`app.py` plus a few plain sibling modules), one SQLite file, a vanilla JS single-page app. No framework, no bundler, no npm build step.
 2. **Alpine packages only.** A new runtime dependency must exist as an Alpine `py3-*` package, because the installer uses `apk` and CI runs a musl/Alpine job. Outbound HTTP uses the standard library.
 3. **Upgrades never need a manual step.** The installer is idempotent and keeps data and config. Schema changes go through an idempotent `migrate()`.
 4. **Rule-based recommendations.** Picks come from plain SQLite rules (forgotten gems, an unwatched backlog, quick weeknight picks, genre and mood matching, an optional runtime cap), so they are explainable and instant.
