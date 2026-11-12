@@ -1217,6 +1217,13 @@ main#view {
   font-size: var(--fs-xs);
   color: var(--ink-3);
 }
+.copy-edition {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--ink-2);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 .copy-actions {
   display: flex;
   align-items: center;
@@ -1658,6 +1665,40 @@ main#view {
   background: var(--accent);
   color: var(--accent-ink);
   border-color: var(--accent);
+}
+
+/* "More" on the copy forms: edition, digital code, purchase date, price. Closed on a new copy so the form stays one screen. */
+.copy-more > summary {
+  display: flex;
+  gap: var(--s2);
+  min-height: 44px;
+  align-content: center;
+  align-items: center;
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  color: var(--ink-2);
+  cursor: pointer;
+}
+.copy-more-hint {
+  font-weight: 400;
+  font-size: var(--fs-xs);
+  color: var(--ink-3);
+  min-width: 0;
+}
+.copy-more-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s4);
+  padding-top: var(--s2);
+}
+.copy-more-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--s3);
+}
+.copy-more-row .form-group,
+.copy-more-body .form-input {
+  min-width: 0;
 }
 
 .form-actions {
