@@ -21,12 +21,11 @@ Environment (see /etc/conf.d/matinee and .env.example):
   MATINEE_READ_KEY,
   ANTHROPIC_SEARCH_KEY, ANTHROPIC_SEARCH_MODEL, ASK_DAILY_LIMIT
 """
-import csv, datetime as dt, hashlib, hmac, io, ipaddress, json, os, re, sqlite3, sys, threading, time, types, unicodedata
+import csv, datetime as dt, hashlib, hmac, io, ipaddress, json, os, re, sqlite3, sys, threading, time, types
 import urllib.error, urllib.parse, urllib.request
 from functools import wraps
 
 from flask import Flask, abort, g, jsonify, make_response, redirect, request, send_from_directory, has_app_context
-from werkzeug.wrappers import Response as WerkzeugResponse
 
 from recommend import (CERT_VALUES, FORMAT_ORDER, SEEN_CTE, ParamError, attendance_of, find_person, has_people,
                        parse_params, recommend, resolve_audience, sorted_formats, title_seen_by, unknown_person_message,
@@ -37,6 +36,7 @@ from settings import APP_NAME, APP_DIR, _load_env, DATA_DIR, IMAGE_DIR, DB_PATH,
 from settings import ADMIN_EMAILS, LAN_EDIT, parse_hosts, LAN_HOSTS, PUBLIC_VIEW, MATINEE_API_KEY  # noqa: F401
 from settings import OMDB_API_KEY, HA_WEBHOOK_URL, HA_WEBHOOK_TIMEOUT, TMDB_READ_TOKEN, TMDB_API, TMDB_IMG  # noqa: F401
 from settings import UA  # noqa: F401
+from common import clean, fold, words, search_fold, sort_key, make_err, validate_rating, now_iso  # noqa: F401
 
 
 # ===================================================================== split modules
@@ -45,7 +45,7 @@ from settings import UA  # noqa: F401
 # tests, `matinee.TMDB_READ_TOKEN = ...` in ops/import_titles.py) also rebinds X in each split module that holds
 # it, so moved code reads the new value as it did when it lived here. db.db() rebinds _standalone_db itself, so
 # app keeps no copy of it and forwards reads and writes to db.py. Patch app.X, not the split module.
-_SPLIT_MODULES = ("settings",)
+_SPLIT_MODULES = ("settings", "common")
 _FORWARDED = {}
 
 
@@ -377,38 +377,6 @@ def init_db():
 
 
 # =========================================================================== helpers
-def clean(s):
-    if s is None:
-        return None
-    s = str(s).strip()
-    return s or None
-
-
-def fold(s):
-    return "".join(c for c in unicodedata.normalize("NFKD", s or "") if not unicodedata.combining(c)).lower().strip()
-
-
-def words(s):
-    """Folded words: 'WALL·E' -> ['wall', 'e'], "Bug's" -> ['bug', 's']."""
-    return re.sub(r"[^\w]+", " ", fold(s)).split()
-
-
-def search_fold(*names):
-    """Text the search box matches against: spaced words plus a squashed form, so 'walle' finds WALL·E."""
-    out = []
-    for n in names:
-        if not n:
-            continue
-        for part in (" ".join(words(n)), re.sub(r"[^\w\s]+", "", fold(n))):
-            if part and part not in out:
-                out.append(part)
-    return " | ".join(out)
-
-
-def sort_key(title):
-    return re.sub(r"^(the|a|an)\s+", "", fold(title))
-
-
 def clean_upc_title(raw_title: str) -> tuple[str, str]:
     """Clean a product title from UPCitemdb and extract a format hint."""
     if not raw_title:
@@ -441,32 +409,6 @@ def clean_upc_title(raw_title: str) -> tuple[str, str]:
     cleaned = re.sub(r"\s+-\s+", " ", cleaned)
     cleaned = " ".join(cleaned.split()).strip(" -:+/")
     return cleaned or raw, fmt
-
-
-def make_err(code, msg, **extra):
-    if has_app_context():
-        r = jsonify(error=msg, **extra)
-        r.status_code = code
-        return r
-    return WerkzeugResponse(json.dumps({"error": msg, **extra}), status=code, mimetype="application/json")
-
-
-def validate_rating(val):
-    if val is None or val == "":
-        return None
-    if isinstance(val, bool):
-        abort(make_err(400, "Rating must be a number between 0.0 and 10.0 in 0.5 increments."))
-    try:
-        r = float(val)
-    except (ValueError, TypeError):
-        abort(make_err(400, "Rating must be a number between 0.0 and 10.0 in 0.5 increments."))
-    if not (0.0 <= r <= 10.0) or ((r * 2) % 1 != 0):
-        abort(make_err(400, "Rating must be between 0.0 and 10.0 in 0.5 increments."))
-    return round(r, 1)
-
-
-def now_iso():
-    return dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def http_json(url, timeout=8, headers=None):
