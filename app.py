@@ -2293,7 +2293,8 @@ def add_watch(title_id):
         raise
     # Home Assistant hears only about a watch dated today with no bucket: a back-filled history (an old date, a
     # bucket, no date) must not start a "movie night". Editing a watch afterwards never gets here.
-    if explicit_date and not date_bucket and watched_date == dt.date.today().isoformat():
+    # Only the + Watched Today button sends live: true (json true, not a string); Log Date and MCP never do.
+    if data.get("live") is True and explicit_date and not date_bucket and watched_date == dt.date.today().isoformat():
         fire_watch_event(con, title_id, watched_date)
     return jsonify(ok=True, watch=watch_response(con, cur.lastrowid, title_id))
 

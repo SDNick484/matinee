@@ -144,7 +144,8 @@ def test_who_watched_log_and_row_editor_at_412_and_360(server, browser):
     _mark_stale(page)
     page.click("#btn-watched-today")
     _settled(page, posts, 1)
-    assert set(posts[0]) == {"watched_date", "attendees"} and posts[0]["attendees"] == [1, 2]
+    assert set(posts[0]) == {"watched_date", "live", "attendees"} and posts[0]["attendees"] == [1, 2]
+    assert posts[0]["live"] is True
 
     # everyone off disables every log button (and a log is never sent)
     for pid in (1, 2, 3, 4, 5):
@@ -241,7 +242,7 @@ def test_no_people_means_todays_title_view(server, browser):
         if posts:
             break
         page.wait_for_timeout(20)
-    assert posts == [{"watched_date": posts[0]["watched_date"]}]
+    assert posts == [{"watched_date": posts[0]["watched_date"], "live": True}]
     assert errors == []
 
 
@@ -709,7 +710,7 @@ def test_ten_plus_years_switches_the_kids_off_and_sends_only_a_change(server, br
     _mark_stale(page)
     page.click("#btn-watched-today")
     _settled(page, posts, 3)
-    assert set(posts[-1]) == {"watched_date"}
+    assert set(posts[-1]) == {"watched_date", "live"}
     assert errors == []
 
 

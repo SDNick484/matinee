@@ -3,19 +3,19 @@
 **Date:** 2026-11-11
 **Branch:** `feat/ha-events` (one PR)
 **Schema:** unchanged (v9)
-**Status:** proposed in PR #31 (decisions from Nick's prompt 13, 2026-11-11).
+**Status:** proposed in PR #31 (decisions from Nick's prompt 13, 2026-11-11; amended the same day: fires only for the + Watched Today button).
 **Verified against:** `matinee` `main` @ `225af12` (merge of PR #30).
 
 ## 1. Intent
 
-When someone logs a watch for today, Matinee tells Home Assistant, so an automation can react: dim the lights,
+When someone taps + Watched Today, Matinee tells Home Assistant, so an automation can react: dim the lights,
 announce the film, start "movie night". Matinee only reports; Home Assistant decides what to do.
 
 ### Goals
 
 - One new setting, `HA_WEBHOOK_URL`. Empty (the default) turns the feature off and changes nothing.
-- A fire-and-forget JSON `POST` to that URL when a watch is logged **for today**, from the web UI and from the
-  MCP `log_watch` tool alike.
+- A fire-and-forget JSON `POST` to that URL when the web UI's **+ Watched Today** button logs a watch. Log Date and
+  the MCP `log_watch` tool never fire (amendment: Nick wants only the deliberate tap).
 - A failure, timeout or non-2xx answer from Home Assistant is logged and never changes the editor's response.
 
 ### Non-goals
@@ -40,6 +40,8 @@ constant `app.HA_WEBHOOK_URL` (tests monkeypatch it).
 
 `add_watch()` (`POST /admin/api/titles/<id>/watches`) fires after `con.commit()` succeeds, when **all** hold:
 
+0. The body carries `"live": true` (JSON boolean). Only the `+ Watched Today` handler in `static/js/detail.js` sends it;
+   Log Date, MCP and any other client do not, so they never fire. The flag is not stored and not echoed.
 1. `HA_WEBHOOK_URL` is non-empty.
 2. The request carried an explicit `watched_date` (or its alias `watched_at`) and **no** `date_bucket`.
 3. That date equals `dt.date.today().isoformat()`, today in the **server's local time zone** (the same clock
@@ -49,6 +51,7 @@ So these never fire:
 
 | Request body | Why |
 |---|---|
+| today's date without `live: true` (Log Date, MCP `log_watch`) | not the button |
 | `{"watched_date": "2019-07-04"}` | historical |
 | `{"watched_date": null}` or no date at all | dateless |
 | `{"date_bucket": "over_10_years"}` | bucket: `add_watch` *estimates* a date from it, which is not "today" |
@@ -59,17 +62,11 @@ Back-filling years of history therefore never triggers a "movie night".
 Editing afterwards never fires: `PUT .../watches/<id>/attendees`, rating, certification and delete are separate
 routes and do not call the hook. Only the insert does.
 
-### Direct-database MCP mode: it does not fire, and does not need to
+### MCP: never fires
 
-`MatineeClient.log_watch` has one implementation: `_api_request("POST", "/admin/api/titles/<id>/watches", ...)`.
-`MATINEE_DB_PATH` (Mode B in `docs/mcp-setup.md`) only accelerates **reads**: `_get_db()` opens SQLite with
-`?mode=ro`, so that connection cannot write and no MCP code path inserts a watch itself. In both modes the write
-arrives at Flask's `add_watch()`, which is the only place that fires. Consequences:
-
-- REST mode and direct-database mode behave identically: exactly one webhook per logged watch.
-- `mcp_server.py` needs **no code change**. Putting a second hook there would double-fire in REST mode.
-- Tests pin this down (§7): the MCP client is driven against the real Flask app in both modes and must produce
-  one post each, and a write through the direct-database connection must fail.
+`MatineeClient.log_watch` cannot send `live`, so MCP-logged watches never fire, in REST mode and in direct-database
+mode alike (Mode B's SQLite connection is `?mode=ro`, so every write reaches `add_watch()` over REST anyway).
+`mcp_server.py` needs no code change; tests pin both modes to zero posts and a read-only connection.
 
 ## 4. Payload
 
@@ -142,8 +139,10 @@ synchronously so assertions need no sleeps, and records `daemon`.
 | 8 | people defined, `attendees` sent, notes "pizza night" | payload has no notes, no names, no person ids |
 | 9 | `PUT .../attendees` after a today watch | no extra call |
 | 10 | payload builder raises | editor still gets 200, warning logged |
-| 11 | MCP `log_watch` via a REST-mode client against the real app | one POST |
-| 12 | MCP `log_watch` via a client **with** `db_path` set (direct-database mode) | one POST (not two), and a write on `_get_db()` raises `OperationalError` |
+| 11 | MCP `log_watch` with today's date, REST mode | no POST |
+| 12 | MCP `log_watch`, direct-database mode | no POST, and a write on `_get_db()` raises `OperationalError` |
+| 15 | today's date with `live` absent, false, `"true"`, `1` | no call |
+| 16 | `live: true` with a past date, a bucket, or no date | no call |
 | 13 | digital + physical copies; copy with no location; certification override | `formats`/`location`/`certification` per §4 |
 | 14 | static: `.env.example`, installer `add_setting`, init-script `export` line | all three name `HA_WEBHOOK_URL` |
 

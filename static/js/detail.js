@@ -612,7 +612,8 @@ import {
           const todayIso = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
           await api(`${apiPrefix}/titles/${titleId}/watches`, {
             method: "POST",
-            body: { watched_date: todayIso, ...attendeesBody({ date: todayIso }) },
+            // The live flag is what lets Home Assistant hear about it; Log Date and MCP never send it.
+            body: { watched_date: todayIso, live: true, ...attendeesBody({ date: todayIso }) },
           });
           toast("Marked as watched today!");
           await renderDetail(container, titleId);

@@ -86,7 +86,7 @@ After modifying settings, restart the OpenRC service:
 rc-service matinee restart
 ```
 
-**Home Assistant.** Set `HA_WEBHOOK_URL` (a secret; empty = off) and Matinee POSTs a small JSON event to Home Assistant whenever a watch is logged for today, so an automation can dim the lights or announce the film. Back-filled, dateless and bucketed watches never fire, and watch notes and people are never sent. See [docs/home-assistant.md](docs/home-assistant.md).
+**Home Assistant.** Set `HA_WEBHOOK_URL` (a secret; empty = off) and Matinee POSTs a small JSON event to Home Assistant when someone taps **+ Watched Today**, so an automation can log the film, dim the lights or announce it. Log Date, MCP and back-filled watches never fire, and watch notes and people are never sent. See [docs/home-assistant.md](docs/home-assistant.md).
 
 ---
 
