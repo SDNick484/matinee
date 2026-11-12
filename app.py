@@ -41,6 +41,8 @@ from db import SCHEMA, SCHEMA_VERSION, FORMATS, SERVICES, SERVICE_ALIASES, conne
 from clients import clean_upc_title, http_json, http_bytes, TmdbError, tmdb_get, YEAR_RE, split_year  # noqa: F401
 from clients import tmdb_search, us_certification, title_from_tmdb, tmdb_details, omdb_get  # noqa: F401
 from clients import write_omdb_ratings  # noqa: F401
+from images import IMAGES, image_name, delete_images, image_url, MAX_POSTER_BYTES, POSTER_TYPES  # noqa: F401
+from images import sniff_image, poster_file_of, delete_custom_poster  # noqa: F401
 
 
 # ===================================================================== split modules
@@ -49,7 +51,7 @@ from clients import write_omdb_ratings  # noqa: F401
 # tests, `matinee.TMDB_READ_TOKEN = ...` in ops/import_titles.py) also rebinds X in each split module that holds
 # it, so moved code reads the new value as it did when it lived here. db.db() rebinds _standalone_db itself, so
 # app keeps no copy of it and forwards reads and writes to db.py. Patch app.X, not the split module.
-_SPLIT_MODULES = ("settings", "common", "db", "clients")
+_SPLIT_MODULES = ("settings", "common", "db", "clients", "images")
 _FORWARDED = {"_standalone_db": "db"}
 
 
@@ -316,13 +318,6 @@ def _tmdb_error(e):
 
 
 # ======================================================================= image cache
-IMAGES = (("poster_path", "w342", "p342"), ("poster_path", "w780", "p780"), ("backdrop_path", "w780", "b780"))
-
-
-def image_name(tmdb_id, tag):
-    return f"{tmdb_id}-{tag}.jpg"
-
-
 def save_image(url, name):
     """Download to a temp name and os.replace, so a half-written file is never served."""
     try:
@@ -348,40 +343,6 @@ def fetch_images(t):
         ok = bool(t.get(col)) and save_image(f"{TMDB_IMG}/{size}{t[col]}", name)
         got[tag] = name if ok or (t.get(col) and (IMAGE_DIR / name).exists()) else None
     return {"poster_file": got["p342"] or got["p780"], "backdrop_file": got["b780"]}
-
-
-def delete_images(tmdb_id):
-    for _col, _size, tag in IMAGES:
-        (IMAGE_DIR / image_name(tmdb_id, tag)).unlink(missing_ok=True)
-
-
-def image_url(name, fetched_at):
-    return f"/images/{name}?v={urllib.parse.quote(fetched_at or '')}" if name else None
-
-
-# Custom covers: stored flat in IMAGE_DIR as <tmdb_id>-custom-<sha1[:10]>.<ext>, so a new upload
-# gets a new URL and the TMDB files beside it are untouched. Sniffed by magic bytes, not extension.
-MAX_POSTER_BYTES = 8 * 1024 * 1024
-POSTER_TYPES = ((b"\xff\xd8\xff", ".jpg"), (b"\x89PNG\r\n\x1a\n", ".png"))
-
-
-def sniff_image(data):
-    for magic, ext in POSTER_TYPES:
-        if data.startswith(magic):
-            return ext
-    if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
-        return ".webp"
-    return None
-
-
-def poster_file_of(t):
-    """The poster to show: an uploaded cover wins over the cached TMDB one."""
-    return t["custom_poster_file"] or t["poster_file"]
-
-
-def delete_custom_poster(name):
-    if name and "-custom-" in name and "/" not in name:
-        (IMAGE_DIR / name).unlink(missing_ok=True)
 
 
 # ======================================================================= serializers
