@@ -123,6 +123,10 @@ def test_schema_tables_indexes_and_cascade():
 
 
 # ------------------------------------------------------------------- 2.2 copy rules
+# what copy_values adds for a copy with no edition, no code, no purchase date and no price
+NO_DETAILS = {"edition": None, "code_status": "none", "purchased_on": None, "price_cents": None}
+
+
 def test_copy_values():
     with matinee.app.test_request_context():
         with pytest.raises(Exception) as e:
@@ -133,11 +137,11 @@ def test_copy_values():
             matinee.copy_values({"kind": "digital", "format": "Digital 4K"})
         assert "Which service" in e.value.response.get_json()["error"]
         assert matinee.copy_values({"kind": "physical", "format": "4K UHD", "service": "Apple TV"}) == \
-            {"kind": "physical", "format": "4K UHD", "service": None, "location_id": None}
+            {"kind": "physical", "format": "4K UHD", "service": None, "location_id": None, **NO_DETAILS}
         assert matinee.copy_values({"kind": "digital", "format": "Digital HD", "service": "Vudu"}) == \
-            {"kind": "digital", "format": "Digital HD", "service": "Fandango at Home", "location_id": None}
+            {"kind": "digital", "format": "Digital HD", "service": "Fandango at Home", "location_id": None, **NO_DETAILS}
         assert matinee.copy_values({"kind": "digital", "format": "digital hd", "service": "movies anywhere"}) == \
-            {"kind": "digital", "format": "Digital HD", "service": "Movies Anywhere", "location_id": None}
+            {"kind": "digital", "format": "Digital HD", "service": "Movies Anywhere", "location_id": None, **NO_DETAILS}
 
 
 def test_frozen_digital_hd_on_movies_anywhere_saves():

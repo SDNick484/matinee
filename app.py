@@ -36,6 +36,7 @@ from settings import OMDB_API_KEY, HA_WEBHOOK_URL, HA_WEBHOOK_TIMEOUT, TMDB_READ
 from settings import UA  # noqa: F401
 from common import clean, fold, words, search_fold, sort_key, make_err, validate_rating, now_iso  # noqa: F401
 from db import SCHEMA, SCHEMA_VERSION, FORMATS, SERVICES, SERVICE_ALIASES, connect, db, migrate, init_db  # noqa: F401
+from db import CODE_STATUSES, EDITION_MAX, PRICE_MAX_CENTS  # noqa: F401
 from clients import clean_upc_title, http_json, http_bytes, TmdbError, tmdb_get, YEAR_RE, split_year  # noqa: F401
 from clients import tmdb_search, us_certification, title_from_tmdb, tmdb_details, omdb_get  # noqa: F401
 from clients import write_omdb_ratings  # noqa: F401
@@ -411,8 +412,56 @@ WATCH_BUCKET_LABELS = {
 }
 
 
+DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def copy_edition(v):
+    if v is None:
+        return None
+    if not isinstance(v, str) or len(v.strip()) > EDITION_MAX:
+        abort(make_err(400, f"Edition can be up to {EDITION_MAX} characters."))
+    return v.strip() or None
+
+
+def copy_code_status(v):
+    if v is None or (isinstance(v, str) and not v.strip()):
+        return "none"
+    status = v.strip().lower() if isinstance(v, str) else None
+    if status not in CODE_STATUSES:
+        abort(make_err(400, f"Code status must be {', '.join(CODE_STATUSES[:-1])} or {CODE_STATUSES[-1]}."))
+    return status
+
+
+def copy_purchased_on(v):
+    """A real calendar day as YYYY-MM-DD (checked with datetime.date: fromisoformat differs between 3.10 and 3.11+)."""
+    if v is None or (isinstance(v, str) and not v.strip()):
+        return None
+    try:
+        if not isinstance(v, str) or not DATE_RE.match(v.strip()):
+            raise ValueError(v)
+        dt.date(*map(int, v.strip().split("-")))
+    except ValueError:
+        abort(make_err(400, "Purchase date must be a real date like 2026-10-31."))
+    return v.strip()
+
+
+def copy_price_cents(v):
+    """Whole cents, 0 to PRICE_MAX_CENTS; the form converts dollars, the API takes cents (24.99 dollars is 2499)."""
+    if v is None or (isinstance(v, str) and not v.strip()):
+        return None
+    msg = "Price must be a whole number of cents, 0 or more (24.99 dollars is 2499)."
+    if isinstance(v, str) and re.fullmatch(r"\s*-?\d+\s*", v):
+        v = int(v)
+    if isinstance(v, bool) or not isinstance(v, int) or v < 0:
+        abort(make_err(400, msg))
+    if v > PRICE_MAX_CENTS:
+        abort(make_err(400, f"Price can't be more than ${PRICE_MAX_CENTS // 100:,}.00."))
+    return v
+
+
 def copy_values(data):
-    """Validate {kind, format, service, location_id} -> clean values, or abort 400 with a message for the form."""
+    """Validate {kind, format, service, location_id, edition, code_status, purchased_on, price_cents} -> clean values,
+    or abort 400 with a message for the form."""
     kind = (clean(data.get("kind")) or "").lower()
     if kind not in FORMATS:
         abort(make_err(400, "Is it a physical copy or a digital one?"))
@@ -445,7 +494,13 @@ def copy_values(data):
             row = db().execute("SELECT id FROM locations WHERE id=?", (location_id,)).fetchone()
             if not row:
                 abort(make_err(400, "Location does not exist."))
-    return {"kind": kind, "format": fmt, "service": service, "location_id": location_id}
+    code_status = copy_code_status(data.get("code_status"))
+    if kind == "digital" and code_status != "none":
+        abort(make_err(400, "Digital copies don't have a disc code. Code status is for physical copies."))
+    return {"kind": kind, "format": fmt, "service": service, "location_id": location_id,
+            "edition": copy_edition(data.get("edition")), "code_status": code_status,
+            "purchased_on": copy_purchased_on(data.get("purchased_on")),
+            "price_cents": copy_price_cents(data.get("price_cents"))}
 
 
 def tmdb_id_arg(v):
@@ -762,8 +817,10 @@ def add_copy():
                 ratings = omdb_get(t["imdb_id"])
                 if ratings:
                     write_omdb_ratings(con, title_id, t["imdb_id"], ratings)
-    cid = con.execute("INSERT INTO copies(title_id, kind, format, service, location_id, added_by) VALUES (?,?,?,?,?,?)",
-                      (title_id, vals["kind"], vals["format"], vals["service"], vals["location_id"], who())).lastrowid
+    cid = con.execute("INSERT INTO copies(title_id, kind, format, service, location_id, edition, code_status, "
+                      "purchased_on, price_cents, added_by) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                      (title_id, vals["kind"], vals["format"], vals["service"], vals["location_id"], vals["edition"],
+                       vals["code_status"], vals["purchased_on"], vals["price_cents"], who())).lastrowid
     con.commit()
     out = title_detail(title_id, True)
     out["copy_id"] = cid
@@ -782,11 +839,14 @@ def copy_row(copy_id):
 def edit_copy(copy_id):
     cur = copy_row(copy_id)
     data = request.get_json(silent=True) or {}
-    merged = {k: data[k] if k in data else cur[k] for k in ("kind", "format", "service", "location_id")}
+    merged = {k: data[k] if k in data else cur[k] for k in (
+        "kind", "format", "service", "location_id", "edition", "code_status", "purchased_on", "price_cents")}
     vals = copy_values(merged)
     con = db()
-    con.execute("UPDATE copies SET kind=?, format=?, service=?, location_id=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
-                (vals["kind"], vals["format"], vals["service"], vals["location_id"], copy_id))
+    con.execute("UPDATE copies SET kind=?, format=?, service=?, location_id=?, edition=?, code_status=?, "
+                "purchased_on=?, price_cents=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                (vals["kind"], vals["format"], vals["service"], vals["location_id"], vals["edition"],
+                 vals["code_status"], vals["purchased_on"], vals["price_cents"], copy_id))
     con.commit()
     return jsonify(title_detail(cur["title_id"], True))
 

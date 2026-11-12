@@ -15,7 +15,7 @@ from images import image_name, image_url, poster_file_of
 
 
 # ======================================================================= serializers
-PRIVATE_COPY = ("added_by",)
+PRIVATE_COPY = ("added_by", "code_status", "purchased_on", "price_cents")
 PRIVATE_WATCH = ("notes", "attendance", "attendees")  # family diary text and who was there: editors only; dates and counts stay public
 TITLE_COLS = ("tmdb_id", "imdb_id", "title", "sort_title", "search_text", "year", "release_date", "runtime",
               "overview", "certification", "collection_tmdb_id", "collection_name", "tmdb_vote", "tmdb_votes",
