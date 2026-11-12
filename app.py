@@ -21,64 +21,51 @@ Environment (see /etc/conf.d/matinee and .env.example):
   MATINEE_READ_KEY,
   ANTHROPIC_SEARCH_KEY, ANTHROPIC_SEARCH_MODEL, ASK_DAILY_LIMIT
 """
-import csv, datetime as dt, hashlib, hmac, io, ipaddress, json, os, re, sqlite3, sys, threading, time, unicodedata
+import csv, datetime as dt, hashlib, hmac, io, ipaddress, json, os, re, sqlite3, sys, threading, time, types, unicodedata
 import urllib.error, urllib.parse, urllib.request
 from functools import wraps
-from pathlib import Path
 
 from flask import Flask, abort, g, jsonify, make_response, redirect, request, send_from_directory, has_app_context
 from werkzeug.wrappers import Response as WerkzeugResponse
 
 from recommend import (CERT_VALUES, FORMAT_ORDER, SEEN_CTE, ParamError, attendance_of, find_person, has_people,
-                       parse_params, recommend, resolve_audience, sorted_formats, title_seen_by,
-                       unknown_person_message, watch_attendance)
+                       parse_params, recommend, resolve_audience, sorted_formats, title_seen_by, unknown_person_message,
+                       watch_attendance)
 
-APP_NAME = "Matinee"
-APP_DIR = Path(__file__).resolve().parent
-
-# Auto-load config from /etc/conf.d/matinee or local .env if not already set in environment
-def _load_env():
-    for conf_file in [Path("/etc/conf.d/matinee"), APP_DIR / ".env"]:
-        if conf_file.is_file():
-            try:
-                with open(conf_file, "r", encoding="utf-8") as f:
-                    for line in f:
-                        line = line.strip()
-                        if not line or line.startswith("#") or "=" not in line:
-                            continue
-                        if line.startswith("export "):
-                            line = line[7:].strip()
-                        k, v = line.split("=", 1)
-                        k = k.strip()
-                        v = v.strip()
-                        if len(v) >= 2 and ((v.startswith('"') and v.endswith('"')) or (v.startswith("'") and v.endswith("'"))):
-                            v = v[1:-1]
-                        if k and k not in os.environ:
-                            os.environ[k] = v
-            except Exception:
-                pass
-
-_load_env()
-
-DATA_DIR = Path(os.environ.get("DATA_DIR", APP_DIR / "data"))
-IMAGE_DIR = DATA_DIR / "images"
-DB_PATH = DATA_DIR / "matinee.db"
-# bare host: tolerate a pasted "https://team.cloudflareaccess.com/" (same as Cookbook)
-CF_TEAM_DOMAIN = re.sub(r"^https?://", "", os.environ.get("CF_TEAM_DOMAIN", "").strip().strip("'\"")).split("/")[0]
-CF_AUD = os.environ.get("CF_AUD", "").strip()
-ADMIN_EMAILS = {e.strip().lower() for e in os.environ.get("ADMIN_EMAILS", "").split(",") if e.strip()}
-LAN_EDIT = os.environ.get("LAN_EDIT", "1") == "1"
+# Moved out of app.py and re-exported: tests, ops/*.py and ask.py use them as app.<name>.
+from settings import APP_NAME, APP_DIR, _load_env, DATA_DIR, IMAGE_DIR, DB_PATH, CF_TEAM_DOMAIN, CF_AUD  # noqa: F401
+from settings import ADMIN_EMAILS, LAN_EDIT, parse_hosts, LAN_HOSTS, PUBLIC_VIEW, MATINEE_API_KEY  # noqa: F401
+from settings import OMDB_API_KEY, HA_WEBHOOK_URL, HA_WEBHOOK_TIMEOUT, TMDB_READ_TOKEN, TMDB_API, TMDB_IMG  # noqa: F401
+from settings import UA  # noqa: F401
 
 
-def parse_hosts(raw):
-    """'Matinee.LAN, movies.home.arpa' -> {'matinee.lan', 'movies.home.arpa'}"""
-    return {h.strip().lower().rstrip(".") for h in (raw or "").split(",") if h.strip()}
+# ===================================================================== split modules
+# The modules imported above hold code moved out of this file, and app.py re-exports every name it used to define,
+# so `app.X`, `from app import X` and `import app as matinee` work as before. A write to app.X (monkeypatch in the
+# tests, `matinee.TMDB_READ_TOKEN = ...` in ops/import_titles.py) also rebinds X in each split module that holds
+# it, so moved code reads the new value as it did when it lived here. db.db() rebinds _standalone_db itself, so
+# app keeps no copy of it and forwards reads and writes to db.py. Patch app.X, not the split module.
+_SPLIT_MODULES = ("settings",)
+_FORWARDED = {}
 
 
-# host names (besides IP literals and localhost) that a LAN_EDIT request may use; see lan_host()
-LAN_HOSTS = parse_hosts(os.environ.get("LAN_HOSTS", ""))
-PUBLIC_VIEW = os.environ.get("PUBLIC_VIEW", "1") == "1"
-MATINEE_API_KEY = os.environ.get("MATINEE_API_KEY", "").strip()
+class _AppModule(types.ModuleType):
+    def __getattr__(self, name):
+        if name in _FORWARDED:
+            return getattr(sys.modules[_FORWARDED[name]], name)
+        raise AttributeError(f"module {self.__name__!r} has no attribute {name!r}")
+
+    def __setattr__(self, name, value):
+        if name in _FORWARDED:
+            setattr(sys.modules[_FORWARDED[name]], name, value)
+            return
+        super().__setattr__(name, value)
+        for mod in _SPLIT_MODULES:
+            if name in vars(sys.modules[mod]):
+                setattr(sys.modules[mod], name, value)
+
+
+sys.modules[__name__].__class__ = _AppModule
 
 
 def read_key_setting(env):
@@ -89,16 +76,6 @@ def read_key_setting(env):
         return ""
     return key
 
-
-OMDB_API_KEY = os.environ.get("OMDB_API_KEY", "").strip()
-# Home Assistant webhook, POSTed when a watch is logged for today; empty = off. A SECRET: the webhook id in the URL
-# is its only credential, so it is never logged (the host only), never returned by a route, never put in a payload.
-HA_WEBHOOK_URL = os.environ.get("HA_WEBHOOK_URL", "").strip()
-HA_WEBHOOK_TIMEOUT = 3  # seconds per socket operation; the request runs on a daemon thread
-TMDB_READ_TOKEN = os.environ.get("TMDB_READ_TOKEN", "").strip()
-TMDB_API = "https://api.themoviedb.org/3"
-TMDB_IMG = "https://image.tmdb.org/t/p"
-UA = "matinee/1.0 (movie collection tracker; https://github.com/SDNick484/matinee)"
 
 app = Flask(__name__, static_folder=None)
 # a second key that may GET /admin/api (notes included) but never write; see editor_required
