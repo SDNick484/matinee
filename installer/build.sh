@@ -5,7 +5,7 @@ cd "$(dirname "$0")/.."
 STAGE=$(mktemp -d /tmp/matinee-stage.XXXXXX 2>/dev/null || mktemp -d -t matinee-stage.XXXXXX 2>/dev/null || mktemp -d)
 trap 'rm -rf "$STAGE"' EXIT
 mkdir -p dist "$STAGE/matinee"
-cp -r app.py ask.py settings.py common.py db.py clients.py images.py people.py recommend.py mcp_server.py mcp_http.py mcp_remote.py requirements-mcp.txt README.md .env.example ops static tests "$STAGE/matinee/"
+cp -r app.py ask.py settings.py common.py db.py clients.py images.py people.py browse.py recommend.py mcp_server.py mcp_http.py mcp_remote.py requirements-mcp.txt README.md .env.example ops static tests "$STAGE/matinee/"
 
 # Clean cache directories portably (avoid find -exec + which BusyBox find can reject)
 find "$STAGE" \( -name __pycache__ -o -name .pytest_cache \) -exec rm -rf {} \; 2>/dev/null || true
