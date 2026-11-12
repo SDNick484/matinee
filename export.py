@@ -7,7 +7,8 @@ from browse import get_location_path_map
 
 # ============================================================================ export
 EXPORT_COLUMNS = ("title", "year", "tmdb_id", "imdb_id", "certification", "runtime", "kind", "format", "service",
-                  "location_path", "user_rating", "watch_count", "last_watched", "added_on")
+                  "location_path", "user_rating", "watch_count", "last_watched", "added_on",
+                  "edition", "code_status", "purchased_on", "price")   # the last four came with schema v10
 FORMULA_LEAD = ("=", "+", "-", "@", "\t", "\r")   # a spreadsheet would run a text cell that starts like this
 
 
@@ -21,6 +22,11 @@ def csv_cell(v):
     return v
 
 
+def dollars(cents):
+    """2499 -> "24.99" (a string a spreadsheet reads as a number); None stays blank. Never negative: the column is CHECKed."""
+    return None if cents is None else f"{cents // 100}.{cents % 100:02d}"
+
+
 def export_rows(con):
     """One row per owned copy, in EXPORT_COLUMNS order, sorted so two exports diff cleanly. Watch notes are
     editor-only and deliberately absent; the title's household rating and watch history repeat on each row."""
@@ -29,6 +35,7 @@ def export_rows(con):
     for r in con.execute(
             """SELECT t.title, t.year, t.tmdb_id, t.imdb_id, t.certification, t.certification_override, t.runtime,
                       c.kind, c.format, c.service, c.location_id, c.created_at,
+                      c.edition, c.code_status, c.purchased_on, c.price_cents,
                       (SELECT rating FROM user_ratings u WHERE u.title_id=t.id) AS user_rating,
                       (SELECT count(*) FROM watches w WHERE w.title_id=t.id) AS watch_count,
                       (SELECT MAX(watched_date) FROM watches w WHERE w.title_id=t.id) AS last_watched
@@ -37,7 +44,8 @@ def export_rows(con):
         rows.append([r["title"], r["year"], r["tmdb_id"], r["imdb_id"],
                      r["certification_override"] or r["certification"], r["runtime"],
                      r["kind"], r["format"], r["service"], paths.get(r["location_id"]),
-                     r["user_rating"], r["watch_count"], r["last_watched"], (r["created_at"] or "")[:10]])
+                     r["user_rating"], r["watch_count"], r["last_watched"], (r["created_at"] or "")[:10],
+                     r["edition"], r["code_status"], r["purchased_on"], dollars(r["price_cents"])])
     return rows
 
 
