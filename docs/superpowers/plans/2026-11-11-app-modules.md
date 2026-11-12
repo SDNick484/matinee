@@ -66,7 +66,9 @@ Chosen approach:
    undo, and plain assignment all go through `setattr`, so a moved function sees the patched value exactly as it
    did when it lived in `app.py`. This applies to settings and to patched functions alike.
 4. **`_standalone_db` is forwarded, not copied.** `db.db()` rebinds it with `global`, so a copy in `app` would go
-   stale. `app` keeps none: `_AppModule.__getattr__` and `__setattr__` forward that name to `db.py`.
+   stale. `app` keeps none: `_AppModule._standalone_db` is a property that reads and writes `db.py`'s. It has to be
+   a data descriptor: pytest 9.2's monkeypatch reads the old value from the instance `__dict__` unless one is in the
+   way, and would otherwise record "unset" and delete the name on undo (found by CI on this PR).
 
 Patch `app.X`, never the split module. The existing tests prove this unmodified (in particular `test_lan_security.py`,
 `test_read_key.py`, `test_omdb.py`, `test_refresh_titles.py` and `test_import.py`).

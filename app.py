@@ -57,22 +57,18 @@ from export import EXPORT_COLUMNS, FORMULA_LEAD, csv_cell, export_rows, export_c
 # The modules imported above hold code moved out of this file, and app.py re-exports every name it used to define,
 # so `app.X`, `from app import X` and `import app as matinee` work as before. A write to app.X (monkeypatch in the
 # tests, `matinee.TMDB_READ_TOKEN = ...` in ops/import_titles.py) also rebinds X in each split module that holds
-# it, so moved code reads the new value as it did when it lived here. db.db() rebinds _standalone_db itself, so
-# app keeps no copy of it and forwards reads and writes to db.py. Patch app.X, not the split module.
+# it, so moved code reads the new value as it did when it lived here. Patch app.X, not the split module.
 _SPLIT_MODULES = ("settings", "common", "db", "clients", "images", "people", "browse", "export")
-_FORWARDED = {"_standalone_db": "db"}
 
 
 class _AppModule(types.ModuleType):
-    def __getattr__(self, name):
-        if name in _FORWARDED:
-            return getattr(sys.modules[_FORWARDED[name]], name)
-        raise AttributeError(f"module {self.__name__!r} has no attribute {name!r}")
+    # db.db() rebinds _standalone_db itself, so app keeps no copy: this property reads and writes db.py's. It is a
+    # data descriptor on purpose: monkeypatch (pytest >= 9.2) then records and restores the live value through it,
+    # instead of finding no `_standalone_db` in app's __dict__ and deleting the name on undo.
+    _standalone_db = property(lambda self: sys.modules["db"]._standalone_db,
+                              lambda self, value: setattr(sys.modules["db"], "_standalone_db", value))
 
     def __setattr__(self, name, value):
-        if name in _FORWARDED:
-            setattr(sys.modules[_FORWARDED[name]], name, value)
-            return
         super().__setattr__(name, value)
         for mod in _SPLIT_MODULES:
             if name in vars(sys.modules[mod]):
