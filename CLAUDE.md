@@ -1,9 +1,17 @@
 # Matinee — rules for agents and contributors
 
-Self-hosted, phone-first movie collection tracker (physical discs + digital libraries). Single-file Flask app
-(`app.py`), SQLite, vanilla-JS SPA (`static/`, native ES modules in `static/js/`), a FastMCP server
-(`mcp_server.py`, `mcp_http.py`), an Ask feature (`ask.py`), and an Alpine/OpenRC installer (`installer/`). Read
-the code before proposing changes; trust the code over any doc that disagrees.
+Self-hosted, phone-first movie collection tracker (physical discs + digital libraries). A Flask app (`app.py`:
+the Flask object, auth, pages and every route) with route-free code in sibling modules (`settings.py`,
+`common.py`, `db.py`, `clients.py`, `images.py`, `people.py`, `browse.py`, `export.py`), SQLite, vanilla-JS SPA
+(`static/`, native ES modules in `static/js/`), a FastMCP server (`mcp_server.py`, `mcp_http.py`), an Ask
+feature (`ask.py`), and an Alpine/OpenRC installer (`installer/`). Read the code before proposing changes; trust
+the code over any doc that disagrees.
+
+**Python modules.** The sibling modules never import `app` (or `ask`), and none holds the Flask object, so a
+route, an `@app` hook or an `app.logger` call stays in `app.py`. `app.py` re-exports every moved name: patch and
+read `app.X` (tests, `ops/*.py`), never the sibling module, because `_AppModule` copies a write to `app.X` into
+each module that holds `X`. A new module goes in `_SPLIT_MODULES` and in `installer/build.sh`'s `cp` line
+(`tests/test_installer_static.py` fails otherwise).
 
 ## Engineering rules
 

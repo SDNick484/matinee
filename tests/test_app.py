@@ -96,7 +96,7 @@ def test_setup_head_exports_all_env_vars():
     # /etc/conf.d/matinee is root-only (chmod 600) and _load_env() swallows the PermissionError, so this
     # export line is the only way a setting reaches gunicorn. Every name the app reads must be on it.
     read = set()
-    for f in ("app.py", "ask.py"):
+    for f in ("app.py", "ask.py", *(f"{m}.py" for m in matinee._SPLIT_MODULES)):
         src = (Path(matinee.APP_DIR) / f).read_text()
         read |= set(re.findall(r'(?:os\.environ\.get|env_int)\(\s*"([A-Z_]+)"', src))
     assert len(read) >= 13, sorted(read)          # guards the regex itself against silently matching nothing
@@ -164,7 +164,7 @@ def test_access_cloudflare_without_jwt_and_lan(monkeypatch):
                                  "https://family.cloudflareaccess.com/", " 'http://family.cloudflareaccess.com/x' "])
 def test_cf_team_domain_is_normalised_to_a_bare_host(raw):
     # README once showed an https:// value; app.py builds https://{CF_TEAM_DOMAIN}/cdn-cgi/access/certs
-    src = (Path(matinee.__file__)).read_text(encoding="utf-8")
+    src = (Path(matinee.APP_DIR) / "settings.py").read_text(encoding="utf-8")
     line = next(l for l in src.splitlines() if l.startswith("CF_TEAM_DOMAIN ="))
     ns = {"os": type("O", (), {"environ": {"CF_TEAM_DOMAIN": raw}})(), "re": re}
     exec(line, ns)

@@ -255,6 +255,12 @@ python3 app.py
 python3 -m pytest -q tests
 ```
 
+Code layout: `app.py` holds the Flask app, auth, pages and every route. Route-free code lives beside it:
+`settings.py` (environment), `common.py` (shared helpers), `db.py` (schema, `migrate()`, connections),
+`clients.py` (TMDB, OMDb, UPC titles), `images.py` (image cache), `people.py` (people and attendance),
+`browse.py` (the read handlers served under `/api` and `/admin/api`) and `export.py` (CSV). `ask.py`,
+`recommend.py` and the MCP server (`mcp_server.py`, `mcp_http.py`, `mcp_remote.py`) sit beside them too.
+
 ---
 
 ## Credits & Attribution

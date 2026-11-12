@@ -101,6 +101,16 @@ def test_build_copies_mcp_files():
         assert f in BUILD, f
 
 
+def test_build_ships_every_top_level_module():
+    # Every *.py beside app.py is imported by an entry point (gunicorn app:app, ops/*.py, matinee-mcp), so a module
+    # left out of build.sh would install cleanly and then fail at import on the host.
+    cp = next(line for line in BUILD.splitlines() if line.startswith("cp -r ")).split()
+    modules = sorted(p.name for p in ROOT.glob("*.py"))
+    assert "app.py" in modules and "ask.py" in modules, modules
+    missing = [m for m in modules if m not in cp]
+    assert not missing, f"installer/build.sh does not ship {missing}"
+
+
 def test_build_ships_js_modules():
     # cp -r of the whole static/ directory carries static/js/ (and its package.json) into the payload.
     cp = next(line for line in BUILD.splitlines() if line.startswith("cp -r "))

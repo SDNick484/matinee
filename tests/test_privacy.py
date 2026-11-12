@@ -119,7 +119,9 @@ PRIVATE_BRANCHING = {"title_detail": "private", "watch_out": "public", "list_tit
 
 def _app_tree():
     import ast
-    src = (Path(__file__).resolve().parent.parent / "app.py").read_text()
+    from app import _SPLIT_MODULES  # app.py and the modules split out of it, scanned as one
+    root = Path(__file__).resolve().parent.parent
+    src = "\n".join((root / f).read_text() for f in ("app.py", *(f"{m}.py" for m in _SPLIT_MODULES)))
     return ast.parse(src)
 
 
@@ -218,7 +220,7 @@ def test_public_routes_never_touch_attendance_outside_a_private_branch():
 
 
 # ------------------------------------------------------------------ every public route, at runtime (review F4)
-# The AST guard above reads app.py only; the public routes also call recommend.py, and a route added later would
+# The AST guard above reads app.py and its split modules only; the public routes also call recommend.py, and a route added later would
 # not be in a fixed list. This walks app.url_map, so a new /api/ rule is covered (or fails as unknown) the day it
 # lands, with people, recorded and assumed attendance and a note in the database.
 
