@@ -12,6 +12,7 @@ from settings import IMAGE_DIR
 from common import clean, words, make_err
 from db import FORMATS, SERVICES, db
 from images import image_name, image_url, poster_file_of
+from wishlist import get_want, wishes_for_title
 
 
 # ======================================================================= serializers
@@ -173,6 +174,8 @@ def title_detail(title_id, private):
         extra = watch_attendance(con, watches)
         d["watches"] = [watch_out({**dict(w), **extra[w["id"]]}, True) for w in watches]
         d["seen_by"] = title_seen_by(con, title_id)
+        d["want"] = get_want(con, title_id)           # editors only, like attendance: never in a public response
+        d["wishes"] = wishes_for_title(con, title_id)
     else:
         d["watches"] = [watch_out(w, False) for w in watches]
     d["last_watched"] = watches[0]["watched_date"] if watches else None
