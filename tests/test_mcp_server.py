@@ -451,18 +451,19 @@ def test_where_is_returns_title_id_db_and_rest(test_env, monkeypatch):
 
 
 ALL_TOOLS = {"search_collection", "get_movie", "where_is", "get_recommendations",
-             "get_collection_stats", "list_people", "rate_movie", "log_watch", "search_tmdb", "add_movie"}
+             "get_collection_stats", "list_people", "rate_movie", "log_watch", "search_tmdb", "add_movie",
+             "get_wishlist", "want_movie"}
 
 
 def _names(server):
     return {t.name for t in asyncio.run(server.list_tools())}
 
 
-def test_build_server_writes_true_lists_ten_tools():
+def test_build_server_writes_true_lists_twelve_tools():
     assert _names(mcp_server.build_server(writes=True)) == ALL_TOOLS
 
 
-def test_build_server_writes_false_lists_seven_tools():
+def test_build_server_writes_false_lists_eight_tools():
     assert _names(mcp_server.build_server(writes=False)) == ALL_TOOLS - set(mcp_server.WRITE_TOOLS)
 
 
@@ -662,6 +663,8 @@ EXPECTED_HINTS = {
     "rate_movie": (False, True, True, False),
     "log_watch": (False, False, False, False),
     "add_movie": (False, False, False, True),
+    "get_wishlist": (True, False, True, False),
+    "want_movie": (False, True, True, True),    # replaces the title's earlier want; may create the title from TMDB
 }
 
 
@@ -694,7 +697,7 @@ def test_annotation_kwargs_guarded_on_tool_signature():
     assert "annotations" in mcp_server._annotation_kwargs(WithAnnotations, "where_is")
 
 
-def test_annotation_table_covers_exactly_the_ten_tools():
+def test_annotation_table_covers_exactly_the_twelve_tools():
     assert set(mcp_server.TOOL_HINTS) == set(EXPECTED_HINTS)
 
 
@@ -1070,10 +1073,10 @@ def test_log_watch_with_attendees_refuses_an_older_server(monkeypatch):
 
 def test_tool_lists_per_level():
     sizes = {level: _names(mcp_server.build_server(writes=level)) for level in ("none", "log", "all")}
-    assert (len(sizes["none"]), len(sizes["log"]), len(sizes["all"])) == (7, 9, 10)
-    assert "list_people" in sizes["none"]
+    assert (len(sizes["none"]), len(sizes["log"]), len(sizes["all"])) == (8, 10, 12)
+    assert {"list_people", "get_wishlist"} <= sizes["none"] and "want_movie" not in sizes["log"]
     assert sizes["log"] - sizes["none"] == {"rate_movie", "log_watch"}
-    assert sizes["all"] - sizes["log"] == {"add_movie"}
+    assert sizes["all"] - sizes["log"] == {"add_movie", "want_movie"}
 
 
 def test_readonly_instructions_name_no_write_tool():
@@ -1370,3 +1373,76 @@ def test_ask_cannot_see_the_editor_fields(steelbook_env):
         assert "Steelbook" in text
         for secret in ("unredeemed", "2026-10-31", "2499", *PRIVATE_COPY_KEYS):
             assert secret not in text, secret
+
+
+# --------------------------------------------------------------- the wish list (schema v11)
+WANTS = {"wants": [
+    {"title_id": 12, "tmdb_id": 155, "title": "The Dark Knight", "year": 2008, "poster_url": "/images/155-p342.jpg",
+     "wanted_format": "4K UHD", "note": "steelbook if they have it", "owned_formats": ["Digital HD"],
+     "pushed_to": ["Lauren"], "created_at": "2026-11-12 18:04:11"},
+    {"title_id": 14, "tmdb_id": 129, "title": "Spirited Away", "year": 2001, "poster_url": None,
+     "wanted_format": None, "note": None, "owned_formats": [], "pushed_to": [], "created_at": "2026-11-01 10:00:00"}]}
+
+
+def test_get_wishlist_reads_the_keyed_admin_api(monkeypatch):
+    client = mcp_server.MatineeClient(api_url="http://fake-host", api_key="rk", db_path="")
+    seen = []
+    monkeypatch.setattr(client, "_api_request", lambda m, p, d=None: seen.append((m, p)) or WANTS)
+    out = client.get_wishlist()
+    assert seen == [("GET", "/admin/api/wants")]
+    assert out[0] == {"id": 12, "title": "The Dark Knight", "year": 2008, "wanted_format": "4K UHD",
+                      "owned_formats": ["Digital HD"], "note": "steelbook if they have it", "pushed_to": ["Lauren"]}
+    assert out[1]["wanted_format"] is None and out[1]["pushed_to"] == []   # "any format" stays null
+    assert set(out[0]) == {"id", "title", "year", "wanted_format", "owned_formats", "note", "pushed_to"}
+
+
+def test_get_wishlist_needs_a_key_and_never_reads_sqlite(test_env, monkeypatch):
+    """Wants are editor-only and Ask runs on direct SQLite: with a database path and no key the tool refuses."""
+    con = db()
+    con.execute("INSERT INTO wants (title_id, wanted_format) VALUES (1, '4K UHD')")
+    con.commit()
+    client = mcp_server.MatineeClient(api_url="http://fake-host", api_key="", db_path=str(test_env))
+    monkeypatch.setattr(client, "_api_request", lambda *a, **k: pytest.fail("no key: nothing should be requested"))
+    with pytest.raises(mcp_server.MatineeError) as e:
+        client.get_wishlist()
+    assert "Matinee key" in str(e.value)
+    keyed = mcp_server.MatineeClient(api_url="http://fake-host", api_key="rk", db_path=str(test_env))
+    monkeypatch.setattr(keyed, "_api_request", lambda m, p, d=None: WANTS)   # REST even though a database is set
+    assert [w["title"] for w in keyed.get_wishlist()] == ["The Dark Knight", "Spirited Away"]
+
+
+def test_want_movie_posts_a_title_or_a_tmdb_id(monkeypatch):
+    client = mcp_server.MatineeClient(api_url="http://fake-host", api_key="wk", db_path="")
+    sent = []
+    detail = {"id": 14, "title": "Spirited Away", "year": 2001, "owned": False, "copies": [],
+              "want": {"wanted_format": "4K UHD", "note": None, "created_at": "2026-11-12 18:04:11"}}
+    monkeypatch.setattr(client, "_api_request", lambda m, p, d=None: sent.append((m, p, d)) or detail)
+    out = client.want_movie(tmdb_id=129, format="4K UHD")
+    assert sent == [("POST", "/admin/api/wants", {"tmdb_id": 129, "format": "4K UHD"})]
+    assert out == {"id": 14, "title": "Spirited Away", "year": 2001, "owned": False, "wanted_format": "4K UHD",
+                   "note": None, "summary": "Spirited Away (2001) is on the wish list for 4K UHD."}
+    sent.clear()
+    client.want_movie(title_id=12, note="steelbook")
+    assert sent == [("POST", "/admin/api/wants", {"title_id": 12, "note": "steelbook"})]   # no format = any copy
+
+
+def test_want_movie_needs_exactly_one_title(monkeypatch):
+    client = mcp_server.MatineeClient(api_url="http://fake-host", api_key="wk", db_path="")
+    monkeypatch.setattr(client, "_api_request", lambda *a, **k: pytest.fail("nothing should be sent"))
+    for kwargs in ({}, {"title_id": 1, "tmdb_id": 2}):
+        with pytest.raises(mcp_server.MatineeError, match="exactly one of title_id or tmdb_id"):
+            client.want_movie(**kwargs)
+
+
+def test_instructions_name_the_wish_list_read_tool_at_every_level():
+    # want_movie is described by its own tool description; the shared instructions name read tools only, so no level
+    # points at a tool it does not register.
+    for level in ("none", "log", "all"):
+        text = mcp_server.instructions_for(level)
+        assert "get_wishlist" in text and "want_movie" not in text
+
+
+def test_the_tools_describe_themselves_to_the_model():
+    tools = {t.name: t for t in asyncio.run(mcp_server.mcp.list_tools())}
+    assert "wish list" in tools["get_wishlist"].description.lower()
+    assert "tmdb_id" in tools["want_movie"].description and "title_id" in tools["want_movie"].description

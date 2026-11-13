@@ -83,6 +83,8 @@ TOOL_HINTS: Dict[str, Tuple[bool, bool, bool, bool]] = {
     "rate_movie": (False, True, True, False),   # overwrites or clears the previous rating
     "log_watch": (False, False, False, False),  # appends a watch row each call
     "add_movie": (False, False, False, True),   # inserts a copy each call, may fetch TMDB
+    "get_wishlist": (True, False, True, False),  # editor-only data: the keyed path only
+    "want_movie": (False, True, True, True),    # replaces the title's earlier want; may create the title from TMDB
 }
 
 
@@ -792,6 +794,39 @@ class MatineeClient:
         }
         return self._api_request("POST", "/admin/api/copies", payload)
 
+    def get_wishlist(self) -> List[Dict[str, Any]]:
+        """The movies the family wants to buy, newest first. Wants are editor-only, so this reads GET
+        /admin/api/wants with a key and never direct SQLite (Ask runs on SQLite and sends results to Anthropic)."""
+        if not self.api_key:
+            raise MatineeError("The wish list is only available with a Matinee key (MATINEE_API_KEY or MATINEE_READ_KEY).")
+        wants = self._api_request("GET", "/admin/api/wants").get("wants", [])
+        return [{"id": w.get("title_id"), "title": w.get("title"), "year": w.get("year"),
+                 "wanted_format": w.get("wanted_format"), "owned_formats": w.get("owned_formats") or [],
+                 "note": w.get("note"), "pushed_to": w.get("pushed_to") or []} for w in wants]
+
+    def want_movie(
+        self,
+        title_id: Optional[int] = None,
+        tmdb_id: Optional[int] = None,
+        format: Optional[str] = None,
+        note: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Put a movie on the wish list (a title not in Matinee is created with no copies)."""
+        if (title_id is None) == (tmdb_id is None):
+            raise MatineeError("Pass exactly one of title_id or tmdb_id.")
+        payload: Dict[str, Any] = {"title_id": title_id} if title_id is not None else {"tmdb_id": tmdb_id}
+        if format:
+            payload["format"] = format
+        if note:
+            payload["note"] = note
+        d = self._api_request("POST", "/admin/api/wants", payload)
+        want = d.get("want") or {}
+        year = f" ({d.get('year')})" if d.get("year") else ""
+        wanted = want.get("wanted_format")
+        return {"id": d.get("id"), "title": d.get("title"), "year": d.get("year"), "owned": d.get("owned"),
+                "wanted_format": wanted, "note": want.get("note"),
+                "summary": f"{d.get('title')}{year} is on the wish list for {wanted or 'any format'}."}
+
 
 SERVER_INSTRUCTIONS = """\
 Matinee is the family's own collection of physical discs and digital copies.
@@ -801,6 +836,7 @@ Matinee is the family's own collection of physical discs and digital copies.
 - "The girls" or "the kids": audience="kids". "Us two", "date night": audience="adults". A named person: audience="Alice". After watching, pass attendees to log_watch only when someone was missing. \
 If a tool answers that no people are set up, repeat the call without audience.
 - After a pick, "where is it?": call where_is(title). After watching: call log_watch, then rate_movie if the user gives a rating.
+- "What do we want to buy" or "what is on the wish list": call get_wishlist. A movie can be wanted in a format the family does not own yet even when another format is owned.
 """
 # For build_server(writes=False): the remote read-only service has no log_watch or rate_movie to point at.
 READONLY_INSTRUCTIONS = SERVER_INSTRUCTIONS.replace(
@@ -835,9 +871,10 @@ def _make_server(instructions: str = SERVER_INSTRUCTIONS):
 
 _default_client = MatineeClient()
 
-WRITE_TOOLS = ("rate_movie", "log_watch", "add_movie")
+WRITE_TOOLS = ("rate_movie", "log_watch", "add_movie", "want_movie")
 # Which write tools each level registers. "log" is what the phone needs to log a movie night: it can record a
-# watch and a rating but cannot import titles (add_movie spends TMDB quota and adds copies).
+# watch and a rating but cannot import titles (add_movie spends TMDB quota and adds copies; want_movie can create a
+# title too, so it is at "all" only).
 WRITE_LEVELS: Dict[str, Tuple[str, ...]] = {
     "none": (),
     "log": ("rate_movie", "log_watch"),
@@ -987,6 +1024,27 @@ def add_movie(
     return _default_client.add_movie(tmdb_id, kind=kind, format=format, service=service)
 
 
+def get_wishlist() -> List[Dict[str, Any]]:
+    """List the movies the family wants to buy (the wish list), newest first: title, year, the format wanted
+    (null = any copy), the formats already owned, a note, and the names of whose Wish Lists app list it was
+    pushed to. Needs a Matinee key; a want is private to the family."""
+    return _default_client.get_wishlist()
+
+
+def want_movie(
+    title_id: Optional[int] = None,
+    tmdb_id: Optional[int] = None,
+    format: Optional[Literal["4K UHD", "Blu-ray", "3D Blu-ray", "DVD", "VHS", "Digital 4K", "Digital HD",
+                              "Digital SD"]] = None,
+    note: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Put a movie on the wish list. Pass exactly one of title_id (a movie Matinee already has) or tmdb_id (from
+    search_tmdb; the title is created with no copies). format is the format wanted; leave it out for any copy.
+    note is up to 140 characters. A title has one want: calling again replaces it. Adding a copy of that format
+    later ends the want. Pushing it to a person's list in the Wish Lists app is done in the Matinee app."""
+    return _default_client.want_movie(title_id=title_id, tmdb_id=tmdb_id, format=format, note=note)
+
+
 def resource_stats() -> str:
     """Collection statistics summary."""
     stats = _default_client.get_collection_stats()
@@ -1029,8 +1087,9 @@ def prompt_log_movie_night(movie_title: str = "") -> str:
 
 
 def build_server(*, writes=True):
-    """Build a MCP server. `writes` is True (all ten tools), False (the seven read tools) or a level from
-    WRITE_LEVELS: "none", "log" (adds rate_movie and log_watch: nine tools) or "all" (adds add_movie: ten).
+    """Build a MCP server. `writes` is True (all twelve tools), False (the eight read tools) or a level from
+    WRITE_LEVELS: "none", "log" (adds rate_movie and log_watch: ten tools) or "all" (adds add_movie and want_movie:
+    twelve).
     Anything else raises ValueError.
 
     Tool functions are module-level and read _default_client at call time.
@@ -1044,9 +1103,9 @@ def build_server(*, writes=True):
         server.tool(**_annotation_kwargs(FastMCP, fn.__name__))(fn)
 
     for fn in (search_collection, get_movie, where_is, get_recommendations, get_collection_stats, list_people,
-               search_tmdb):
+               search_tmdb, get_wishlist):
         register(fn)
-    for fn in (rate_movie, log_watch, add_movie):
+    for fn in (rate_movie, log_watch, add_movie, want_movie):
         if fn.__name__ in WRITE_LEVELS[level]:
             register(fn)
     server.resource("matinee://stats")(resource_stats)

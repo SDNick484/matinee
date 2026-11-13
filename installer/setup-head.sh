@@ -117,9 +117,9 @@ add_setting "$CONF" WISHLIST_URL "http://127.0.0.1:8766" "Family Wish Lists app 
 add_setting "$CONF" WISHLIST_MOVIE_URL '"https://www.amazon.com/s?k={q}"' "Shopping search link on a pushed wish; {q} becomes the title, year and wanted format"
 # Remote MCP (matinee-mcp). MCP_HTTP_BIND must be this host's LAN address because cloudflared runs in Docker.
 add_setting "$CONF" MATINEE_MCP_READONLY 1 "1 = the Claude app can only read (MATINEE_MCP_WRITES is ignored); 0 = MATINEE_MCP_WRITES decides what it may write"
-# A host that already runs with writes on (READONLY=0) keeps all nine tools; every other host starts at none.
+# A host that already runs with writes on (READONLY=0) keeps every tool; every other host starts at none.
 MCP_WRITES_DEFAULT=$(mcp_level "$(conf_val MATINEE_MCP_READONLY)" "")
-add_setting "$CONF" MATINEE_MCP_WRITES "$MCP_WRITES_DEFAULT" "none, log (adds rate_movie and log_watch) or all (adds add_movie); only used while MATINEE_MCP_READONLY=0"
+add_setting "$CONF" MATINEE_MCP_WRITES "$MCP_WRITES_DEFAULT" "none, log (adds rate_movie and log_watch) or all (adds add_movie and want_movie); only used while MATINEE_MCP_READONLY=0"
 add_setting "$CONF" MCP_HTTP_BIND "$IP" "Address matinee-mcp listens on (cloudflared reaches it here)"
 add_setting "$CONF" MCP_HTTP_PORT 8719 "Port matinee-mcp listens on"
 add_setting "$CONF" MCP_HTTP_PATH /matinee/mcp "URL path of the MCP endpoint (the tunnel route is ^/matinee/)"
