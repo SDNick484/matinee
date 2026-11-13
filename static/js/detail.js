@@ -6,6 +6,7 @@ import {
 } from "./icons.js";
 import { navigate } from "./router.js";
 import { activePeople, personDotsHTML, personTogglesHTML, readToggles } from "./people.js";
+import { bindListChips, listChipsHTML } from "./lists.js";
 import {
   downscaleImage, MAX_COVER_BYTES, openCopyModal, openCoverPreviewModal, openEditCopyModal
 } from "./forms.js";
@@ -224,6 +225,7 @@ import { bindWantSection, wantSectionHTML } from "./wishlist.js";
                     </div>`
                   : ""
               }
+              ${listChipsHTML(title)}
               ${
                 isAdmin
                   ? `
@@ -411,6 +413,9 @@ import { bindWantSection, wantSectionHTML } from "./wishlist.js";
       e.preventDefault();
       location.hash = state.grid.lastHash || "#/";
     });
+
+    // List chips (everyone) and the editor's Lists sheet, which re-renders this page after a change.
+    bindListChips(container, title, () => renderDetail(container, titleId));
 
     // Editor controls (7.4)
     if (isAdmin) {
