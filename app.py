@@ -57,6 +57,9 @@ from browse import api_locations, collection_stats, recommendations  # noqa: F40
 from wishlist import ALL_FORMATS, want_format_arg, want_note_arg, want_satisfied_by, get_want, wishes_for_title  # noqa: F401
 from wishlist import list_wants, want_query, wish_item, wishlist_call, wishlist_available  # noqa: F401
 from export import EXPORT_COLUMNS, FORMULA_LEAD, csv_cell, dollars, export_rows, export_csv  # noqa: F401
+from lists import ListError, WATCH_SOON, has_lists, pacific_today, list_out, all_lists, get_list_row  # noqa: F401
+from lists import find_list, title_lists, list_members, create_list, update_list, delete_list  # noqa: F401
+from lists import set_membership, clear_watch_soon  # noqa: F401
 
 
 # ===================================================================== split modules
@@ -64,7 +67,7 @@ from export import EXPORT_COLUMNS, FORMULA_LEAD, csv_cell, dollars, export_rows,
 # so `app.X`, `from app import X` and `import app as matinee` work as before. A write to app.X (monkeypatch in the
 # tests, `matinee.TMDB_READ_TOKEN = ...` in ops/import_titles.py) also rebinds X in each split module that holds
 # it, so moved code reads the new value as it did when it lived here. Patch app.X, not the split module.
-_SPLIT_MODULES = ("settings", "common", "db", "clients", "images", "people", "browse", "export", "wishlist")
+_SPLIT_MODULES = ("settings", "common", "db", "clients", "images", "people", "browse", "export", "wishlist", "lists")
 
 
 class _AppModule(types.ModuleType):
@@ -327,6 +330,11 @@ def _tmdb_error(e):
     return make_err(e.status, e.message, reason=e.reason)
 
 
+@app.errorhandler(ListError)
+def _list_error(e):
+    return make_err(e.status, str(e))
+
+
 # ======================================================================= image cache
 def save_image(url, name):
     """Download to a temp name and os.replace, so a half-written file is never served."""
@@ -365,6 +373,24 @@ def export_csv_route():
         "Content-Disposition": f'attachment; filename="{filename}"', "Cache-Control": "no-store"})
 
 
+# ============================================================================= lists
+# Public reads (spec 2026-11-12-lists-design §4): lists, windows and members; `seen_by` only for an editor.
+def lists_index(private):
+    today = pacific_today()
+    return jsonify(today=today.isoformat(), lists=all_lists(db(), today))
+
+
+def list_page(list_id, private):
+    con = db()
+    row = get_list_row(con, list_id)
+    if row is None:
+        abort(make_err(404, "No such list"))
+    titles = list_members(con, list_id, private)
+    for t in titles:
+        t["poster_url"] = image_url(t.pop("poster_file"), t.pop("fetched_at"))
+    return jsonify(**list_out(row, pacific_today()), titles=titles)
+
+
 for prefix, private in (("/api", False), ("/admin/api", True)):
     def _wrap(fn, private=private):
         def f(*a, **kw):
@@ -378,6 +404,8 @@ for prefix, private in (("/api", False), ("/admin/api", True)):
     app.add_url_rule(f"{prefix}/stats", f"stats_{private}", _wrap(collection_stats))
     app.add_url_rule(f"{prefix}/recommendations", f"recommendations_{private}", _wrap(recommendations))
     app.add_url_rule(f"{prefix}/locations", f"locations_{private}", _wrap(api_locations))
+    app.add_url_rule(f"{prefix}/lists", f"lists_{private}", _wrap(lists_index))
+    app.add_url_rule(f"{prefix}/lists/<int:list_id>", f"list_{private}", _wrap(list_page))
 
 
 
@@ -821,6 +849,55 @@ def delete_person(person_id):
     con.execute("DELETE FROM people WHERE id = ?", (person_id,))
     con.commit()
     return jsonify(ok=True, deleted_id=person_id)
+
+
+# ----------------------------------------------------------------------------- lists (editor writes)
+def _list_or_404(con, list_id):
+    row = get_list_row(con, list_id)
+    if row is None:
+        abort(make_err(404, "No such list"))
+    return row
+
+
+@app.post("/admin/api/lists")
+@editor_required
+def api_add_list():
+    con = db()
+    lid = create_list(con, request.get_json(silent=True))
+    con.commit()
+    return jsonify(ok=True, list=list_out(get_list_row(con, lid), pacific_today())), 201
+
+
+@app.put("/admin/api/lists/<int:list_id>")
+@editor_required
+def api_edit_list(list_id):
+    con = db()
+    update_list(con, _list_or_404(con, list_id), request.get_json(silent=True))
+    con.commit()
+    return jsonify(ok=True, list=list_out(get_list_row(con, list_id), pacific_today()))
+
+
+@app.delete("/admin/api/lists/<int:list_id>")
+@editor_required
+def api_delete_list(list_id):
+    con = db()
+    delete_list(con, _list_or_404(con, list_id))
+    con.commit()
+    return jsonify(ok=True, deleted_id=list_id)
+
+
+@app.route("/admin/api/lists/<int:list_id>/titles/<int:title_id>", methods=["PUT", "DELETE"])
+@editor_required
+def api_list_membership(list_id, title_id):
+    con = db()
+    _list_or_404(con, list_id)
+    if not con.execute("SELECT 1 FROM titles WHERE id = ?", (title_id,)).fetchone():
+        abort(make_err(404, "No such title"))
+    on = request.method == "PUT"
+    set_membership(con, list_id, title_id, on)
+    con.commit()
+    return jsonify(ok=True, list_id=list_id, title_id=title_id, on=on,
+                   lists=title_lists(con, title_id, pacific_today()))
 
 
 @app.post("/admin/api/copies")

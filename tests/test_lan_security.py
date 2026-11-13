@@ -88,7 +88,7 @@ def editor_routes():
 
 def build(rule, title_id):
     path = rule
-    for arg in ("title_id", "copy_id", "loc_id", "watch_id", "person_id", "tmdb_id", "upc"):
+    for arg in ("title_id", "copy_id", "loc_id", "watch_id", "person_id", "list_id", "tmdb_id", "upc"):
         value = str(title_id) if arg == "title_id" else URL_ARGS.get(arg, "1")
         path = path.replace(f"<int:{arg}>", value).replace(f"<{arg}>", value)
     assert "<" not in path, path
