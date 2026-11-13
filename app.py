@@ -1190,6 +1190,9 @@ def add_watch(title_id):
     try:
         cur = con.execute("INSERT INTO watches(title_id, watched_date, notes, date_bucket) VALUES (?, ?, ?, ?)",
                           (title_id, watched_date, notes, date_bucket))
+        # A watch with a real date takes the title off Watch Soon in the same transaction (spec 2026-11-12-lists
+        # decision 10). A bucket or no date is back-filled history, and seasonal and custom lists never change.
+        removed_from = clear_watch_soon(con, title_id) if explicit_date and not date_bucket else []
         set_attendees(con, cur.lastrowid, attendees)
         con.commit()
     except Exception:
@@ -1200,7 +1203,7 @@ def add_watch(title_id):
     # Only the + Watched Today button sends live: true (json true, not a string); Log Date and MCP never do.
     if data.get("live") is True and explicit_date and not date_bucket and watched_date == dt.date.today().isoformat():
         fire_watch_event(con, title_id, watched_date)
-    return jsonify(ok=True, watch=watch_response(con, cur.lastrowid, title_id))
+    return jsonify(ok=True, watch=watch_response(con, cur.lastrowid, title_id), removed_from=removed_from)
 
 
 @app.put("/admin/api/titles/<int:title_id>/watches/<int:watch_id>/attendees")

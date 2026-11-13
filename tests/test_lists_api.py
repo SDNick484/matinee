@@ -155,6 +155,70 @@ def test_reorder_and_window_edit(client, family):
                                                                                  "Christmas"]
 
 
+# ------------------------------------------------------------------ a watch clears Watch Soon only
+
+
+def _watch(client, tid, **body):
+    res = client.post(f"/admin/api/titles/{tid}/watches", json=body, headers=H)
+    assert res.status_code == 200, res.get_json()
+    return res.get_json()
+
+
+def _on(client, tid):
+    return [x["name"] for x in client.get(f"/api/titles/{tid}").get_json()["lists"]]
+
+
+def test_a_dated_watch_takes_the_title_off_watch_soon(client, family):
+    paddington = family["ids"]["Paddington 2"]
+    out = _watch(client, paddington, watched_date=dt.date.today().isoformat())
+    assert out["removed_from"] == ["Watch Soon"]
+    assert _on(client, paddington) == []
+    assert _watch(client, paddington, watched_date=dt.date.today().isoformat())["removed_from"] == []
+
+
+def test_a_watch_never_changes_a_seasonal_list(client, family):
+    elf = family["ids"]["Elf"]
+    out = _watch(client, elf, watched_date="2025-12-24")
+    assert out["removed_from"] == ["Watch Soon"]
+    assert _on(client, elf) == ["Christmas"]
+
+
+@pytest.mark.parametrize("body", [{"date_bucket": "over_10_years"}, {"date_bucket": "unknown"},
+                                  {"date_bucket": "past_year"}, {},
+                                  {"watched_date": "2026-11-01", "date_bucket": "past_year"}])
+def test_an_undated_or_bucketed_watch_leaves_watch_soon(client, family, body):
+    spirited = family["ids"]["Spirited Away"]
+    assert _watch(client, spirited, **body)["removed_from"] == []
+    assert _on(client, spirited) == ["Watch Soon"]
+
+
+def test_a_failed_watch_leaves_watch_soon(client, family):
+    spirited = family["ids"]["Spirited Away"]
+    res = client.post(f"/admin/api/titles/{spirited}/watches", json={"watched_date": "2026-11-12",
+                                                                      "attendees": ["Nobody"]}, headers=H)
+    assert res.status_code == 400
+    assert _on(client, spirited) == ["Watch Soon"]
+
+
+def test_the_removal_rolls_back_with_the_watch(client, family, monkeypatch):
+    spirited = family["ids"]["Spirited Away"]
+
+    cleared = []
+
+    def boom(con, watch_id, ids):   # runs after the Watch Soon row is deleted, before the commit
+        cleared.append(con.execute("SELECT count(*) FROM list_titles WHERE title_id = ?", (spirited,)).fetchone()[0])
+        raise RuntimeError("disk full")
+    monkeypatch.setattr("app.set_attendees", boom)
+    app.config["PROPAGATE_EXCEPTIONS"] = False
+    try:
+        res = client.post(f"/admin/api/titles/{spirited}/watches", json={"watched_date": "2026-11-12"}, headers=H)
+    finally:
+        app.config["PROPAGATE_EXCEPTIONS"] = None
+    assert res.status_code == 500 and cleared == [0]
+    assert _on(client, spirited) == ["Watch Soon"]
+    assert db().execute("SELECT count(*) FROM watches WHERE title_id = ?", (spirited,)).fetchone()[0] == 0
+
+
 def test_title_detail_lists_use_the_pacific_date(client, family, monkeypatch):
     monkeypatch.setattr("app.pacific_today", lambda now=None: dt.date(2026, 10, 15))
     assert matinee.title_detail  # re-exported
