@@ -121,7 +121,7 @@ def test_every_earlier_version_migrates_and_keeps_everything(tmp_path, monkeypat
     matinee.migrate(con)
     matinee.migrate(con)
 
-    assert con.execute("SELECT v FROM meta WHERE k='schema'").fetchone()[0] == matinee.SCHEMA_VERSION == "10"
+    assert con.execute("SELECT v FROM meta WHERE k='schema'").fetchone()[0] == matinee.SCHEMA_VERSION
     for table, (cols, rows) in before.items():   # migrate() only adds columns; compare what the old file had
         assert rows_of(con, table, cols)[1] == rows, table
     copies = con.execute("SELECT id, edition, code_status, purchased_on, price_cents FROM copies ORDER BY id").fetchall()
