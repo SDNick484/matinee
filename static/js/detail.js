@@ -9,6 +9,7 @@ import { activePeople, personDotsHTML, personTogglesHTML, readToggles } from "./
 import {
   downscaleImage, MAX_COVER_BYTES, openCopyModal, openCoverPreviewModal, openEditCopyModal
 } from "./forms.js";
+import { bindWantSection, wantSectionHTML } from "./wishlist.js";
 
   // ================================================================= 7.3 Detail Page
   // Editor-only line under a copy: the digital code (discs only, and only while it says something), the purchase date
@@ -379,6 +380,8 @@ import {
           `
           }
 
+          ${isAdmin ? wantSectionHTML(title) : ""}
+
           ${
             isAdmin
               ? `
@@ -437,6 +440,8 @@ import {
       document.getElementById("btn-add-copy")?.addEventListener("click", () => {
         openCopyModal({ tmdb_id: title.tmdb_id, title_id: title.id, title: title.title });
       });
+
+      bindWantSection(title, () => renderDetail(container, titleId));
 
       container.querySelectorAll(".btn-edit-copy").forEach((btn) => {
         btn.addEventListener("click", () => {

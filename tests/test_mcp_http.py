@@ -40,8 +40,8 @@ TEAM = "nick.cloudflareaccess.com"
 EMAIL = "nick@example.com"
 HOST = "mcp.example.com"
 READ_TOOLS = {"search_collection", "get_movie", "where_is", "get_recommendations",
-              "get_collection_stats", "list_people", "search_tmdb"}
-WRITE = {"rate_movie", "log_watch", "add_movie"}
+              "get_collection_stats", "list_people", "search_tmdb", "get_wishlist"}
+WRITE = {"rate_movie", "log_watch", "add_movie", "want_movie"}
 
 
 class FakeMatinee:
@@ -690,7 +690,7 @@ def test_log_level_refuses_add_movie(env, signing_key, where_is_calls, token, fa
     assert [r for r in fake_matinee.requests if r[0] in ("POST", "PUT", "DELETE")] == []
 
 
-def test_main_log_level_uses_the_api_key_and_registers_nine_tools(served):
+def test_main_log_level_uses_the_api_key_and_registers_ten_tools(served):
     import asyncio
 
     import mcp_http

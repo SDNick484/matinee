@@ -1,0 +1,55 @@
+{
+ "adult": false,
+ "id": 346648,
+ "imdb_id": "tt4468740",
+ "title": "Paddington 2",
+ "original_title": "Paddington 2",
+ "original_language": "en",
+ "release_date": "2017-11-09",
+ "runtime": 103,
+ "status": "Released",
+ "overview": "Paddington 2 (2017).",
+ "tagline": "",
+ "vote_average": 7.8,
+ "vote_count": 3000,
+ "poster_path": "/poster346648.jpg",
+ "backdrop_path": "/backdrop346648.jpg",
+ "belongs_to_collection": null,
+ "genres": [
+  {
+   "id": 10751,
+   "name": "Family"
+  },
+  {
+   "id": 35,
+   "name": "Comedy"
+  },
+  {
+   "id": 12,
+   "name": "Adventure"
+  }
+ ],
+ "release_dates": {
+  "results": [
+   {
+    "iso_3166_1": "US",
+    "release_dates": [
+     {
+      "certification": "PG",
+      "iso_639_1": "",
+      "note": "",
+      "release_date": "2000-01-01T00:00:00.000Z",
+      "type": 3
+     },
+     {
+      "certification": "",
+      "iso_639_1": "",
+      "note": "",
+      "release_date": "2001-01-01T00:00:00.000Z",
+      "type": 4
+     }
+    ]
+   }
+  ]
+ }
+}

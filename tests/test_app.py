@@ -1070,7 +1070,7 @@ CARD_KEYS = {"id", "title", "year", "poster_url", "poster_file", "formats", "has
 def test_schema_v8_ask_log_idempotent():
     matinee.init_db()
     con = matinee.connect()
-    assert con.execute("SELECT v FROM meta WHERE k='schema'").fetchone()[0] == "10"
+    assert con.execute("SELECT v FROM meta WHERE k='schema'").fetchone()[0] == matinee.SCHEMA_VERSION
     cols = [r[1] for r in con.execute("PRAGMA table_info(ask_log)")]
     assert cols == ["id", "ts", "editor", "rounds", "input_tokens", "output_tokens", "status"]
     matinee.migrate(con)

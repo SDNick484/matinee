@@ -34,6 +34,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr("app.MATINEE_API_KEY", "k")
     monkeypatch.setattr("app.TMDB_READ_TOKEN", "")
     monkeypatch.setattr("app.OMDB_API_KEY", "")
+    monkeypatch.setattr("app.WISHLIST_URL", "")   # /admin/api/me probes the Wish Lists app; none is configured here
     monkeypatch.setattr("app._standalone_db", None)
     monkeypatch.setattr("app.http_json", _no_network)
     monkeypatch.setattr("app.http_bytes", _no_network)

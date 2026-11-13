@@ -109,7 +109,9 @@ def test_public_detail_has_no_attendance_keys_or_names(client, dark_knight):
 # Names that carry attendance: the keys and every helper that produces or edits them.
 ATTENDANCE_NAMES = {"attendees", "attendance", "seen_by", "watch_attendance", "title_seen_by", "watch_response",
                     "set_attendees", "resolve_people", "put_watch_attendees", "attendance_of", "find_person",
-                    "SEEN_CTE", "watch_people", "PRIVATE_WATCH"}
+                    "SEEN_CTE", "watch_people", "PRIVATE_WATCH",
+                    # the wish list (schema v11) is editor-only too
+                    "get_want", "wishes_for_title", "wanted_format", "wishes", "wish_items"}
 # Shared helpers that legitimately branch on `private`: function -> the branch every use must sit in
 # ("private" = inside `if private:`, "public" = inside `if not private:`, the PRIVATE_WATCH strip).
 # list_titles reads unseen_by / attendance (and SEEN_CTE) only inside `if private:`; a public request that names
@@ -226,8 +228,9 @@ def test_public_routes_never_touch_attendance_outside_a_private_branch():
 
 NAMES = ("Nick", "Lauren", "Midge", "Alice", "Paige")
 PRIVATE_KEYS = {"notes", "attendance", "attendees", "seen_by", "not_seen_by", "people", "audience",
-                "code_status", "purchased_on", "price_cents", "unredeemed_codes"}
-COPY_SECRETS = ("unredeemed", "2026-10-31", "2499")   # the Dark Knight Steelbook's code status, purchase date, price
+                "code_status", "purchased_on", "price_cents", "unredeemed_codes",
+                "want", "wanted_format", "wishes", "pushed_to", "owned_formats"}
+COPY_SECRETS = ("unredeemed", "2026-10-31", "2499", "for Grandma Ann")   # the Dark Knight Steelbook's code status, purchase date, price
 RECOMMEND_MODES = ("forgotten_gems", "never_watched", "quick_picks", "genre_mood", "next_in_franchise",
                    "start_franchise")
 
@@ -252,8 +255,15 @@ def family_with_history(client):
         if tid == ids[0]:
             for n in ("Nick", "Midge"):
                 con.execute("INSERT INTO watch_people (watch_id, person_id) VALUES (?, ?)", (wid, people[n]))
+    # the wish list: The Dark Knight is wanted on 4K UHD and was pushed to Lauren; Spirited Away is Want to buy (no
+    # copies, so not in the grid, but /api/titles/<id> still answers for it)
+    sa = seed_title(con, 129, copies=())
+    con.execute("INSERT INTO wants (title_id, wanted_format, note) VALUES (?, 'Blu-ray', 'for Grandma Ann')", (ids[0],))
+    con.execute("INSERT INTO wants (title_id, wanted_format) VALUES (?, '4K UHD')", (sa,))
+    con.execute("INSERT INTO wish_items (title_id, person_id, person_name, item_id, wanted_format) "
+                "VALUES (?, 3, 'Lauren', 55, 'Blu-ray')", (ids[0],))
     con.commit()
-    return ids
+    return [*ids, sa]
 
 
 def _public_urls(ids):

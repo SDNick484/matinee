@@ -101,11 +101,12 @@ CREATE TABLE IF NOT EXISTS omdb_ratings (
 );
 CREATE INDEX IF NOT EXISTS omdb_ratings_fetched ON omdb_ratings(fetched_at);
 """
-SCHEMA_VERSION = "10"
+SCHEMA_VERSION = "11"
 
 # v10 copy details. The limits mirror the CHECKs on `copies`; the app validates first and answers 400 with a sentence.
 CODE_STATUSES = ("none", "unredeemed", "redeemed", "expired")   # a physical copy's digital code; digital copies stay "none"
 EDITION_MAX = 60                                                # characters
+NOTE_MAX = 140                                                  # v11: characters in a want's note; mirrors the CHECK on `wants`
 PRICE_MAX_CENTS = 10_000_000                                    # $100,000.00; stops a huge integer reaching SQLite
 COPY_DETAIL_COLUMNS = (
     ("edition", "TEXT CHECK (edition IS NULL OR length(edition) <= 60)"),
@@ -303,6 +304,28 @@ def migrate(con):
     for col, ddl in COPY_DETAIL_COLUMNS:
         if copy_cols and col not in copy_cols:
             con.execute(f"ALTER TABLE copies ADD COLUMN {col} {ddl}")
+
+    # v11: the wish list. A want is one row per title, independent of copies (a title can be wanted on 4K UHD while
+    # owned on Digital HD). wanted_format is NULL ("any copy") or one of FORMATS, checked in the app like copies.format.
+    # wish_items remembers what was pushed to the family Wish Lists app and survives the want being cleared.
+    con.executescript("""
+    CREATE TABLE IF NOT EXISTS wants (
+      title_id      INTEGER PRIMARY KEY REFERENCES titles(id) ON DELETE CASCADE,
+      wanted_format TEXT,
+      note          TEXT CHECK (note IS NULL OR length(note) <= 140),
+      created_at    TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS wish_items (
+      id            INTEGER PRIMARY KEY,
+      title_id      INTEGER NOT NULL REFERENCES titles(id) ON DELETE CASCADE,
+      person_id     INTEGER,
+      person_name   TEXT,
+      item_id       INTEGER,
+      wanted_format TEXT,
+      created_at    TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS wish_items_title ON wish_items(title_id);
+    """)
 
 
 def init_db():

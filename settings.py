@@ -62,3 +62,11 @@ TMDB_READ_TOKEN = os.environ.get("TMDB_READ_TOKEN", "").strip()
 TMDB_API = "https://api.themoviedb.org/3"
 TMDB_IMG = "https://image.tmdb.org/t/p"
 UA = "matinee/1.0 (movie collection tracker; https://github.com/SDNick484/matinee)"
+
+# The family Wish Lists app, on the same host (wishlist.py). The URL is set even when the app is not installed;
+# wishlist_available() checks that something answers. WISHLIST_MOVIE_URL is a shopping-search template: {q} becomes
+# "Spirited Away 2001 4K UHD".
+DEFAULT_WISHLIST_URL = "http://127.0.0.1:8766"
+DEFAULT_WISHLIST_MOVIE_URL = "https://www.amazon.com/s?k={q}"
+WISHLIST_URL = os.environ.get("WISHLIST_URL", DEFAULT_WISHLIST_URL).strip().rstrip("/")
+WISHLIST_MOVIE_URL = os.environ.get("WISHLIST_MOVIE_URL", DEFAULT_WISHLIST_MOVIE_URL).strip() or DEFAULT_WISHLIST_MOVIE_URL

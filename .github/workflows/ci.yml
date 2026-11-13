@@ -57,7 +57,7 @@ jobs:
           cache: "pip"
           cache-dependency-path: "requirements-dev.txt"
 
-      # Playwright is installed here only: the Python matrix and the Alpine job skip tests/test_ask_ui.py and tests/test_people_ui.py.
+      # Playwright is installed here only: the Python matrix and the Alpine job skip tests/test_ask_ui.py, tests/test_people_ui.py and tests/test_wishlist_ui.py.
       - name: Install dependencies and Chromium
         run: |
           python -m pip install --upgrade pip
@@ -66,7 +66,7 @@ jobs:
 
       - name: Run the UI smoke tests
         run: |
-          python -m pytest -v -rs --junitxml=ui-smoke.xml tests/test_ask_ui.py tests/test_people_ui.py
+          python -m pytest -v -rs --junitxml=ui-smoke.xml tests/test_ask_ui.py tests/test_people_ui.py tests/test_wishlist_ui.py
 
       # importorskip and the "Chromium won't launch" skip would otherwise let this job pass without rendering anything.
       - name: Fail if any smoke test was skipped
@@ -80,7 +80,7 @@ jobs:
           tests, skipped = int(suite.get("tests")), int(suite.get("skipped"))
           print(f"tests={tests} skipped={skipped}")
           if tests == 0 or skipped:
-              sys.exit("ui-smoke must run every test in tests/test_ask_ui.py and tests/test_people_ui.py; none may be skipped")
+              sys.exit("ui-smoke must run every test in tests/test_ask_ui.py, tests/test_people_ui.py and tests/test_wishlist_ui.py; none may be skipped")
           PY
 
   test-python:

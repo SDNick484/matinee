@@ -4,6 +4,7 @@ import { icon } from "./icons.js";
 import { navigate } from "./router.js";
 import { renderDetail } from "./detail.js";
 import { resumeBarcodeScanner } from "./add.js";
+import { openWantModal } from "./wishlist.js";
 
   // ================================================================= "More": edition, digital code, date, price
   // One disclosure shared by the add and edit forms (ids start with `p`: "add-" or "edit-"). Closed on a new copy,
@@ -167,6 +168,7 @@ import { resumeBarcodeScanner } from "./add.js";
 
             <div class="form-actions">
               <button type="button" class="btn btn-ghost" id="btn-modal-cancel">Cancel</button>
+              <button type="button" class="btn btn-ghost" id="btn-want-to-buy" style="display:none">Want to buy…</button>
               <button type="submit" class="btn" id="btn-save-copy">Save Copy</button>
               <button type="button" class="btn btn-ghost" id="btn-save-add-another">Save &amp; Add Another</button>
             </div>
@@ -279,10 +281,21 @@ import { resumeBarcodeScanner } from "./add.js";
     updateServiceGrid();
     renderCodeGrid("add-", formState);
 
+    // "Want to buy…" sits beside Save Copy for a movie Matinee doesn't have yet: it creates the title with no copies
+    // plus a want. A movie that is already here (even as an earlier Want to buy) uses the title page's Want….
+    function showWantButton(owned) {
+      const btn = document.getElementById("btn-want-to-buy");
+      if (btn) btn.style.display = owned && !owned.title_id && !movie.title_id ? "" : "none";
+    }
+    document.getElementById("btn-want-to-buy")?.addEventListener("click", () => {
+      openWantModal({ tmdb_id: movie.tmdb_id, title: movie.title, year: movie.year });
+    });
+
     // Check what is already owned from TMDB API
     try {
       const owned = await api(`/admin/api/tmdb/${movie.tmdb_id}/owned`);
       formState.ownedCopies = owned.copies || [];
+      showWantButton(owned);
       const statusBox = document.getElementById("modal-owned-status");
       if (statusBox) {
         if (prefill.duplicateNotice) {
@@ -338,13 +351,14 @@ import { resumeBarcodeScanner } from "./add.js";
           body: payload,
         });
 
-        toast("Copy added to collection");
+        toast(res.want_cleared ? "Copy added. It's off the wish list." : "Copy added to collection");
 
         if (andAddAnother) {
           // Re-fetch owned status and update form
           try {
             const owned = await api(`/admin/api/tmdb/${movie.tmdb_id}/owned`);
             formState.ownedCopies = owned.copies || [];
+            showWantButton(owned);
             const statusBox = document.getElementById("modal-owned-status");
             if (statusBox && owned.summary) {
               statusBox.innerHTML = `
@@ -364,7 +378,12 @@ import { resumeBarcodeScanner } from "./add.js";
           closeModal();
           // Navigate to title detail page
           const targetId = res.id || res.title_id;
-          if (targetId) {
+          if (targetId && location.hash.split("?")[0] === `#/t/${targetId}`) {
+            // already on this title (Add copy from its page): setting the same hash fires no hashchange, so the
+            // page would keep showing the old copies and want. Redraw it.
+            const view = document.getElementById("view");
+            if (view) renderDetail(view, targetId);
+          } else if (targetId) {
             navigate(`#/t/${targetId}`);
           } else {
             navigate("#/");

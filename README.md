@@ -194,7 +194,7 @@ Matinee includes an official Python **Model Context Protocol (MCP)** server (`mc
 - **Certification Override**: Editors can set a title's US rating (G, PG, PG-13, R, NC-17, or NR) from the title view when TMDB's rating is wrong or missing. The override survives TMDB refreshes, and clearing it restores TMDB's value. It is written with `PUT /admin/api/titles/<id>/certification`, which requires an editor session and returns 401 for anonymous requests.
 - **Read & Write MCP Tools**: Search collection, fetch full title details, query recommendations, log watches with notes, set personal 0.0–10.0 ratings, and import movies from TMDB.
 
-`MATINEE_MCP_WRITES=none|log|all` chooses which write tools the remote service offers: `log` adds `rate_movie` and `log_watch` (log a movie night from the phone), `all` also adds `add_movie` (see [docs/mcp-setup.md](docs/mcp-setup.md) §4.4).
+`MATINEE_MCP_WRITES=none|log|all` chooses which write tools the remote service offers: `log` adds `rate_movie` and `log_watch` (log a movie night from the phone), `all` also adds `add_movie` and `want_movie` (see [docs/mcp-setup.md](docs/mcp-setup.md) §4.4).
 
 See [docs/mcp-setup.md](docs/mcp-setup.md) for full configuration blocks and prompt workflows. To use the tools from the Claude app on your phone, see "Remote access from the Claude app" in the same file (a `matinee-mcp` service behind Cloudflare Access, read-only by default).
 
@@ -218,6 +218,20 @@ Editors can keep a short list of people (for example Nick, Lauren, Midge, Alice 
 | `Alice,Paige` or `4,5` | The named people or ids, case-insensitive; these may include inactive people |
 
 A title counts as unwatched for an audience only if nobody in it has seen it, so Movie Night with Kids and Never Watched offers films none of the kids has seen. The grid has a matching "Unseen by" filter. A person's name cannot be `everyone`, `adults` or `kids`, contain a comma, or be all digits. See [docs/mcp-setup.md](docs/mcp-setup.md) for the MCP side.
+
+---
+
+## Family wish list (optional)
+
+Editors can mark a movie **Want to buy**, optionally for one format (`4K UHD`, `Blu-ray`, `Digital 4K` …) with a note of up to 140 characters. A want is its own record, not a copy status, because the family often owns one format and wants another: *The Dark Knight* owned as Digital HD on Movies Anywhere can be wanted on 4K UHD. A want with no format means "any copy".
+
+- **Where.** On a title page, **Want…** (a format or Any, plus a note). In **Add Movie**, a title Matinee doesn't have yet gets **Want to buy…** beside **Save Copy**; it creates the title with no copies plus the want. A title with no copies and a want reads **Want to buy**; an owned one reads **Wanted: 4K UHD**. The editor-only **Wanted** view in the header lists every want as poster rows with its format chip and who it was pushed to. It is not on the dashboard.
+- **Clearing.** Adding a copy of the format wanted (or any copy, for a want with no format) removes the want in the same step; the response says `"want_cleared": true`. A Blu-ray leaves a 4K UHD want alone.
+- **Editors only.** Wants and wish list history are never in the public `/api`: no `want`, `wanted_format` or `wishes` key, and a title with no copies stays out of the public grid.
+- **Wish Lists app.** If the family Wish Lists app runs on the same server, a title with a want gets **Add to a wish list…**. It adds the movie to the chosen person's list with a shopping link built from the title, year and wanted format (for example `Spirited Away 2001 4K UHD`, set by `WISHLIST_MOVIE_URL`, whose `{q}` is replaced) and the notes `Movie · 4K UHD · TMDB 129`. It does this through the Wish Lists app's own API on localhost (`WISHLIST_URL`, default `http://127.0.0.1:8766`), so the wish list itself is unchanged, and the button shows only while that app answers. People come from the Wish Lists app, not from Matinee's People. Purchase status is never read here, so there are no spoilers.
+- **MCP.** `get_wishlist` lists the wants (every write level, key required); `want_movie` adds one (write level `all`). See [docs/mcp-setup.md](docs/mcp-setup.md).
+
+Not built yet: an "owned on DVD or VHS only" upgrade report, per-person wants inside Matinee, and a CSV export of wants.
 
 ---
 
@@ -263,7 +277,7 @@ python3 -m pytest -q tests
 Code layout: `app.py` holds the Flask app, auth, pages and every route. Route-free code lives beside it:
 `settings.py` (environment), `common.py` (shared helpers), `db.py` (schema, `migrate()`, connections),
 `clients.py` (TMDB, OMDb, UPC titles), `images.py` (image cache), `people.py` (people and attendance),
-`browse.py` (the read handlers served under `/api` and `/admin/api`) and `export.py` (CSV). `ask.py`,
+`browse.py` (the read handlers served under `/api` and `/admin/api`), `export.py` (CSV) and `wishlist.py` (wants and the Wish Lists app link). `ask.py`,
 `recommend.py` and the MCP server (`mcp_server.py`, `mcp_http.py`, `mcp_remote.py`) sit beside them too.
 
 ---

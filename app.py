@@ -4,6 +4,8 @@ Flask + SQLite web application; metadata and posters come from TMDB.
 Model:  title (one movie, keyed by TMDB id; cached TMDB metadata + local poster/backdrop)
           -> copy (one owned instance: physical or digital, format, service for digital)
         A title with no copies is kept but is not "owned" and does not show in the grid.
+        want (editors only, wishlist.py): one per title, optionally for a format; "Want to buy" is a title with no
+          copies and a want. A copy that satisfies it ends it.
 
 Public:  /                 poster grid, detail pages, About (no editor emails)
          /api/...          read-only JSON
@@ -19,7 +21,7 @@ Health:  /healthz          {ok, titles, copies}
 Environment (see /etc/conf.d/matinee and .env.example):
   PORT, DATA_DIR, CF_TEAM_DOMAIN, CF_AUD, ADMIN_EMAILS, LAN_EDIT, LAN_HOSTS, PUBLIC_VIEW, TMDB_READ_TOKEN, MATINEE_API_KEY,
   MATINEE_READ_KEY,
-  ANTHROPIC_SEARCH_KEY, ANTHROPIC_SEARCH_MODEL, ASK_DAILY_LIMIT
+  ANTHROPIC_SEARCH_KEY, ANTHROPIC_SEARCH_MODEL, ASK_DAILY_LIMIT, WISHLIST_URL, WISHLIST_MOVIE_URL
 """
 import datetime as dt, hashlib, hmac, ipaddress, json, os, re, sys, threading, time, types
 import urllib.error, urllib.parse, urllib.request
@@ -33,10 +35,10 @@ from recommend import CERT_VALUES, FORMAT_ORDER, sorted_formats
 from settings import APP_NAME, APP_DIR, _load_env, DATA_DIR, IMAGE_DIR, DB_PATH, CF_TEAM_DOMAIN, CF_AUD  # noqa: F401
 from settings import ADMIN_EMAILS, LAN_EDIT, parse_hosts, LAN_HOSTS, PUBLIC_VIEW, MATINEE_API_KEY  # noqa: F401
 from settings import OMDB_API_KEY, HA_WEBHOOK_URL, HA_WEBHOOK_TIMEOUT, TMDB_READ_TOKEN, TMDB_API, TMDB_IMG  # noqa: F401
-from settings import UA  # noqa: F401
+from settings import UA, WISHLIST_URL, WISHLIST_MOVIE_URL  # noqa: F401
 from common import clean, fold, words, search_fold, sort_key, make_err, validate_rating, now_iso  # noqa: F401
 from db import SCHEMA, SCHEMA_VERSION, FORMATS, SERVICES, SERVICE_ALIASES, connect, db, migrate, init_db  # noqa: F401
-from db import CODE_STATUSES, EDITION_MAX, PRICE_MAX_CENTS  # noqa: F401
+from db import CODE_STATUSES, EDITION_MAX, NOTE_MAX, PRICE_MAX_CENTS  # noqa: F401
 from clients import clean_upc_title, http_json, http_bytes, TmdbError, tmdb_get, YEAR_RE, split_year  # noqa: F401
 from clients import tmdb_search, us_certification, title_from_tmdb, tmdb_details, omdb_get  # noqa: F401
 from clients import write_omdb_ratings  # noqa: F401
@@ -52,6 +54,8 @@ from browse import like_escape, QUALITY_MAP, CARD_SELECT, _card, title_cards, PE
 from browse import PEOPLE_PARAMS_PUBLIC_ERROR, people_params_refused, list_titles, get_title, facets  # noqa: F401
 from browse import CODE_PARAM_PUBLIC_ERROR, CODE_PARAM_VALUE_ERROR, code_param_refused  # noqa: F401
 from browse import api_locations, collection_stats, recommendations  # noqa: F401
+from wishlist import ALL_FORMATS, want_format_arg, want_note_arg, want_satisfied_by, get_want, wishes_for_title  # noqa: F401
+from wishlist import list_wants, want_query, wish_item, wishlist_call, wishlist_available  # noqa: F401
 from export import EXPORT_COLUMNS, FORMULA_LEAD, csv_cell, dollars, export_rows, export_csv  # noqa: F401
 
 
@@ -60,7 +64,7 @@ from export import EXPORT_COLUMNS, FORMULA_LEAD, csv_cell, dollars, export_rows,
 # so `app.X`, `from app import X` and `import app as matinee` work as before. A write to app.X (monkeypatch in the
 # tests, `matinee.TMDB_READ_TOKEN = ...` in ops/import_titles.py) also rebinds X in each split module that holds
 # it, so moved code reads the new value as it did when it lived here. Patch app.X, not the split module.
-_SPLIT_MODULES = ("settings", "common", "db", "clients", "images", "people", "browse", "export")
+_SPLIT_MODULES = ("settings", "common", "db", "clients", "images", "people", "browse", "export", "wishlist")
 
 
 class _AppModule(types.ModuleType):
@@ -386,7 +390,8 @@ def me_public():
 @editor_required
 def me():
     import ask
-    return jsonify(editor=True, email=g.editor, tmdb=bool(TMDB_READ_TOKEN), ask=ask.enabled())
+    return jsonify(editor=True, email=g.editor, tmdb=bool(TMDB_READ_TOKEN), ask=ask.enabled(),
+                   wishlist=wishlist_available())
 
 
 # ============================================================================ writes
@@ -531,6 +536,34 @@ def write_title(con, t, files, title_id=None):
         con.execute("DELETE FROM title_genres WHERE title_id=?", (title_id,))
     con.executemany("INSERT OR IGNORE INTO title_genres(title_id, genre_id) VALUES (?,?)",
                     [(title_id, gid) for gid, _ in t["genres"]])
+    return title_id
+
+
+def ensure_title(con, data):
+    """The id of the title a write names by `title_id` or `tmdb_id`, creating it (no copies) from TMDB when the
+    catalog doesn't have it yet. A title already here costs no TMDB call; a TMDB failure raises TmdbError before
+    anything is written. Shared by add_copy and the want routes."""
+    if data.get("title_id"):
+        try:
+            title_id = int(data["title_id"])
+        except (ValueError, TypeError):
+            abort(make_err(400, "title_id must be a number"))
+        row = con.execute("SELECT id FROM titles WHERE id=?", (title_id,)).fetchone()
+        if not row:
+            abort(make_err(404, "No such title"))
+        return title_id
+    tmdb_id = tmdb_id_arg(data.get("tmdb_id"))
+    row = con.execute("SELECT id FROM titles WHERE tmdb_id=?", (tmdb_id,)).fetchone()
+    if row:  # already in the catalog: no TMDB call
+        return row["id"]
+    t = tmdb_details(tmdb_id)  # raises before anything is written
+    files = fetch_images(t)
+    row = con.execute("SELECT id FROM titles WHERE tmdb_id=?", (tmdb_id,)).fetchone()  # added meanwhile?
+    title_id = row["id"] if row else write_title(con, t, files)
+    if t.get("imdb_id") and OMDB_API_KEY:
+        ratings = omdb_get(t["imdb_id"])
+        if ratings:
+            write_omdb_ratings(con, title_id, t["imdb_id"], ratings)
     return title_id
 
 
@@ -796,35 +829,21 @@ def add_copy():
     data = request.get_json(silent=True) or {}
     vals = copy_values(data)
     con = db()
-    if data.get("title_id"):
-        try:
-            title_id = int(data["title_id"])
-        except (ValueError, TypeError):
-            abort(make_err(400, "title_id must be a number"))
-        row = con.execute("SELECT id FROM titles WHERE id=?", (title_id,)).fetchone()
-        if not row:
-            abort(make_err(404, "No such title"))
-    else:
-        tmdb_id = tmdb_id_arg(data.get("tmdb_id"))
-        row = con.execute("SELECT id FROM titles WHERE tmdb_id=?", (tmdb_id,)).fetchone()
-        if row:  # already in the catalog: no TMDB call
-            title_id = row["id"]
-        else:
-            t = tmdb_details(tmdb_id)  # raises before anything is written
-            files = fetch_images(t)
-            row = con.execute("SELECT id FROM titles WHERE tmdb_id=?", (tmdb_id,)).fetchone()  # added meanwhile?
-            title_id = row["id"] if row else write_title(con, t, files)
-            if t.get("imdb_id") and OMDB_API_KEY:
-                ratings = omdb_get(t["imdb_id"])
-                if ratings:
-                    write_omdb_ratings(con, title_id, t["imdb_id"], ratings)
+    title_id = ensure_title(con, data)
     cid = con.execute("INSERT INTO copies(title_id, kind, format, service, location_id, edition, code_status, "
                       "purchased_on, price_cents, added_by) VALUES (?,?,?,?,?,?,?,?,?,?)",
                       (title_id, vals["kind"], vals["format"], vals["service"], vals["location_id"], vals["edition"],
                        vals["code_status"], vals["purchased_on"], vals["price_cents"], who())).lastrowid
+    # a copy that satisfies the title's want ends it, in the same transaction (wish_items stay as history)
+    wanted = get_want(con, title_id)
+    cleared = bool(wanted) and want_satisfied_by(wanted["wanted_format"], vals["format"])
+    if cleared:
+        con.execute("DELETE FROM wants WHERE title_id=?", (title_id,))
     con.commit()
     out = title_detail(title_id, True)
     out["copy_id"] = cid
+    if cleared:
+        out["want_cleared"] = True
     return jsonify(out), 201
 
 
@@ -860,6 +879,87 @@ def delete_copy(copy_id):
     con.execute("DELETE FROM copies WHERE id=?", (copy_id,))
     con.commit()
     return jsonify(ok=True, title_id=cur["title_id"])
+
+
+# ============================================================================== wish list (editors only)
+@app.get("/admin/api/wants")
+@editor_required
+def api_wants():
+    """Every want, newest first. GET only, so MATINEE_READ_KEY may read it (the MCP get_wishlist tool does)."""
+    return jsonify(wants=list_wants(db(), image_url, poster_file_of))
+
+
+@app.post("/admin/api/wants")
+@editor_required
+def set_want():
+    """Want a title, by `title_id` or `tmdb_id` (a title not in Matinee is created with no copies). One want per
+    title: a second call replaces the format and note. 201 for a new want, 200 for a replaced one."""
+    data = request.get_json(silent=True) or {}
+    fmt = want_format_arg(data.get("format"))     # all validated before TMDB is asked or anything is written
+    note = want_note_arg(data.get("note"))
+    con = db()
+    title_id = ensure_title(con, data)
+    existed = bool(get_want(con, title_id))
+    con.execute("INSERT INTO wants(title_id, wanted_format, note) VALUES (?,?,?) "
+                "ON CONFLICT(title_id) DO UPDATE SET wanted_format=excluded.wanted_format, note=excluded.note",
+                (title_id, fmt, note))
+    con.commit()
+    return jsonify(title_detail(title_id, True)), 200 if existed else 201
+
+
+@app.delete("/admin/api/titles/<int:title_id>/want")
+@editor_required
+def remove_want(title_id):
+    con = db()
+    if not con.execute("SELECT 1 FROM titles WHERE id=?", (title_id,)).fetchone():
+        abort(make_err(404, "No such title"))
+    con.execute("DELETE FROM wants WHERE title_id=?", (title_id,))
+    con.commit()
+    return jsonify(ok=True)
+
+
+@app.get("/admin/api/wishlist/people")
+@editor_required
+def wishlist_people():
+    try:
+        people = wishlist_call("GET", "/api/people")
+    except RuntimeError as e:
+        return make_err(502, str(e))
+    return jsonify(people=[{"id": p["id"], "name": p["name"], "color": p.get("color")} for p in people])
+
+
+@app.post("/admin/api/titles/<int:title_id>/wishlist")
+@editor_required
+def add_to_wishlist(title_id):
+    """Push a wanted title to a person's list in the Wish Lists app and remember that it was."""
+    data = request.get_json(silent=True) or {}
+    con = db()
+    title = con.execute("SELECT id, tmdb_id, title, year FROM titles WHERE id=?", (title_id,)).fetchone()
+    if not title:
+        abort(make_err(404, "No such title"))
+    wanted = get_want(con, title_id)
+    if not wanted:
+        return make_err(400, "Add a want first")
+    try:
+        pid = int(data.get("person_id") or 0)
+    except (TypeError, ValueError):
+        pid = 0
+    try:
+        priority = int(data.get("priority") or 2)
+    except (TypeError, ValueError):
+        priority = 2
+    item = wish_item(title, wanted, data.get("notes"), priority, data.get("price"))
+    try:
+        people = {p["id"]: p["name"] for p in wishlist_call("GET", "/api/people")}
+        if pid not in people:
+            return make_err(400, "Pick whose wish list")
+        created = wishlist_call("POST", f"/api/people/{pid}/items", item)
+    except RuntimeError as e:
+        return make_err(502, str(e))
+    con.execute("INSERT INTO wish_items(title_id, person_id, person_name, item_id, wanted_format) VALUES (?,?,?,?,?)",
+                (title_id, pid, people[pid], created.get("id"), wanted["wanted_format"]))
+    con.commit()
+    return jsonify(ok=True, person=people[pid], item_id=created.get("id"))
 
 
 @app.put("/admin/api/titles/<int:title_id>/rating")
