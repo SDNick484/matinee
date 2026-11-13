@@ -6,8 +6,10 @@ can use it without the web stack installed.
 import datetime as dt
 from typing import Any, Iterable, Mapping
 
+import lists
+
 MODES = ("forgotten_gems", "never_watched", "quick_picks", "genre_mood",
-         "next_in_franchise", "start_franchise")
+         "next_in_franchise", "start_franchise", "watch_soon")
 
 # US certifications, most to least restrictive-friendly. "NR" is an editor-only override
 # value meaning "explicitly unrated"; it never satisfies a max_cert cap.
@@ -36,7 +38,8 @@ def _clean(s):
 
 def parse_params(m: Mapping[str, Any]) -> dict:
     """Normalise request args (strings) or MCP kwargs (typed values) into recommend() params."""
-    mode = (m.get("mode") or "forgotten_gems").strip().lower()
+    # No mode means "let recommend() choose" (Watch Soon first; spec 2026-11-12-lists decision 11).
+    mode = (_clean(m.get("mode")) or "").lower() or None
     try:
         limit = max(1, min(int(m.get("limit") or 10), 50))
     except (ValueError, TypeError):
@@ -72,14 +75,24 @@ def parse_params(m: Mapping[str, Any]) -> dict:
         "min_rating": min_rating,
         "max_runtime": max_runtime,
         "max_cert": max_cert,
-        "random": str(m.get("random") or "").strip().lower() in ("1", "true", "yes"),
+        "random": _truthy(m.get("random")),
     }
     # `audience` is resolved against the database by recommend(); here it is only cleaned. The key is
     # present only when given, so the no-audience params are exactly what they were before people existed.
     audience = _clean(m.get("audience"))
     if audience is not None:
         out["audience"] = audience
+    # Lists (v12): present only when given, like `audience`. `list` is a list id or name, resolved by recommend().
+    list_token = _clean(m.get("list"))
+    if list_token is not None:
+        out["list"] = list_token
+    if _truthy(m.get("in_season")):
+        out["in_season"] = True
     return out
+
+
+def _truthy(v) -> bool:
+    return str(v or "").strip().lower() in ("1", "true", "yes")
 
 
 # --- people and attendance (spec 2026-11-11-per-person §4.1, §5) ---------------
@@ -315,6 +328,8 @@ _FRANCHISE_ORDER = {
 }
 
 _EMPTY_HINTS = {
+    "watch_soon": "Nothing on Watch Soon passes these filters. Add titles from a title's Lists button, "
+                  "or try mode=never_watched.",
     "next_in_franchise": "No series in progress. Try mode=start_franchise.",
     "start_franchise": "No unstarted series with 2+ owned films. Try mode=never_watched.",
 }
@@ -393,7 +408,55 @@ def recommend(con, p: dict, today: "dt.date | None" = None) -> dict:
 
     Results carry `poster_file` and `fetched_at` so the caller can build poster URLs;
     callers that don't need them drop them.
+
+    With no mode, Watch Soon goes first: `watch_soon` with every other filter, and when that finds nothing,
+    `forgotten_gems` (or `genre_mood`, the list's owned titles by rating, when `list` or `in_season` restricts the
+    pick). The answer's `mode` is the mode that ran (spec 2026-11-12-lists decision 11).
     """
+    if p.get("mode"):
+        return _recommend(con, p, today)
+    if lists.has_lists(con):
+        out = _recommend(con, {**p, "mode": "watch_soon"}, today)
+        if out["results"]:
+            return out
+    fallback = "genre_mood" if p.get("list") or p.get("in_season") else "forgotten_gems"
+    return _recommend(con, {**p, "mode": fallback}, today)
+
+
+_WATCH_SOON_ADDED = """(SELECT lt.added_at FROM list_titles lt JOIN lists l ON l.id = lt.list_id
+                         WHERE lt.title_id = t.id AND l.kind = 'watch_soon')"""
+
+
+def _list_conditions(con, p: dict, mode: str, today: "dt.date | None"):
+    """WHERE fragments over alias `t` for `list`, `in_season` and the watch_soon mode, and the echo for the answer.
+    List ids come from the lists table (ints) and are inlined, like _in_ids."""
+    where, echo = [], {}
+    wants = p.get("list") or p.get("in_season")
+    if not (wants or mode == "watch_soon"):
+        return where, echo
+    if not lists.has_lists(con):
+        if wants:
+            raise ParamError(lists.NO_LISTS)
+        return ["0"], echo                                 # watch_soon on a database older than v12: nothing
+    if mode == "watch_soon":
+        where.append(f"{_WATCH_SOON_ADDED} IS NOT NULL")
+    if p.get("list"):
+        row = lists.find_list(con, p["list"])
+        if row is None:
+            raise ParamError(lists.unknown_list_message(con, p["list"]))
+        where.append(f"EXISTS (SELECT 1 FROM list_titles lt WHERE lt.title_id = t.id AND lt.list_id = {int(row['id'])})")
+        echo["list"] = {"id": row["id"], "name": row["name"]}
+    if p.get("in_season"):
+        day = today or lists.pacific_today()
+        rows = lists.in_season_lists(con, day)
+        ids = ",".join(str(int(r["id"])) for r in rows) or "NULL"
+        where.append(f"EXISTS (SELECT 1 FROM list_titles lt WHERE lt.title_id = t.id AND lt.list_id IN ({ids}))")
+        echo["in_season"] = {"date": day.isoformat(), "lists": [r["name"] for r in rows]}
+    return where, echo
+
+
+def _recommend(con, p: dict, today: "dt.date | None" = None) -> dict:
+    season_today = today
     today = today or dt.date.today()
     mode = p["mode"]
     genre = p.get("genre")
@@ -422,6 +485,13 @@ def recommend(con, p: dict, today: "dt.date | None" = None) -> dict:
         else:
             where.append(f"NOT EXISTS (SELECT 1 FROM seen s WHERE s.title_id=t.id AND s.person_id {_in_ids(ids)})")
         order_by = "COALESCE(t.tmdb_vote, 0) DESC, t.year DESC, t.sort_title ASC"
+    elif mode == "watch_soon":
+        # Unseen first (household: no watch; audience: nobody in it has seen it), then oldest added.
+        if ids is None:
+            seen = "EXISTS (SELECT 1 FROM watches w WHERE w.title_id=t.id)"
+        else:
+            seen = f"EXISTS (SELECT 1 FROM seen s WHERE s.title_id=t.id AND s.person_id {_in_ids(ids)})"
+        order_by = f"{seen}, {_WATCH_SOON_ADDED}, t.sort_title" if lists.has_lists(con) else "t.sort_title"
     elif mode == "quick_picks":
         where.append("t.runtime > 0 AND t.runtime <= ?")
         args.append(p.get("max_runtime") or 95)
@@ -432,6 +502,8 @@ def recommend(con, p: dict, today: "dt.date | None" = None) -> dict:
     f_where, f_args = _filter_conditions(p, mode)
     where += f_where
     args += f_args
+    l_where, list_echo = _list_conditions(con, p, mode, season_today)
+    where += l_where
 
     if p.get("random"):
         order_by = "RANDOM()"
@@ -504,6 +576,13 @@ def recommend(con, p: dict, today: "dt.date | None" = None) -> dict:
             reason = _next_reason(con, r, ids)
         elif mode == "start_franchise":
             reason = f"Start the {r['collection_name']} · {r['owned_n']} owned"
+        elif mode == "watch_soon":
+            if reason_count:
+                reason = "On Watch Soon"
+            elif audience:
+                reason = "On Watch Soon · New to " + _and_join(x["name"] for x in audience["people"])
+            else:
+                reason = "On Watch Soon · Not watched yet"
         elif mode == "genre_mood":
             score_str = f"{user_r:.1f} ★" if user_r else (f"{tmdb_v:.1f} ★" if tmdb_v else "")
             genre_name = genre or (genres_list[0] if genres_list else "movie")
@@ -537,11 +616,17 @@ def recommend(con, p: dict, today: "dt.date | None" = None) -> dict:
     out = {"mode": mode, "count": len(results)}
     if audience:
         out["audience"] = audience
+    out.update(list_echo)
     out["results"] = results
     if not results:
         hint = _EMPTY_HINTS.get(mode, "Nothing matched these filters. Try removing a filter or mode=genre_mood.")
         if franchise and _franchise_candidates(con, mode, ids):
             hint = _FILTERED_HINTS[mode]
+        season = list_echo.get("in_season")
+        if season is not None and not season["lists"]:
+            windows = lists.season_windows(con)
+            hint = (f"No list is in season on {season['date']}. "
+                    + (f"Seasons: {windows}." if windows else "No list has a season yet."))
         if p.get("max_cert"):
             hint += " Unrated films are hidden while max_cert is set."
         out["hint"] = hint

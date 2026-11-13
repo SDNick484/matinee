@@ -933,7 +933,7 @@ def where_is(title: str) -> Dict[str, Any]:
 
 def get_recommendations(
     mode: Literal["forgotten_gems", "never_watched", "quick_picks", "genre_mood",
-                  "next_in_franchise", "start_franchise"] = "forgotten_gems",
+                  "next_in_franchise", "start_franchise", "watch_soon"] = "forgotten_gems",
     genre: Optional[str] = None,
     medium: Optional[Literal["physical", "digital"]] = None,
     max_runtime: Optional[int] = None,
