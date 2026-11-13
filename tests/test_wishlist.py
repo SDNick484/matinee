@@ -89,15 +89,15 @@ def add_copy(client, tid, kind="physical", fmt="Blu-ray", service=None):
 
 
 # ============================================================================== schema v11
-def test_schema_version_is_11():
-    assert matinee.SCHEMA_VERSION == "11"
+def test_schema_version_includes_v11():
+    assert int(matinee.SCHEMA_VERSION) >= 11   # the wish list arrived in v11; later versions keep it
 
 
 def test_fresh_database_has_the_tables(client):
     con = db()
     assert [r[1] for r in con.execute("PRAGMA table_info(wants)")] == WANT_COLUMNS
     assert [r[1] for r in con.execute("PRAGMA table_info(wish_items)")] == WISH_COLUMNS
-    assert con.execute("SELECT v FROM meta WHERE k='schema'").fetchone()[0] == "11"
+    assert con.execute("SELECT v FROM meta WHERE k='schema'").fetchone()[0] == matinee.SCHEMA_VERSION
 
 
 def test_wants_table_refuses_nonsense_whatever_wrote_it(client, dark_knight, paddington):
@@ -140,7 +140,7 @@ def test_every_earlier_version_migrates_and_keeps_everything(tmp_path, monkeypat
     con = matinee.connect()
     matinee.migrate(con)
     matinee.migrate(con)
-    assert con.execute("SELECT v FROM meta WHERE k='schema'").fetchone()[0] == "11"
+    assert con.execute("SELECT v FROM meta WHERE k='schema'").fetchone()[0] == matinee.SCHEMA_VERSION
     for table, (cols, rows) in before.items():
         assert rows_of(con, table, cols)[1] == rows, table
     assert [r[1] for r in con.execute("PRAGMA table_info(wants)")] == WANT_COLUMNS

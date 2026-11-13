@@ -101,7 +101,7 @@ CREATE TABLE IF NOT EXISTS omdb_ratings (
 );
 CREATE INDEX IF NOT EXISTS omdb_ratings_fetched ON omdb_ratings(fetched_at);
 """
-SCHEMA_VERSION = "11"
+SCHEMA_VERSION = "12"
 
 # v10 copy details. The limits mirror the CHECKs on `copies`; the app validates first and answers 400 with a sentence.
 CODE_STATUSES = ("none", "unredeemed", "redeemed", "expired")   # a physical copy's digital code; digital copies stay "none"
@@ -114,6 +114,31 @@ COPY_DETAIL_COLUMNS = (
     ("purchased_on", "TEXT"),
     ("price_cents", "INTEGER CHECK (price_cents IS NULL OR price_cents >= 0)"),
 )
+
+# v12 lists (spec 2026-11-12-lists-design §3). Created by migrate() only, so a new and a migrated database match.
+LISTS_DDL = """
+CREATE TABLE IF NOT EXISTS lists (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL COLLATE NOCASE UNIQUE CHECK (length(name) BETWEEN 1 AND 40),
+  kind TEXT NOT NULL CHECK (kind IN ('watch_soon', 'seasonal', 'custom')),
+  season_start TEXT CHECK (season_start IS NULL OR season_start GLOB '[01][0-9]-[0-3][0-9]'),
+  season_end   TEXT CHECK (season_end   IS NULL OR season_end   GLOB '[01][0-9]-[0-3][0-9]'),
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  CHECK ((season_start IS NULL) = (season_end IS NULL)),
+  CHECK (kind != 'watch_soon' OR season_start IS NULL)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS lists_one_watch_soon ON lists(kind) WHERE kind = 'watch_soon';
+CREATE TABLE IF NOT EXISTS list_titles (
+  list_id  INTEGER NOT NULL REFERENCES lists(id)  ON DELETE CASCADE,
+  title_id INTEGER NOT NULL REFERENCES titles(id) ON DELETE CASCADE,
+  added_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (list_id, title_id)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS list_titles_title ON list_titles(title_id);
+INSERT INTO lists (name, kind, sort_order)
+  SELECT 'Watch Soon', 'watch_soon', 0 WHERE NOT EXISTS (SELECT 1 FROM lists WHERE kind = 'watch_soon');
+"""
 
 # Checked in the app (not the schema) so a new format or service needs no table rebuild.
 FORMATS = {"physical": ["4K UHD", "Blu-ray", "3D Blu-ray", "DVD", "VHS"],
@@ -326,6 +351,10 @@ def migrate(con):
     );
     CREATE INDEX IF NOT EXISTS wish_items_title ON wish_items(title_id);
     """)
+
+    # v12: lists. Watch Soon is created once on every database (the partial unique index makes a second one
+    # impossible); it can be neither renamed nor deleted (lists.py and the /admin/api/lists routes refuse).
+    con.executescript(LISTS_DDL)
 
 
 def init_db():
