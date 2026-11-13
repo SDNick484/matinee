@@ -60,7 +60,7 @@ def test_constants():
     assert matinee.PERSON_KINDS == ("adult", "kid")
     assert matinee.PERSON_COLORS == ("green", "blue", "red", "pink", "purple")
     assert matinee.MAX_ACTIVE_PEOPLE == 8
-    assert matinee.SCHEMA_VERSION == "11"
+    assert matinee.SCHEMA_VERSION == "12"
 
 
 def test_watch_people_cascades_from_watch_and_restricts_person(client):

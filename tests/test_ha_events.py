@@ -145,7 +145,7 @@ def test_the_response_is_the_same_with_the_feature_on(client, posts, monkeypatch
     on = log(client, watched_date=TODAY).get_json()
     monkeypatch.setattr("app.HA_WEBHOOK_URL", "")
     off = log(client, watched_date=TODAY).get_json()
-    assert set(on) == set(off) == {"ok", "watch"}
+    assert set(on) == set(off) == {"ok", "watch", "removed_from"}
     assert set(on["watch"]) == set(off["watch"])
 
 

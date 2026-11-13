@@ -13,7 +13,7 @@ FIXTURES_TMDB = Path(__file__).parent / "fixtures" / "tmdb"
 # (constants and state first, initialization last). tests/test_js_modules.py checks this list is complete.
 JS_DIR = Path(__file__).resolve().parent.parent / "static" / "js"
 JS_MODULES = ["core.js", "icons.js", "router.js", "grid.js", "detail.js", "add.js", "forms.js", "stats.js",
-              "about.js", "ask.js", "movie-night.js", "locations.js", "people.js", "wishlist.js", "main.js"]
+              "about.js", "ask.js", "movie-night.js", "locations.js", "people.js", "wishlist.js", "lists.js", "main.js"]
 
 
 def frontend_js():

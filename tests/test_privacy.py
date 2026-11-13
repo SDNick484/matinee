@@ -116,7 +116,9 @@ ATTENDANCE_NAMES = {"attendees", "attendance", "seen_by", "watch_attendance", "t
 # ("private" = inside `if private:`, "public" = inside `if not private:`, the PRIVATE_WATCH strip).
 # list_titles reads unseen_by / attendance (and SEEN_CTE) only inside `if private:`; a public request that names
 # them is answered 400 by people_params_refused(), which refers to them through PEOPLE_PARAMS alone.
-PRIVATE_BRANCHING = {"title_detail": "private", "watch_out": "public", "list_titles": "private"}
+# lists.list_members adds who has seen each title of a list only inside `if private:` (spec 2026-11-12-lists §2.1).
+PRIVATE_BRANCHING = {"title_detail": "private", "watch_out": "public", "list_titles": "private",
+                     "list_members": "private"}
 
 
 def _app_tree():
@@ -232,7 +234,7 @@ PRIVATE_KEYS = {"notes", "attendance", "attendees", "seen_by", "not_seen_by", "p
                 "want", "wanted_format", "wishes", "pushed_to", "owned_formats"}
 COPY_SECRETS = ("unredeemed", "2026-10-31", "2499", "for Grandma Ann")   # the Dark Knight Steelbook's code status, purchase date, price
 RECOMMEND_MODES = ("forgotten_gems", "never_watched", "quick_picks", "genre_mood", "next_in_franchise",
-                   "start_franchise")
+                   "start_franchise", "watch_soon")
 
 
 @pytest.fixture
@@ -262,12 +264,17 @@ def family_with_history(client):
     con.execute("INSERT INTO wants (title_id, wanted_format) VALUES (?, '4K UHD')", (sa,))
     con.execute("INSERT INTO wish_items (title_id, person_id, person_name, item_id, wanted_format) "
                 "VALUES (?, 3, 'Lauren', 55, 'Blu-ray')", (ids[0],))
+    # Every title on Watch Soon and on a Christmas list that is in season whatever the date (01-01 to 12-31).
+    xmas = con.execute("INSERT INTO lists (name, kind, season_start, season_end) "
+                       "VALUES ('Christmas', 'seasonal', '01-01', '12-31')").lastrowid
+    con.executemany("INSERT INTO list_titles (list_id, title_id) SELECT id, ? FROM lists", [(i,) for i in ids])
     con.commit()
+    assert xmas
     return [*ids, sa]
 
 
-def _public_urls(ids):
-    """Every GET under /api/ with each title id, every recommendation mode and a few public filters."""
+def _public_urls(ids, list_ids=()):
+    """Every GET under /api/ with each title id, each list id, every recommendation mode and a few public filters."""
     urls, rules = [], set()
     for rule in app.url_map.iter_rules():
         if not rule.rule.startswith("/api/") or "GET" not in rule.methods:
@@ -277,6 +284,10 @@ def _public_urls(ids):
             urls += [rule.rule.replace("<int:title_id>", str(i)) for i in ids]
         elif rule.rule == "/api/recommendations":
             urls += [f"/api/recommendations?mode={m}&limit=50" for m in RECOMMEND_MODES]
+            urls += ["/api/recommendations?limit=50", "/api/recommendations?in_season=true&limit=50",
+                     "/api/recommendations?list=Watch%20Soon&limit=50"]
+        elif "<int:list_id>" in rule.rule:
+            urls += [rule.rule.replace("<int:list_id>", str(i)) for i in list_ids]
         elif rule.rule == "/api/titles":
             urls += ["/api/titles", "/api/titles?watched=watched", "/api/titles?sort=last_watched",
                      "/api/titles?q=harry"]
@@ -287,8 +298,10 @@ def _public_urls(ids):
 
 
 def test_no_public_route_carries_notes_people_or_attendance(client, family_with_history):
-    rules, urls = _public_urls(family_with_history)
-    assert {"/api/titles", "/api/titles/<int:title_id>", "/api/recommendations", "/api/stats", "/api/me"} <= rules
+    list_ids = [r[0] for r in db().execute("SELECT id FROM lists")]
+    rules, urls = _public_urls(family_with_history, list_ids)
+    assert {"/api/titles", "/api/titles/<int:title_id>", "/api/recommendations", "/api/stats", "/api/me",
+            "/api/lists", "/api/lists/<int:list_id>"} <= rules
     for url in urls:
         res = client.get(url)
         assert res.status_code == 200, (url, res.status_code)

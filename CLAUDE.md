@@ -69,7 +69,7 @@ shellcheck -s sh installer/setup-head.sh installer/build.sh ops/matinee-backup o
 sh installer/build.sh && sh -n dist/setup-matinee.sh
 ```
 
-`tests/test_ask_ui.py`, `tests/test_people_ui.py` and `tests/test_wishlist_ui.py` need Playwright and Chromium
+`tests/test_ask_ui.py`, `tests/test_people_ui.py`, `tests/test_wishlist_ui.py` and `tests/test_lists_ui.py` need Playwright and Chromium
 (`pip install playwright && python -m playwright install chromium`); without them they skip locally, but the UI
 smoke job fails on any skip.
 

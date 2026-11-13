@@ -154,14 +154,17 @@ TOOLS = [
      _obj({"title": _STR}, ["title"])),
     ("get_recommendations", "get_recommendations",
      "Pick movies from the collection. mode is one of forgotten_gems, never_watched, quick_picks, genre_mood, "
-     "next_in_franchise, start_franchise. max_cert (G, PG, PG-13, R, NC-17) caps the US rating; unrated "
-     "films are excluded whenever max_cert is set.",
+     "next_in_franchise, start_franchise, watch_soon; with no mode the family's Watch Soon list goes first. "
+     "max_cert (G, PG, PG-13, R, NC-17) caps the US rating; unrated films are excluded whenever max_cert is set. "
+     "list restricts to one list (such as Christmas); in_season=true to lists in season today.",
      _obj({"mode": {"type": "string", "enum": ["forgotten_gems", "never_watched", "quick_picks", "genre_mood",
-                                               "next_in_franchise", "start_franchise"]},
+                                               "next_in_franchise", "start_franchise", "watch_soon"]},
            "genre": _STR, "medium": _MEDIUM, "max_runtime": {"type": "integer", "description": "Minutes."},
            "min_rating": _NUM, "max_cert": {"type": "string", "enum": ["G", "PG", "PG-13", "R", "NC-17"]},
            "limit": _LIMIT, "random": {"type": "boolean"},
-           "audience": {"type": "string", "description": 'everyone, adults, kids, or names such as "Alice,Paige". Only films nobody in the audience has seen count as unwatched.'}})),
+           "audience": {"type": "string", "description": 'everyone, adults, kids, or names such as "Alice,Paige". Only films nobody in the audience has seen count as unwatched.'},
+           "list": {"type": "string", "description": "A list name such as Watch Soon or Christmas."},
+           "in_season": {"type": "boolean", "description": "Only titles on lists in season today."}})),
     ("get_collection_stats", "get_collection_stats",
      "Collection totals: movies, formats, watch coverage and ratings.", _obj()),
     ("list_people", "list_people", "The family members and whether each is an adult or a kid.", _obj()),

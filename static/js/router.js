@@ -12,6 +12,7 @@ import { openMovieNightModal } from "./movie-night.js";
 import { openLocationsManagerModal } from "./locations.js";
 import { loadPeople, openPeopleModal } from "./people.js";
 import { renderWanted } from "./wishlist.js";
+import { openListsManagerModal } from "./lists.js";
 
   // ================================================================= Router
   function parseHash(hashStr) {
@@ -74,6 +75,9 @@ import { renderWanted } from "./wishlist.js";
         <a href="#/wanted" class="btn btn-sm btn-ghost" id="btn-header-wanted" title="Movies we want to buy">
           Wanted
         </a>
+        <button type="button" class="btn btn-sm btn-ghost" id="btn-header-lists" title="Manage Lists">
+          ${icon("list")} Lists
+        </button>
         <a href="#/stats" class="btn btn-sm btn-ghost" id="btn-header-stats">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
           Stats
@@ -101,6 +105,7 @@ import { renderWanted } from "./wishlist.js";
     document.getElementById("btn-header-movie-night")?.addEventListener("click", () => openMovieNightModal());
     document.getElementById("btn-header-locations")?.addEventListener("click", () => openLocationsManagerModal());
     document.getElementById("btn-header-people")?.addEventListener("click", () => openPeopleModal());
+    document.getElementById("btn-header-lists")?.addEventListener("click", () => openListsManagerModal());
 
     // Header admin bar is a swipeable row on phones; mark and reveal the current page's button.
     const activeId = { "/ask": "btn-header-ask", "/wanted": "btn-header-wanted", "/stats": "btn-header-stats", "/add": "btn-header-add" }[state.route?.path];

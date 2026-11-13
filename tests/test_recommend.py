@@ -37,7 +37,7 @@ def test_parse_params_limit(raw, expected):
 
 def test_parse_params_defaults():
     assert recommend.parse_params({}) == {
-        "mode": "forgotten_gems", "limit": 10, "genre": None, "medium": None,
+        "mode": None, "limit": 10, "genre": None, "medium": None,
         "min_rating": None, "max_runtime": None, "max_cert": None, "random": False,
     }
 

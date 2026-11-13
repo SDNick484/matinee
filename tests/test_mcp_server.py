@@ -452,18 +452,18 @@ def test_where_is_returns_title_id_db_and_rest(test_env, monkeypatch):
 
 ALL_TOOLS = {"search_collection", "get_movie", "where_is", "get_recommendations",
              "get_collection_stats", "list_people", "rate_movie", "log_watch", "search_tmdb", "add_movie",
-             "get_wishlist", "want_movie"}
+             "get_wishlist", "want_movie", "get_lists", "get_list", "set_list_membership"}
 
 
 def _names(server):
     return {t.name for t in asyncio.run(server.list_tools())}
 
 
-def test_build_server_writes_true_lists_twelve_tools():
+def test_build_server_writes_true_lists_fifteen_tools():
     assert _names(mcp_server.build_server(writes=True)) == ALL_TOOLS
 
 
-def test_build_server_writes_false_lists_eight_tools():
+def test_build_server_writes_false_lists_ten_tools():
     assert _names(mcp_server.build_server(writes=False)) == ALL_TOOLS - set(mcp_server.WRITE_TOOLS)
 
 
@@ -665,6 +665,9 @@ EXPECTED_HINTS = {
     "add_movie": (False, False, False, True),
     "get_wishlist": (True, False, True, False),
     "want_movie": (False, True, True, True),    # replaces the title's earlier want; may create the title from TMDB
+    "get_lists": (True, False, True, False),
+    "get_list": (True, False, True, False),
+    "set_list_membership": (False, True, True, False),
 }
 
 
@@ -697,12 +700,12 @@ def test_annotation_kwargs_guarded_on_tool_signature():
     assert "annotations" in mcp_server._annotation_kwargs(WithAnnotations, "where_is")
 
 
-def test_annotation_table_covers_exactly_the_twelve_tools():
+def test_annotation_table_covers_exactly_the_fifteen_tools():
     assert set(mcp_server.TOOL_HINTS) == set(EXPECTED_HINTS)
 
 
 # --------------------------------------------------------------- write levels (spec §2, §4, §6)
-LOG_TOOLS = {"rate_movie", "log_watch"}
+LOG_TOOLS = {"rate_movie", "log_watch", "set_list_membership"}
 READ_ONLY_TOOLS = ALL_TOOLS - set(mcp_server.WRITE_TOOLS)
 
 
@@ -1073,9 +1076,9 @@ def test_log_watch_with_attendees_refuses_an_older_server(monkeypatch):
 
 def test_tool_lists_per_level():
     sizes = {level: _names(mcp_server.build_server(writes=level)) for level in ("none", "log", "all")}
-    assert (len(sizes["none"]), len(sizes["log"]), len(sizes["all"])) == (8, 10, 12)
-    assert {"list_people", "get_wishlist"} <= sizes["none"] and "want_movie" not in sizes["log"]
-    assert sizes["log"] - sizes["none"] == {"rate_movie", "log_watch"}
+    assert (len(sizes["none"]), len(sizes["log"]), len(sizes["all"])) == (10, 13, 15)
+    assert {"list_people", "get_wishlist", "get_lists", "get_list"} <= sizes["none"] and "want_movie" not in sizes["log"]
+    assert sizes["log"] - sizes["none"] == {"rate_movie", "log_watch", "set_list_membership"}
     assert sizes["all"] - sizes["log"] == {"add_movie", "want_movie"}
 
 
@@ -1083,6 +1086,7 @@ def test_readonly_instructions_name_no_write_tool():
     for level in ("none", False):
         text = mcp_server.instructions_for(level)
         assert "log_watch" not in text and "attendees" not in text and "rate_movie" not in text
+        assert "set_list_membership" not in text and "Watch Soon list first" in text
         assert 'audience="kids"' in text
     assert mcp_server.SERVER_INSTRUCTIONS.count("pass attendees to log_watch only when someone was missing") == 1
     assert '"The girls" or "the kids": audience="kids". "Us two", "date night": audience="adults". ' \

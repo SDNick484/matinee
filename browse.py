@@ -13,6 +13,7 @@ from common import clean, words, make_err
 from db import FORMATS, SERVICES, db
 from images import image_name, image_url, poster_file_of
 from wishlist import get_want, wishes_for_title
+from lists import pacific_today, title_lists
 
 
 # ======================================================================= serializers
@@ -158,6 +159,7 @@ def title_detail(title_id, private):
     d["certification_tmdb"] = t["certification"]
     d["certification_override"] = t["certification_override"]
     d["certification"] = t["certification_override"] or t["certification"]
+    d["lists"] = title_lists(con, title_id, pacific_today())   # public: lists are not a diary
     d["custom_poster"] = bool(t["custom_poster_file"])
     d["poster_url"] = image_url(poster_file_of(t), t["fetched_at"])
     if d["custom_poster"]:
