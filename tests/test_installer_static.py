@@ -250,6 +250,25 @@ def test_ha_webhook_url_is_written_exported_and_documented():
     assert "HA_WEBHOOK_URL=http" not in env, "no example webhook id in the committed example"
 
 
+def test_wish_list_settings_are_written_exported_and_documented():
+    # Two settings for the family Wish Lists app: written when missing, never overwritten, exported to the Flask
+    # service only (matinee-mcp never talks to it), and shown in .env.example with a comment above each.
+    export = next(l for l in HEAD.splitlines() if l.startswith("export PORT "))
+    mcp_export = next(l for l in _init_script().splitlines() if l.startswith("export "))
+    env = (ROOT / ".env.example").read_text(encoding="utf-8")
+    for key, default in (("WISHLIST_URL", "http://127.0.0.1:8766"),
+                         ("WISHLIST_MOVIE_URL", "https://www.amazon.com/s?k={q}")):
+        assert re.search(rf'^add_setting "\$CONF" {key} \'?"?{re.escape(default)}"?\'? ".+"$', HEAD, re.M), key
+        assert f" {key} " in f" {export} ", key
+        assert key not in mcp_export, key
+        assert re.search(rf"^# .+\n{key}={re.escape(default)}$", env, re.M), key
+
+
+def test_wishlist_module_is_shipped():
+    cp = next(line for line in BUILD.splitlines() if line.startswith("cp -r ")).split()
+    assert "wishlist.py" in cp
+
+
 # ------------------------------------------------------------------ MATINEE_READ_KEY
 # Mirrors mcp_http.readonly(): only 0/false/no/off (case-insensitive, trimmed) turn writes on.
 READONLY_CASES = [(None, "read"), ("", "read"), ("1", "read"), ("true", "read"), ("garbage", "read"),
