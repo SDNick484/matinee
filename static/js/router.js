@@ -11,6 +11,7 @@ import { renderAsk } from "./ask.js";
 import { openMovieNightModal } from "./movie-night.js";
 import { openLocationsManagerModal } from "./locations.js";
 import { loadPeople, openPeopleModal } from "./people.js";
+import { renderWanted } from "./wishlist.js";
 
   // ================================================================= Router
   function parseHash(hashStr) {
@@ -41,6 +42,9 @@ import { loadPeople, openPeopleModal } from "./people.js";
     if (segments[0] === "ask") {
       return { path: "/ask", params: {}, query };
     }
+    if (segments[0] === "wanted") {
+      return { path: "/wanted", params: {}, query };
+    }
 
     return { path: "/404", params: {}, query };
   }
@@ -67,6 +71,9 @@ import { loadPeople, openPeopleModal } from "./people.js";
         <button type="button" class="btn btn-sm btn-ghost" id="btn-header-people" title="Manage People">
           ${icon("people")} People
         </button>
+        <a href="#/wanted" class="btn btn-sm btn-ghost" id="btn-header-wanted" title="Movies we want to buy">
+          Wanted
+        </a>
         <a href="#/stats" class="btn btn-sm btn-ghost" id="btn-header-stats">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
           Stats
@@ -96,7 +103,7 @@ import { loadPeople, openPeopleModal } from "./people.js";
     document.getElementById("btn-header-people")?.addEventListener("click", () => openPeopleModal());
 
     // Header admin bar is a swipeable row on phones; mark and reveal the current page's button.
-    const activeId = { "/ask": "btn-header-ask", "/stats": "btn-header-stats", "/add": "btn-header-add" }[state.route?.path];
+    const activeId = { "/ask": "btn-header-ask", "/wanted": "btn-header-wanted", "/stats": "btn-header-stats", "/add": "btn-header-add" }[state.route?.path];
     const activeBtn = activeId ? document.getElementById(activeId) : null;
     if (activeBtn) activeBtn.setAttribute("aria-current", "page");
     bindScrollRow(nav, activeBtn);
@@ -211,6 +218,9 @@ import { loadPeople, openPeopleModal } from "./people.js";
     } else if (state.route.path === "/ask" && isAdmin) {
       if (prevRoute.path === "/") state.grid.scrollY = window.scrollY;
       renderAsk(view);
+    } else if (state.route.path === "/wanted") {
+      if (prevRoute.path === "/") state.grid.scrollY = window.scrollY;
+      await renderWanted(view);
     } else {
       renderNotFound(view);
     }

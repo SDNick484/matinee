@@ -2,7 +2,7 @@
 
 Self-hosted, phone-first movie collection tracker (physical discs + digital libraries). A Flask app (`app.py`:
 the Flask object, auth, pages and every route) with route-free code in sibling modules (`settings.py`,
-`common.py`, `db.py`, `clients.py`, `images.py`, `people.py`, `browse.py`, `export.py`), SQLite, vanilla-JS SPA
+`common.py`, `db.py`, `clients.py`, `images.py`, `people.py`, `browse.py`, `export.py`, `wishlist.py`), SQLite, vanilla-JS SPA
 (`static/`, native ES modules in `static/js/`), a FastMCP server (`mcp_server.py`, `mcp_http.py`), an Ask
 feature (`ask.py`), and an Alpine/OpenRC installer (`installer/`). Read the code before proposing changes; trust
 the code over any doc that disagrees.
@@ -69,7 +69,7 @@ shellcheck -s sh installer/setup-head.sh installer/build.sh ops/matinee-backup o
 sh installer/build.sh && sh -n dist/setup-matinee.sh
 ```
 
-`tests/test_ask_ui.py` and `tests/test_people_ui.py` need Playwright and Chromium
+`tests/test_ask_ui.py`, `tests/test_people_ui.py` and `tests/test_wishlist_ui.py` need Playwright and Chromium
 (`pip install playwright && python -m playwright install chromium`); without them they skip locally, but the UI
 smoke job fails on any skip.
 
