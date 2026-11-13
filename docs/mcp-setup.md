@@ -11,7 +11,7 @@ Matinee has two keys for headless clients (`Authorization: Bearer <key>` or `X-A
 
 | Key | Can | Use it for |
 |-----|-----|------------|
-| `MATINEE_API_KEY` | read and write everything under `/admin/api` | write tools (`rate_movie`, `log_watch`, `add_movie`, `want_movie`), scripts that change data; the remote `matinee-mcp` service at write level `log` or `all` |
+| `MATINEE_API_KEY` | read and write everything under `/admin/api` | write tools (`rate_movie`, `log_watch`, `set_list_membership`, `add_movie`, `want_movie`), scripts that change data; the remote `matinee-mcp` service at write level `log` or `all` |
 | `MATINEE_READ_KEY` | `GET` under `/admin/api` only; any other method answers `403 {"error": "The read key can only read"}`. Not the barcode lookup `GET /admin/api/upc/<upc>` (UPCitemdb's 100-a-day quota): `403 {"error": "The read key can't look up barcodes."}`. `search_tmdb` works. | assistants that only read; the remote `matinee-mcp` service while it is read-only |
 
 What each kind of caller sees:
@@ -145,7 +145,7 @@ The installer adds any missing key and never overwrites one you edited. The file
 | Setting | Default | Meaning |
 |---------|---------|---------|
 | `MATINEE_MCP_READONLY` | `1` | The master switch. Any value but `0`, `false`, `no` or `off` keeps the service read-only and `MATINEE_MCP_WRITES` is ignored; the service logs a warning when that hides a `log` or `all`. `0` hands the decision to `MATINEE_MCP_WRITES`. Unset or empty: `MATINEE_MCP_WRITES` decides too (`none` when it is also unset), so deleting this line from a host with `WRITES=log` turns writes on. |
-| `MATINEE_MCP_WRITES` | `none` (`all` on a host that already had `MATINEE_MCP_READONLY=0`) | Write level, used only while `MATINEE_MCP_READONLY` is `0` (or unset or empty). `none`: the eight read tools. `log`: also `rate_movie` and `log_watch` (ten tools). `all`: also `add_movie` and `want_movie` (twelve). An unknown value means `none` (and is logged); unset with `READONLY=0` means `all`, as before. Case and surrounding spaces do not matter. |
+| `MATINEE_MCP_WRITES` | `none` (`all` on a host that already had `MATINEE_MCP_READONLY=0`) | Write level, used only while `MATINEE_MCP_READONLY` is `0` (or unset or empty). `none`: the ten read tools. `log`: also `rate_movie`, `log_watch` and `set_list_membership` (thirteen). `all`: also `add_movie` and `want_movie` (fifteen). An unknown value means `none` (and is logged); unset with `READONLY=0` means `all`, as before. Case and surrounding spaces do not matter. |
 | `MCP_HTTP_BIND` | the host's LAN IP | Where `matinee-mcp` listens. It must be the address the tunnel route points at, because `cloudflared` runs in Docker (`127.0.0.1` gives HTTP 502). |
 | `MCP_HTTP_PORT` | `8719` | Port. |
 | `MCP_HTTP_PATH` | `/matinee/mcp` | Endpoint path. The tunnel does not strip the prefix. |
@@ -192,13 +192,13 @@ Straight to the origin (no Access header) the service answers `403 {"error": "fo
 
 ### 4.4 Turning on write tools
 
-By default the phone can search, look up shelves, read watch notes, get recommendations and search TMDB, but not change anything (`rate_movie`, `log_watch`, `add_movie` and `want_movie` are not even listed, and the service only holds the read key). `MATINEE_MCP_WRITES` picks how much more:
+By default the phone can search, look up shelves, read watch notes, get recommendations and search TMDB, but not change anything (`rate_movie`, `log_watch`, `set_list_membership`, `add_movie` and `want_movie` are not even listed, and the service only holds the read key). `MATINEE_MCP_WRITES` picks how much more:
 
 | Level | Tools added | Key the service holds |
 |-------|-------------|-----------------------|
-| `none` (default) | none: eight read tools (including `get_wishlist`) | `MATINEE_READ_KEY` |
-| `log` | `rate_movie`, `log_watch` | `MATINEE_API_KEY` |
-| `all` | `rate_movie`, `log_watch`, `add_movie`, `want_movie` (twelve tools in all) | `MATINEE_API_KEY` |
+| `none` (default) | none: ten read tools (including `get_wishlist`) | `MATINEE_READ_KEY` |
+| `log` | `rate_movie`, `log_watch`, `set_list_membership` (thirteen tools) | `MATINEE_API_KEY` |
+| `all` | `rate_movie`, `log_watch`, `set_list_membership`, `add_movie`, `want_movie` (fifteen tools) | `MATINEE_API_KEY` |
 
 To log movie nights from the phone without letting the model import titles, use `log`:
 
@@ -230,8 +230,9 @@ At `log` and `all` the service holds `MATINEE_API_KEY`, which can do everything 
 
 ### 5.1 Read Tools
 - **`search_collection`**: Search movies by title text, genre, physical/digital medium, format (e.g. `4K UHD`, `Blu-ray`), watch status (`watched`/`unwatched`), minimum user rating, or `unseen_by` (same grammar as `audience`: only titles none of those people has seen, such as `unseen_by="kids"`).
-- **`get_movie`**: Retrieve complete metadata for a title, including physical copies (each with its `edition`, and with `code_status`, `purchased_on` and `price_cents` when the server is read through `/admin/api`), digital storefronts, family user rating, full watch log history, and `custom_poster` (true when an editor uploaded their own cover in place of the TMDB poster). Each watch also carries `attendance` (`recorded`, `assumed_everyone` or `assumed_adults`) and `attendees` (names), and the movie carries `seen_by` and `not_seen_by` (names; `not_seen_by` covers active people only). With nobody set up, those lists are empty. On the public `/api` (no key) none of these keys exist. Certification comes back three ways: `certification` is the effective US rating the family sees, `certification_tmdb` is what TMDB reports, and `certification_override` is the editor's value (or null).
-- **`get_recommendations`**: Pick movies from the family's own collection. Parameters: `mode`, `genre`, `medium` (`physical`/`digital`), `max_runtime`, `min_rating`, `max_cert` (`G`, `PG`, `PG-13`, `R`, `NC-17`), `audience` (see below), `limit`, and `random`. Modes:
+- **`get_movie`**: Retrieve complete metadata for a title, including physical copies (each with its `edition`, and with `code_status`, `purchased_on` and `price_cents` when the server is read through `/admin/api`), digital storefronts, family user rating, full watch log history, and `custom_poster` (true when an editor uploaded their own cover in place of the TMDB poster). Each watch also carries `attendance` (`recorded`, `assumed_everyone` or `assumed_adults`) and `attendees` (names), and the movie carries `seen_by` and `not_seen_by` (names; `not_seen_by` covers active people only). With nobody set up, those lists are empty. On the public `/api` (no key) none of these keys exist. Certification comes back three ways: `certification` is the effective US rating the family sees, `certification_tmdb` is what TMDB reports, and `certification_override` is the editor's value (or null). `lists` names the lists the title is on (`[{"id", "name", "kind", "in_season"}]`).
+- **`get_recommendations`**: Pick movies from the family's own collection. Parameters: `mode`, `genre`, `medium` (`physical`/`digital`), `max_runtime`, `min_rating`, `max_cert` (`G`, `PG`, `PG-13`, `R`, `NC-17`), `audience` (see below), `list`, `in_season`, `limit`, and `random`. **With no `mode`** Matinee tries `watch_soon` with every other filter and, when that finds nothing, runs `forgotten_gems` (or `genre_mood` when `list` or `in_season` is given); the answer's `mode` says which ran. Older Matinee servers default to `forgotten_gems`. Modes:
+  - `watch_soon`: Owned titles on the Watch Soon list, unseen ones (by the audience, when one is given) first, then the oldest added. *Paddington 2* added on Nov 1 comes before *Spirited Away* added on Nov 2, and a title someone already watched drops below both.
   - `forgotten_gems`: Rated $\ge 8.0$ and unviewed for $> 12$ months.
   - `never_watched`: Unwatched movies ranked by TMDB rating.
   - `quick_picks`: Short movies under a given runtime limit (default $\le 95$m).
@@ -245,24 +246,30 @@ At `log` and `all` the service holds `MATINEE_API_KEY`, which can do everything 
   - **`max_cert` uses the effective rating.** An editor's override wins over the TMDB rating.
   - **`max_cert` is strict.** Any value outside the five above returns a 400 from the API. The MCP schema rejects it before it gets there.
   - **Empty results carry a `hint`.** Follow it (for example, "Try mode=start_franchise") instead of telling the user nothing matched.
+  - **`list` restricts any mode to one list** (a name such as `Christmas`, any case, or an id). An unknown name returns an error that names the lists that exist. The answer echoes `"list": {"id", "name"}`.
+  - **`in_season=true` restricts to lists in season today** (the date in America/Los_Angeles): on 2026-12-05 a Christmas list (`11-25` to `01-01`) is in season, on 2026-10-15 a Halloween list (`10-01` to `10-31`) is. The answer echoes `"in_season": {"date", "lists"}`; with nothing in season the result is empty and the `hint` lists the seasons. A REST server that ignores `list` or `in_season` (older than lists) is refused with "This Matinee server is too old for lists. Update Matinee." rather than returning an unfiltered pick.
   - **`audience` picks for who is watching.** It takes `everyone`, `adults`, `kids` (the active people of that kind) or a comma list of names, such as `audience="Alice,Paige"`. A title counts as unwatched only if nobody in the audience has seen it; the franchise modes return the next film nobody in the audience has seen. The result carries an `audience` echo (`label` and `people`) and a `seen_by` list of names on every pick, so "Midge has seen it" is visible. An unknown name, or an audience with nobody in it, returns an error that lists who exists.
 - **`list_people`**: The family members Matinee knows, as `[{"id", "name", "kind", "color", "active"}]` with `kind` `adult` or `kid`. It is registered at every write level and is read-only. Use it to resolve a name before passing `audience`, `unseen_by` or `attendees`. The read key is enough: it can already read watch notes, and it also sees people and who attended each watch. A database older than schema v9, or one with nobody set up, returns `[]`.
+- **`get_lists`**: The family's lists as `{"today": "2026-12-05", "lists": [{"id", "name", "kind", "season_start", "season_end", "in_season", "count"}]}`. `kind` is `watch_soon` (the one built-in list), `seasonal` or `custom`; a window is `MM-DD` to `MM-DD` and may wrap the year. Registered at every write level. A database older than schema v12 (direct mode) returns no lists.
+- **`get_list`**: One list by name or id, with its titles oldest added first: `id`, `title`, `year`, `formats`, `owned` (a list may hold a title with no copies; recommendations never pick those) and `added_at`. With a key, or in direct mode, each title also has `seen_by` (names) once people are set up; the public `/api` never has it. Registered at every write level.
 - **`get_wishlist`**: The movies the family wants to buy, newest first, as `[{"id", "title", "year", "wanted_format", "owned_formats", "note", "pushed_to"}]`: `wanted_format` is `null` for "any copy", `owned_formats` lists what is already owned (a movie can be wanted on 4K UHD while owned on Digital HD) and `pushed_to` names whose Wish Lists app list it was put on. It is registered at every write level and is read-only, but a want is private to the family, so it reads `GET /admin/api/wants` with a key (the read key is enough) and never direct SQLite mode; with no key it answers `The wish list is only available with a Matinee key (MATINEE_API_KEY or MATINEE_READ_KEY).` The Wish Lists app's own purchase status is never read.
 - **`get_collection_stats`**: Summary counts of physical discs, digital licenses, watch coverage %, and family rating averages.
 - **`search_tmdb`**: Search TMDB for movies not yet in the collection.
 - **`where_is`**: Where the disc is shelved or which service has it. Each copy carries its `edition`, and the `summary` names it: `The Dark Knight (2008): 4K UHD Steelbook at Family Room › Media Cabinet › Shelf 1`. It never returns a copy's code status, purchase date or price, even to a keyed client; use `get_movie` for those.
 
 ### 5.2 Write Tools
-The remote service offers these only while `MATINEE_MCP_READONLY=0` and `MATINEE_MCP_WRITES` allows them: `rate_movie` and `log_watch` at `log` and `all`, `add_movie` and `want_movie` at `all` (section 4.4). Over stdio all four are always available.
+The remote service offers these only while `MATINEE_MCP_READONLY=0` and `MATINEE_MCP_WRITES` allows them: `rate_movie`, `log_watch` and `set_list_membership` at `log` and `all`, `add_movie` and `want_movie` at `all` (section 4.4). Over stdio all five are always available.
 - **`rate_movie`**: Set, update, or clear personal 0.0–10.0 ratings in 0.5 increments.
+- **`set_list_membership`**: Put a title on a list or take it off: `set_list_membership(list="Watch Soon", title_id=214, on=true)` sends `PUT /admin/api/lists/1/titles/214` (`on=false` sends `DELETE`). Both are idempotent. Registered at `log` and `all`, because adding to Watch Soon is a phone task.
 - **`log_watch`**: Log a movie watch event with an ISO date (`YYYY-MM-DD`; with no date the watch is recorded as dateless, so pass today's date for a film that was just watched), optional notes, optional `attendees` (a list of names), and an optional `date_bucket` for a watch with no exact date (`past_year`, `1_2_years`, `2_5_years`, `5_10_years`, `over_10_years`, `unknown`). Leave `attendees` out when everyone watched; an empty list is refused by Matinee with a 400. For a watch more than ten years ago (`date_bucket="over_10_years"`, or a `watched_date` more than ten years back) with no `attendees`, Matinee records the adults only ("we saw The Princess Bride ages ago" → Nick and Lauren).
+  A watch with a real `watched_date` (no `date_bucket`) also takes the title off Watch Soon, and the answer says so: `"removed_from": ["Watch Soon"]` (`[]` when it was not there). Seasonal and custom lists never change on a watch.
   `log_watch` never pings Home Assistant, even with today's date: only the web UI's **+ Watched Today** button does (see [home-assistant.md](home-assistant.md)).
 - **`add_movie`**: Add a movie from TMDB into the library with physical/digital copy details.
 - **`want_movie`**: Put a movie on the wish list: `want_movie(tmdb_id=129, format="4K UHD", note="the Studio Ghibli box")` sends `POST /admin/api/wants` with `{"tmdb_id": 129, "format": "4K UHD", "note": "the Studio Ghibli box"}` and creates *Spirited Away* with no copies if Matinee doesn't have it. Pass exactly one of `title_id` or `tmdb_id`; leave `format` out for "any copy" (a `format` outside Matinee's eight is refused with a 400, as is a note over 140 characters). A title has one want: calling again replaces it. Adding a copy of that format later ends the want. Pushing it to a person's list in the family Wish Lists app stays in the Matinee app. It is registered at `all` only, because it can create titles like `add_movie`.
 
 ### 5.3 Resources
 - `matinee://stats`: Live collection overview and metrics in JSON format.
-- `matinee://recommendations`: Current top recommended movies from the collection in JSON format.
+- `matinee://recommendations`: Current top recommended movies from the collection in JSON format (Matinee's default: Watch Soon first, then forgotten gems).
 
 ### 5.4 Prompts
 - **`what_to_watch`**: Interactive prompt guiding the AI to suggest a tailored movie night lineup based on mood, family preferences, or runtime limits. With `kids=True`, it tells the assistant to call `get_recommendations(max_cert="PG-13")` and to mention that unrated films were left out.

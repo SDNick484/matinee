@@ -24,6 +24,8 @@ Matinee separates the *movie* from the *copies owned*:
 
   On the Add and Edit copy forms these four sit under a **More** disclosure, closed on a new copy so the form stays one screen on a phone. Editors also see **Unredeemed digital codes: N** on the Stats page, linking to the grid filtered with `#/?code=unredeemed`.
 
+- **List (`lists`, `list_titles`)**: A named list of titles, such as the built-in Watch Soon or a seasonal Christmas list with a `11-25` to `01-01` window (see [Lists](#lists-watch-soon-and-seasonal-lists)). A list may hold a title with no copies.
+
 Titles without owned copies are retained in the database but do not appear in the public poster grid.
 
 ---
@@ -192,11 +194,31 @@ Matinee includes an official Python **Model Context Protocol (MCP)** server (`mc
 - **Recommendation Engine**: Discovers "Forgotten Gems" ($\ge 8.0$ rating, unviewed in $> 12$ months), unwatched backlog titles, and quick weeknight picks. Two franchise modes cover series: `mode=next_in_franchise` (the next unwatched owned film in a series someone has started) and `mode=start_franchise` (the first film of an owned series of 2+ films that nobody has started).
 - **Kids' Cap**: Any mode accepts `max_cert` (G, PG, PG-13, R, NC-17). The MCP assistant maps "kids' night" to `max_cert="PG-13"` unless a rating is named. Unrated titles are hidden whenever a cap is set. The Movie Night picker on the phone UI defaults to "Any" and remembers the last cap chosen on that device.
 - **Certification Override**: Editors can set a title's US rating (G, PG, PG-13, R, NC-17, or NR) from the title view when TMDB's rating is wrong or missing. The override survives TMDB refreshes, and clearing it restores TMDB's value. It is written with `PUT /admin/api/titles/<id>/certification`, which requires an editor session and returns 401 for anonymous requests.
-- **Read & Write MCP Tools**: Search collection, fetch full title details, query recommendations, log watches with notes, set personal 0.0–10.0 ratings, and import movies from TMDB.
+- **Read & Write MCP Tools**: Search collection, fetch full title details, query recommendations, read the family's lists, log watches with notes, set personal 0.0–10.0 ratings, put titles on lists, and import movies from TMDB.
 
-`MATINEE_MCP_WRITES=none|log|all` chooses which write tools the remote service offers: `log` adds `rate_movie` and `log_watch` (log a movie night from the phone), `all` also adds `add_movie` and `want_movie` (see [docs/mcp-setup.md](docs/mcp-setup.md) §4.4).
+`MATINEE_MCP_WRITES=none|log|all` chooses which write tools the remote service offers: `log` adds `rate_movie`, `log_watch` and `set_list_membership` (log a movie night, or put a title on Watch Soon, from the phone), `all` also adds `add_movie` and `want_movie` (see [docs/mcp-setup.md](docs/mcp-setup.md) §4.4).
 
 See [docs/mcp-setup.md](docs/mcp-setup.md) for full configuration blocks and prompt workflows. To use the tools from the Claude app on your phone, see "Remote access from the Claude app" in the same file (a `matinee-mcp` service behind Cloudflare Access, read-only by default).
+
+---
+
+## Lists: Watch Soon and seasonal lists
+
+Every collection has one built-in list, **Watch Soon**: the movies the family wants to get to next. Editors can add their own lists too, usually seasonal ones with a window that comes round each year: Halloween `10-01` to `10-31`, Thanksgiving `11-20` to `11-30`, Christmas `11-25` to `01-01` (a window may wrap the year). Watch Soon can be neither renamed nor deleted, and two lists cannot share a name in any case.
+
+- **Title page.** A chip for each list the title is on, for everyone (tap one to see the whole list). Editors get a **Lists** button there that opens a sheet of toggles, one per list. **Lists** in the admin header manages them: name, window, order, delete.
+- **Nowhere else.** Lists are not on the grid, the stats or the Movie Night picker.
+- **Watching clears Watch Soon.** Logging a watch with a real date (**+ Watched Today**, **Log Date**, or MCP `log_watch`) takes the title off Watch Soon in the same save. A watch logged as a bucket (**10+ Years**, **Date Unknown**, ...) leaves it, and seasonal lists never change on a watch: *Elf* stays on Christmas.
+- **Recommendations.** `mode=watch_soon` picks owned titles on Watch Soon, unseen first, then the oldest added. With no `mode`, `/api/recommendations` (and the MCP `get_recommendations` tool) start with Watch Soon and fall back to Forgotten Gems when it has nothing; the answer's `mode` says which ran. `list=Christmas` restricts any mode to one list, and `in_season=true` to the lists in season today (the date in America/Los_Angeles).
+- **Public.** `GET /api/lists` and `GET /api/lists/<id>` (and a `lists` key on `GET /api/titles/<id>`) answer anonymous visitors while `PUBLIC_VIEW=1`; only the editor read adds who has seen each title. Writes are under `/admin/api/lists` and need an editor: `POST /admin/api/lists`, `PUT` or `DELETE /admin/api/lists/<id>`, and `PUT` or `DELETE /admin/api/lists/<id>/titles/<title_id>`.
+
+```sh
+curl -s -H "Authorization: Bearer $MATINEE_API_KEY" -H 'content-type: application/json' \
+  -d '{"name": "Christmas", "season_start": "11-25", "season_end": "01-01"}' https://movies.example.com/admin/api/lists
+curl -s https://movies.example.com/api/recommendations?in_season=true
+```
+
+The CSV export is unchanged.
 
 ---
 
