@@ -302,7 +302,7 @@ def test_default_is_read_only(client, token):
     assert tool_names(client, tok, open_session(client, tok)) == READ_TOOLS
 
 
-def test_writes_enabled_lists_thirteen(env, signing_key, where_is_calls, token):
+def test_writes_enabled_lists_fifteen(env, signing_key, where_is_calls, token):
     env["MATINEE_MCP_READONLY"] = "0"
     with make_client(env, signing_key) as c:
         tok = token()
