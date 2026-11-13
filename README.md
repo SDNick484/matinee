@@ -221,6 +221,20 @@ A title counts as unwatched for an audience only if nobody in it has seen it, so
 
 ---
 
+## Family wish list (optional)
+
+Editors can mark a movie **Want to buy**, optionally for one format (`4K UHD`, `Blu-ray`, `Digital 4K` …) with a note of up to 140 characters. A want is its own record, not a copy status, because the family often owns one format and wants another: *The Dark Knight* owned as Digital HD on Movies Anywhere can be wanted on 4K UHD. A want with no format means "any copy".
+
+- **Where.** On a title page, **Want…** (a format or Any, plus a note). In **Add Movie**, a title Matinee doesn't have yet gets **Want to buy…** beside **Save Copy**; it creates the title with no copies plus the want. A title with no copies and a want reads **Want to buy**; an owned one reads **Wanted: 4K UHD**. The editor-only **Wanted** view in the header lists every want as poster rows with its format chip and who it was pushed to. It is not on the dashboard.
+- **Clearing.** Adding a copy of the format wanted (or any copy, for a want with no format) removes the want in the same step; the response says `"want_cleared": true`. A Blu-ray leaves a 4K UHD want alone.
+- **Editors only.** Wants and wish list history are never in the public `/api`: no `want`, `wanted_format` or `wishes` key, and a title with no copies stays out of the public grid.
+- **Wish Lists app.** If the family Wish Lists app runs on the same server, a title with a want gets **Add to a wish list…**. It adds the movie to the chosen person's list with a shopping link built from the title, year and wanted format (for example `Spirited Away 2001 4K UHD`, set by `WISHLIST_MOVIE_URL`, whose `{q}` is replaced) and the notes `Movie · 4K UHD · TMDB 129`. It does this through the Wish Lists app's own API on localhost (`WISHLIST_URL`, default `http://127.0.0.1:8766`), so the wish list itself is unchanged, and the button shows only while that app answers. People come from the Wish Lists app, not from Matinee's People. Purchase status is never read here, so there are no spoilers.
+- **MCP.** `get_wishlist` lists the wants (every write level, key required); `want_movie` adds one (write level `all`). See [docs/mcp-setup.md](docs/mcp-setup.md).
+
+Not built yet: an "owned on DVD or VHS only" upgrade report, per-person wants inside Matinee, and a CSV export of wants.
+
+---
+
 ## AI search (Ask)
 
 **Ask** lets signed-in editors question the collection in plain language ("Which 4K discs do we own that nobody has watched?") at `https://movies.example.com/admin#/ask`. It is editor-only and stays off until an API key is set. Headless callers using `MATINEE_API_KEY` or `MATINEE_READ_KEY` are refused.
@@ -263,7 +277,7 @@ python3 -m pytest -q tests
 Code layout: `app.py` holds the Flask app, auth, pages and every route. Route-free code lives beside it:
 `settings.py` (environment), `common.py` (shared helpers), `db.py` (schema, `migrate()`, connections),
 `clients.py` (TMDB, OMDb, UPC titles), `images.py` (image cache), `people.py` (people and attendance),
-`browse.py` (the read handlers served under `/api` and `/admin/api`) and `export.py` (CSV). `ask.py`,
+`browse.py` (the read handlers served under `/api` and `/admin/api`), `export.py` (CSV) and `wishlist.py` (wants and the Wish Lists app link). `ask.py`,
 `recommend.py` and the MCP server (`mcp_server.py`, `mcp_http.py`, `mcp_remote.py`) sit beside them too.
 
 ---
