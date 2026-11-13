@@ -7,6 +7,7 @@ Can operate in:
    MATINEE_READ_KEY; with neither it reads the public /api, which has no watch notes).
 2. Direct SQLite Mode: Accelerates read operations directly against MATINEE_DB_PATH.
 """
+import builtins
 import inspect
 import json
 import logging
@@ -79,12 +80,15 @@ TOOL_HINTS: Dict[str, Tuple[bool, bool, bool, bool]] = {
     "get_recommendations": (True, False, True, False),
     "get_collection_stats": (True, False, True, False),
     "list_people": (True, False, True, False),
+    "get_lists": (True, False, True, False),
+    "get_list": (True, False, True, False),
     "search_tmdb": (True, False, True, True),   # reads TMDB
     "rate_movie": (False, True, True, False),   # overwrites or clears the previous rating
     "log_watch": (False, False, False, False),  # appends a watch row each call
     "add_movie": (False, False, False, True),   # inserts a copy each call, may fetch TMDB
     "get_wishlist": (True, False, True, False),  # editor-only data: the keyed path only
     "want_movie": (False, True, True, True),    # replaces the title's earlier want; may create the title from TMDB
+    "set_list_membership": (False, True, True, False),  # on=false takes a title off a list; same call, same state
 }
 
 
@@ -134,6 +138,9 @@ MATINEE_DB_PATH = os.environ.get("MATINEE_DB_PATH", "").strip()
 
 
 TOO_OLD_FOR_PEOPLE = "This Matinee server is too old to pick for specific people. Update Matinee."
+TOO_OLD_FOR_LISTS = "This Matinee server is too old for lists. Update Matinee."
+_LIST_KEYS = ("id", "name", "kind", "season_start", "season_end", "in_season", "count")
+_MEMBER_KEYS = ("id", "title", "year", "formats", "owned", "added_at", "seen_by")
 # recommend.py's wording, written out here because the REST path does not import recommend.py
 # (tests/test_mcp_server.py::test_rest_people_messages_match_the_server keeps them equal).
 NO_PEOPLE = "No people are set up yet. Add them under People in the admin view."
@@ -470,6 +477,8 @@ class MatineeClient:
                 d["watch_count"] = len(watches)
                 d["genres"] = genres
                 d["custom_poster"] = bool(d.get("custom_poster_file"))  # same key as GET /api/titles/<id>
+                import lists
+                d["lists"] = lists.title_lists(con, title_id, lists.pacific_today()) if lists.has_lists(con) else []
                 # effective certification, same shape as GET /api/titles/<id>
                 d["certification_tmdb"] = t["certification"]
                 d["certification_override"] = t["certification_override"]
@@ -637,7 +646,7 @@ class MatineeClient:
 
     def get_recommendations(
         self,
-        mode: str = "forgotten_gems",
+        mode: Optional[str] = None,
         genre: Optional[str] = None,
         medium: Optional[str] = None,
         max_runtime: Optional[int] = None,
@@ -646,6 +655,8 @@ class MatineeClient:
         random: bool = False,
         max_cert: Optional[str] = None,
         audience: Optional[str] = None,
+        list: Optional[str] = None,
+        in_season: bool = False,
     ) -> Dict[str, Any]:
         """Query recommendation heuristics (see the get_recommendations tool for modes and filters)."""
         con = self._get_db()
@@ -657,7 +668,7 @@ class MatineeClient:
                 out = recommend.recommend(con, recommend.parse_params({
                     "mode": mode, "genre": genre, "medium": medium, "max_runtime": max_runtime,
                     "min_rating": min_rating, "limit": limit, "random": random,
-                    "max_cert": max_cert, "audience": audience,
+                    "max_cert": max_cert, "audience": audience, "list": list, "in_season": in_season,
                 }))
                 for r in out["results"]:
                     r.pop("poster_file", None)
@@ -667,7 +678,12 @@ class MatineeClient:
                 con.close()
 
         sent_audience = self._people_param(audience) if audience is not None else None
-        params = {"mode": mode, "limit": limit}
+        params: Dict[str, Any] = {"mode": mode} if mode else {}   # no mode: the server picks (Watch Soon first)
+        params["limit"] = limit
+        if list:
+            params["list"] = list
+        if in_season:
+            params["in_season"] = "1"
         if sent_audience is not None:
             params["audience"] = sent_audience
         if genre:
@@ -688,7 +704,9 @@ class MatineeClient:
         if audience is not None and isinstance(out, dict) and "audience" not in out:
             # The server ignored it (it echoes `audience` whenever it applies one); never return an unfiltered list.
             raise MatineeError(TOO_OLD_FOR_PEOPLE)
-        if max_cert and isinstance(out, dict) and isinstance(out.get("results"), list):
+        if isinstance(out, dict) and ((list and "list" not in out) or (in_season and "in_season" not in out)):
+            raise MatineeError(TOO_OLD_FOR_LISTS)   # it ignored the restriction; never return an unfiltered list
+        if max_cert and isinstance(out, dict) and isinstance(out.get("results"), builtins.list):  # `list` is a parameter
             # Older Matinee servers ignore max_cert; never trust them with a kids-safety filter.
             # Written out locally: this REST path must not import recommend.py.
             order = ("G", "PG", "PG-13", "R", "NC-17")
@@ -738,6 +756,80 @@ class MatineeClient:
                 con.close()
 
         return self._api_request("GET", f"{self._read_prefix}/stats")
+
+    # ------------------------------------------------------------------------ Lists
+    def _lists_rows(self) -> Dict[str, Any]:
+        """REST: GET /lists as the server returns it. A 404 means the server predates lists."""
+        try:
+            res = self._api_request("GET", f"{self._read_prefix}/lists")
+        except MatineeError as e:
+            if e.status == 404:
+                raise MatineeError(TOO_OLD_FOR_LISTS, status=404) from None
+            raise
+        return res if isinstance(res, dict) else {}
+
+    @staticmethod
+    def _find_list_rest(rows: List[Dict[str, Any]], token: Any) -> Dict[str, Any]:
+        """The list a token names among the server's lists: an id, or a name (ASCII case ignored, as the server's
+        COLLATE NOCASE column does). MatineeError naming the lists when there is none."""
+        t = str(token if token is not None else "").strip()
+        for row in rows:
+            if t.isascii() and t.isdigit() and str(row.get("id")) == t:
+                return row
+        for row in rows:
+            if str(row.get("name", "")).translate(_ASCII_LOWER) == t.translate(_ASCII_LOWER):
+                return row
+        raise MatineeError(f"Unknown list: {token}. Lists: {', '.join(str(r.get('name')) for r in rows)}.",
+                           status=400)
+
+    def get_lists(self) -> Dict[str, Any]:
+        """Every list (Watch Soon first) with its season window, whether it is in season today and its size."""
+        con = self._get_db()
+        if con is not None:
+            try:
+                import lists
+                today = lists.pacific_today()
+                return {"today": today.isoformat(),
+                        "lists": [{k: x[k] for k in _LIST_KEYS} for x in lists.all_lists(con, today)]}
+            finally:
+                con.close()
+        res = self._lists_rows()
+        return {"today": res.get("today"), "lists": [{k: x.get(k) for k in _LIST_KEYS} for x in res.get("lists", [])]}
+
+    def get_list(self, list: Any) -> Dict[str, Any]:
+        """One list by name or id, with its titles (oldest added first). `seen_by` names who has seen each title,
+        in direct-SQLite mode and with a key, once people are set up."""
+        con = self._get_db()
+        if con is not None:
+            try:
+                import lists
+                if not lists.has_lists(con):
+                    raise MatineeError(lists.NO_LISTS)
+                row = lists.find_list(con, list)
+                if row is None:
+                    raise MatineeError(lists.unknown_list_message(con, list))
+                out = {k: v for k, v in lists.list_out(row, lists.pacific_today()).items() if k in _LIST_KEYS}
+                out["titles"] = [{k: m[k] for k in _MEMBER_KEYS if k in m}
+                                 for m in lists.list_members(con, row["id"], private=True)]
+                return out
+            finally:
+                con.close()
+        row = self._find_list_rest(self._lists_rows().get("lists", []), list)
+        res = self._api_request("GET", f"{self._read_prefix}/lists/{row['id']}")
+        out = {k: res.get(k) for k in _LIST_KEYS}
+        out["titles"] = [{k: m[k] for k in _MEMBER_KEYS if k in m} for m in res.get("titles", [])]
+        return out
+
+    def set_list_membership(self, list: Any, title_id: int, on: bool = True) -> Dict[str, Any]:
+        """Put a title on a list (on=True) or take it off (on=False). Both are idempotent. Writes go through the
+        REST API, as every write does."""
+        row = self._find_list_rest(self._lists_rows().get("lists", []), list)
+        try:
+            return self._api_request("PUT" if on else "DELETE", f"/admin/api/lists/{row['id']}/titles/{int(title_id)}")
+        except MatineeError as e:
+            if e.status == 404:
+                raise MatineeError(f"Movie with id {title_id} not found.", status=404) from None
+            raise
 
     # ------------------------------------------------------------------------ Writes
     def rate_movie(self, title_id: int, rating: Optional[float]) -> Dict[str, Any]:
@@ -837,15 +929,20 @@ Matinee is the family's own collection of physical discs and digital copies.
 If a tool answers that no people are set up, repeat the call without audience.
 - After a pick, "where is it?": call where_is(title). After watching: call log_watch, then rate_movie if the user gives a rating.
 - "What do we want to buy" or "what is on the wish list": call get_wishlist. A movie can be wanted in a format the family does not own yet even when another format is owned.
+- "Pick something" with nothing else to go on: call get_recommendations with no mode; it uses the family's Watch Soon list first. \
+Near a holiday, call get_lists and pass in_season=true when a list is in season; list="Christmas" picks from one list.
+- "Add it to Watch Soon" or "save it for later": set_list_membership(list="Watch Soon", title_id=..., on=true).
 """
 # For build_server(writes=False): the remote read-only service has no log_watch or rate_movie to point at.
 READONLY_INSTRUCTIONS = SERVER_INSTRUCTIONS.replace(
     " After watching: call log_watch, then rate_movie if the user gives a rating.", "").replace(
-    " After watching, pass attendees to log_watch only when someone was missing.", "")
+    " After watching, pass attendees to log_watch only when someone was missing.", "").replace(
+    '- "Add it to Watch Soon" or "save it for later": set_list_membership(list="Watch Soon", title_id=..., on=true).\n',
+    "")
 # Said at the levels that lack tools, in words that name none of them.
-_NO_WRITES_NOTE = ("- This connection is read-only: it cannot log watches, rate movies or add titles. "
+_NO_WRITES_NOTE = ("- This connection is read-only: it cannot log watches, rate movies, change lists or add titles. "
                    "For those, tell the user to use the Matinee app.\n")
-_LOG_ONLY_NOTE = ("- This connection can log watches and ratings but cannot add movies or copies; "
+_LOG_ONLY_NOTE = ("- This connection can log watches and ratings and change lists but cannot add movies or copies; "
                   "a title they do not own has to be added in the Matinee app.\n")
 
 
@@ -871,13 +968,13 @@ def _make_server(instructions: str = SERVER_INSTRUCTIONS):
 
 _default_client = MatineeClient()
 
-WRITE_TOOLS = ("rate_movie", "log_watch", "add_movie", "want_movie")
+WRITE_TOOLS = ("rate_movie", "log_watch", "add_movie", "want_movie", "set_list_membership")
 # Which write tools each level registers. "log" is what the phone needs to log a movie night: it can record a
-# watch and a rating but cannot import titles (add_movie spends TMDB quota and adds copies; want_movie can create a
-# title too, so it is at "all" only).
+# watch and a rating and put a title on Watch Soon, but cannot import titles (add_movie spends TMDB quota and adds
+# copies; want_movie can create a title too, so it is at "all" only).
 WRITE_LEVELS: Dict[str, Tuple[str, ...]] = {
     "none": (),
-    "log": ("rate_movie", "log_watch"),
+    "log": ("rate_movie", "log_watch", "set_list_membership"),
     "all": WRITE_TOOLS,
 }
 
@@ -932,8 +1029,8 @@ def where_is(title: str) -> Dict[str, Any]:
 
 
 def get_recommendations(
-    mode: Literal["forgotten_gems", "never_watched", "quick_picks", "genre_mood",
-                  "next_in_franchise", "start_franchise", "watch_soon"] = "forgotten_gems",
+    mode: Optional[Literal["forgotten_gems", "never_watched", "quick_picks", "genre_mood",
+                           "next_in_franchise", "start_franchise", "watch_soon"]] = None,
     genre: Optional[str] = None,
     medium: Optional[Literal["physical", "digital"]] = None,
     max_runtime: Optional[int] = None,
@@ -942,10 +1039,16 @@ def get_recommendations(
     limit: int = 5,
     random: bool = False,
     audience: Optional[str] = None,
+    list: Optional[str] = None,
+    in_season: bool = False,
 ) -> Dict[str, Any]:
     """Pick movies to watch from the family's own collection (movie night, "what should we watch",
     kids' night, family-friendly, sequel, next in the series, start a franchise, quick short movie).
     <use_case>
+    - No mode: Matinee picks from the family's Watch Soon list first and falls back to forgotten_gems; the
+      answer's `mode` says which ran. mode=watch_soon: only Watch Soon (unseen first, then oldest added).
+    - list="Christmas" (a name or id from get_lists): only titles on that list, with any mode.
+    - in_season=true: only titles on lists in season today (Christmas from Nov 25, Halloween in October...).
     - mode=next_in_franchise: next unwatched owned film in each series someone has started (one per series)
     - mode=start_franchise: first film of an owned series (2+ films) nobody has started
     - max_cert=G|PG|PG-13|R|NC-17: rating cap; works with any mode. For "kids" with no rating named, use PG-13.
@@ -973,7 +1076,28 @@ def get_recommendations(
         limit=limit,
         random=random,
         audience=audience,
+        list=list,
+        in_season=in_season,
     )
+
+
+def get_lists() -> Dict[str, Any]:
+    """The family's lists: Watch Soon (what they plan to watch next) and seasonal or custom lists such as
+    Christmas or Halloween, each with its season window (MM-DD, may wrap the year), whether it is in season today
+    (America/Los_Angeles) and how many titles it holds. Use a list's name with get_list or get_recommendations."""
+    return _default_client.get_lists()
+
+
+def get_list(list: str) -> Dict[str, Any]:
+    """One list's titles (by list name or id), oldest added first, with year, formats, whether they are owned and,
+    when available, seen_by (who has seen each)."""
+    return _default_client.get_list(list)
+
+
+def set_list_membership(list: str, title_id: int, on: bool = True) -> Dict[str, Any]:
+    """Put a movie on a list (on=true) or take it off (on=false), for example list="Watch Soon". Watching a movie
+    with a date takes it off Watch Soon by itself; seasonal lists keep their movies."""
+    return _default_client.set_list_membership(list, title_id, on=on)
 
 
 def list_people() -> List[Dict[str, Any]]:
@@ -1053,7 +1177,7 @@ def resource_stats() -> str:
 
 def resource_recommendations() -> str:
     """Current top recommended movies from the collection."""
-    recs = _default_client.get_recommendations(mode="forgotten_gems", limit=5)
+    recs = _default_client.get_recommendations(limit=5)   # Matinee's default: Watch Soon, then forgotten gems
     return json.dumps(recs, indent=2)
 
 
@@ -1087,9 +1211,9 @@ def prompt_log_movie_night(movie_title: str = "") -> str:
 
 
 def build_server(*, writes=True):
-    """Build a MCP server. `writes` is True (all twelve tools), False (the eight read tools) or a level from
-    WRITE_LEVELS: "none", "log" (adds rate_movie and log_watch: ten tools) or "all" (adds add_movie and want_movie:
-    twelve).
+    """Build a MCP server. `writes` is True (all fifteen tools), False (the ten read tools) or a level from
+    WRITE_LEVELS: "none", "log" (adds rate_movie, log_watch and set_list_membership: thirteen tools) or "all" (adds
+    add_movie and want_movie: fifteen).
     Anything else raises ValueError.
 
     Tool functions are module-level and read _default_client at call time.
@@ -1103,9 +1227,9 @@ def build_server(*, writes=True):
         server.tool(**_annotation_kwargs(FastMCP, fn.__name__))(fn)
 
     for fn in (search_collection, get_movie, where_is, get_recommendations, get_collection_stats, list_people,
-               search_tmdb, get_wishlist):
+               get_lists, get_list, search_tmdb, get_wishlist):
         register(fn)
-    for fn in (rate_movie, log_watch, add_movie, want_movie):
+    for fn in (rate_movie, log_watch, add_movie, want_movie, set_list_membership):
         if fn.__name__ in WRITE_LEVELS[level]:
             register(fn)
     server.resource("matinee://stats")(resource_stats)

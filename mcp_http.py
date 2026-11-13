@@ -6,7 +6,7 @@ build_server(); mcp_remote.py (a verbatim copy of mcp-server-shared's remote.py)
 JWT check, the Host check and /healthz.
 
 Which write tools it registers is the write level (write_level()): "none" (the default), "log" (adds
-rate_movie and log_watch) or "all" (adds add_movie and want_movie). MATINEE_MCP_WRITES picks it, but only while
+rate_movie, log_watch and set_list_membership) or "all" (adds add_movie and want_movie). MATINEE_MCP_WRITES picks it, but only while
 MATINEE_MCP_READONLY is 0/false/no/off or unset; any other READONLY value keeps it at "none". With WRITES
 unset, READONLY=0 means "all", as before.
 
