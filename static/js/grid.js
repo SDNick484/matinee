@@ -41,6 +41,7 @@ import { getChipIcon, icon } from "./icons.js";
     const qualityStr = state.route.query.get("quality") || "";
     const genreStr = state.route.query.get("genre") || "";
     const rating = state.route.query.get("rating") || "";
+    const score = state.route.query.get("score") || "";
     const watched = state.route.query.get("watched") || "";
     const kind = state.route.query.get("kind") || "";
     const both = state.route.query.get("both") || "";
@@ -70,6 +71,7 @@ import { getChipIcon, icon } from "./icons.js";
     state.grid.quality = quality;
     state.grid.genre = genre;
     state.grid.rating = rating;
+    state.grid.score = score;
     state.grid.watched = watched;
     state.grid.unseen_by = state.route.query.get("unseen_by") || "";
     state.grid.attendance = state.route.query.get("attendance") || "";
@@ -198,7 +200,7 @@ import { getChipIcon, icon } from "./icons.js";
     if (get("quality")) ignored.push("quality");
     if (bothMedia) ignored.push("medium");
     if (get("code")) ignored.push("code");
-    const other = ["q", "genre", "watched", "unseen_by", "attendance", "rating"].some((k) => get(k));
+    const other = ["q", "genre", "watched", "unseen_by", "attendance", "rating", "score"].some((k) => get(k));
     return { filters: active ? filters : null, ignored, noteNeeded: other || ignored.length > 0 };
   }
 
@@ -302,7 +304,8 @@ import { getChipIcon, icon } from "./icons.js";
     return parts.length ? `Watched: ${parts.join(" · ")}`.replace(/^Watched: (Unseen by|Who watched)/, "$1") : "Watched: All";
   }
 
-  function getRatingLabel(rating) {
+  function getRatingLabel(rating, score) {
+    if (score) return `Rating: ★ ${Number(score).toFixed(1)}`;
     if (!rating) return "Rating: All";
     if (rating === "8+" || rating === "8") return "Rating: 8.0+ ★";
     if (rating === "unrated") return "Rating: Unrated";
@@ -318,6 +321,7 @@ import { getChipIcon, icon } from "./icons.js";
     const quality = state.grid.quality || [];
     const genre = state.grid.genre || [];
     const rating = state.grid.rating || "";
+    const score = state.grid.score || "";   // one exact score, from the Stats breakdown
     const watched = state.grid.watched || "";
     const unseenBy = state.grid.unseen_by || "";
     const attendance = state.grid.attendance || "";
@@ -333,6 +337,7 @@ import { getChipIcon, icon } from "./icons.js";
       quality.length > 0 ||
       genre.length > 0 ||
       Boolean(rating) ||
+      Boolean(score) ||
       Boolean(watched) ||
       Boolean(locationId) ||
       state.grid.kind ||
@@ -344,7 +349,7 @@ import { getChipIcon, icon } from "./icons.js";
     const qualityLabel = getQualityLabel(quality);
     const genreLabel = getGenreLabel(genre);
     const watchedLabel = getWatchedLabel(watched, unseenBy, attendance);
-    const ratingLabel = getRatingLabel(rating);
+    const ratingLabel = getRatingLabel(rating, score);
 
     let locationLabel = "All Locations";
     if (locationId && f.locations) {
@@ -467,15 +472,24 @@ import { getChipIcon, icon } from "./icons.js";
 
       <!-- Rating Dropdown -->
       <div class="filter-popover" id="popover-rating">
-        <button type="button" class="filter-btn ${rating ? "active" : ""}" data-toggle="popover" aria-expanded="false" aria-haspopup="true">
+        <button type="button" class="filter-btn ${rating || score ? "active" : ""}" data-toggle="popover" aria-expanded="false" aria-haspopup="true">
           <span>${esc(ratingLabel)}</span>
           <span class="caret">▾</span>
         </button>
         <div class="popover-menu" role="menu">
           <label class="popover-item is-all">
-            <input type="checkbox" data-facet="rating" data-val="" ${!rating ? "checked" : ""}>
+            <input type="checkbox" data-facet="rating" data-val="" ${!rating && !score ? "checked" : ""}>
             <span>All Ratings</span>
           </label>
+          ${
+            score
+              ? `
+          <label class="popover-item">
+            <input type="checkbox" data-facet="score" data-val="${esc(score)}" checked>
+            <span>Exactly ★ ${esc(Number(score).toFixed(1))}</span>
+          </label>`
+              : ""
+          }
           <label class="popover-item">
             <input type="checkbox" data-facet="rating" data-val="8+" ${rating === "8+" || rating === "8" ? "checked" : ""}>
             <span>Rated 8.0+ ★</span>
@@ -625,7 +639,10 @@ import { getChipIcon, icon } from "./icons.js";
           const key = facet;
           if (!val || (val === state.grid[key] && !checked)) q.delete(key);
           else q.set(key, val);
+        } else if (facet === "score") {
+          q.delete("score");   // only ever shown checked, so a tap clears it
         } else if (facet === "rating") {
+          q.delete("score");   // the 8.0+ / Unrated choices replace an exact score
           if (!val || (val === state.grid.rating && !checked)) {
             q.delete("rating");
           } else {
@@ -663,6 +680,7 @@ import { getChipIcon, icon } from "./icons.js";
       q.delete("quality");
       q.delete("genre");
       q.delete("rating");
+      q.delete("score");
       q.delete("watched");
       q.delete("unseen_by");
       q.delete("attendance");
@@ -691,6 +709,7 @@ import { getChipIcon, icon } from "./icons.js";
         (state.grid.quality && state.grid.quality.length > 0) ||
         (state.grid.genre && state.grid.genre.length > 0) ||
         Boolean(state.grid.rating) ||
+        Boolean(state.grid.score) ||
         Boolean(state.grid.watched) ||
         Boolean(state.grid.unseen_by) ||
         Boolean(state.grid.attendance) ||
