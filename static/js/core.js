@@ -183,7 +183,19 @@
     return "k-dvd";
   }
 
+  // The CSV export as a link: `filters` is {kind, format, service, location} (any may be empty) and `shape` is "copy"
+  // (a row per copy) or "title" (a row per title). Spec 2026-11-18-grid-export-design.
+  function exportHref(filters, shape) {
+    const q = new URLSearchParams();
+    ["kind", "format", "service", "location"].forEach((k) => {
+      if (filters && filters[k]) q.set(k, filters[k]);
+    });
+    q.set("shape", shape);
+    const admin = "/admin/api";
+    return `${admin}/export.csv?${q.toString()}`;
+  }
+
 export {
-  api, centsToDollars, certSlotHtml, dollarsToCents, esc, formatRuntime, FORMATS, getChipClass, isAdmin, SERVICES, state, TMDB_IMG_THUMB,
-  toast
+  api, centsToDollars, certSlotHtml, dollarsToCents, esc, exportHref, formatRuntime, FORMATS, getChipClass, isAdmin, SERVICES, state,
+  TMDB_IMG_THUMB, toast
 };

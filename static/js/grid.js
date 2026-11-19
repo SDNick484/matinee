@@ -1,5 +1,5 @@
 // Matinee — poster grid, search and filters (7.2).
-import { api, esc, getChipClass, isAdmin, state, toast } from "./core.js";
+import { api, esc, exportHref, getChipClass, isAdmin, state, toast } from "./core.js";
 import { activePeople } from "./people.js";
 import { getChipIcon, icon } from "./icons.js";
 
@@ -109,6 +109,8 @@ import { getChipIcon, icon } from "./icons.js";
         </div>
       </div>
 
+      ${isAdmin ? `<div id="grid-export-slot" class="export-bar"></div>` : ""}
+
       <div id="grid-container">
         <div style="text-align:center;padding:48px 16px;color:var(--ink-2)">Loading movies…</div>
       </div>
@@ -149,6 +151,7 @@ import { getChipIcon, icon } from "./icons.js";
       state.grid.titles = titlesData.titles;
 
       renderFilterBar();
+      renderExportBar();
       renderGridContent();
 
       // Restore scroll position if returning from a detail view
@@ -176,6 +179,73 @@ import { getChipIcon, icon } from "./icons.js";
         `;
       }
     }
+  }
+
+  // ================================================================= Export these (spec 2026-11-18-grid-export)
+  // The copy filters the CSV export understands, read from the route query (state.grid.medium and .quality are
+  // derived from format and kind, so they cannot tell a Quality menu choice from a format), and the other active
+  // filters it ignores. `filters` is empty when no copy filter is active.
+  function exportParams(query) {
+    const get = (k) => (query.get(k) || "").trim();
+    const mediums = get("medium").split(",").map((m) => m.trim().toLowerCase()).filter(Boolean);
+    let kind = get("kind");
+    if (kind !== "physical" && kind !== "digital") kind = "";
+    if (!kind && mediums.length === 1) kind = mediums[0] === "disc" ? "physical" : mediums[0] === "streaming" ? "digital" : "";
+    const filters = { kind, format: get("format"), service: get("service"), location: get("location_id") || get("location") };
+    const active = Object.keys(filters).some((k) => filters[k]);
+    const bothMedia = mediums.includes("both") || get("both") === "1" || get("kind") === "both";
+    const ignored = [];
+    if (get("quality")) ignored.push("quality");
+    if (bothMedia) ignored.push("medium");
+    if (get("code")) ignored.push("code");
+    const other = ["q", "genre", "watched", "unseen_by", "attendance", "rating"].some((k) => get(k));
+    return { filters: active ? filters : null, ignored, noteNeeded: other || ignored.length > 0 };
+  }
+
+  // "Export these": two download links to the CSV for the active copy filters. Editors only, and only while a
+  // filter the export honors is active.
+  function renderExportBar() {
+    const slot = document.getElementById("grid-export-slot");
+    if (!slot) return;
+    const { filters, ignored, noteNeeded } = exportParams(state.route.query);
+    if (!isAdmin || !filters) {
+      slot.innerHTML = "";
+      return;
+    }
+    const names = ["search", "genre", ...ignored];
+    slot.innerHTML = `
+      <div class="filter-popover" id="popover-export">
+        <button type="button" class="filter-btn export-btn" id="btn-grid-export" aria-expanded="false" aria-haspopup="true">
+          ${icon("download")}<span>Export these</span><span class="caret">▾</span>
+        </button>
+        <div class="popover-menu" id="grid-export" role="menu">
+          <a class="export-choice" id="export-copy" role="menuitem" href="${esc(exportHref(filters, "copy"))}" download>One row per copy</a>
+          <a class="export-choice" id="export-title" role="menuitem" href="${esc(exportHref(filters, "title"))}" download>One row per title</a>
+        </div>
+      </div>
+      ${noteNeeded ? `<p class="export-note" id="grid-export-note">Export ignores ${names.join(", ")} and watch filters.</p>` : ""}
+    `;
+    const popover = document.getElementById("popover-export");
+    const btn = document.getElementById("btn-grid-export");
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const wasOpen = popover.classList.contains("open");
+      document.querySelectorAll(".filter-popover.open").forEach((p) => {
+        p.classList.remove("open");
+        p.querySelector(".filter-btn")?.setAttribute("aria-expanded", "false");
+      });
+      state.openPopoverId = null;
+      if (!wasOpen) {
+        popover.classList.add("open");
+        btn.setAttribute("aria-expanded", "true");
+      }
+    });
+    popover.querySelectorAll(".export-choice").forEach((a) => {
+      a.addEventListener("click", () => {   // the browser downloads the file; close the menu behind it
+        popover.classList.remove("open");
+        btn.setAttribute("aria-expanded", "false");
+      });
+    });
   }
 
   function applyGridParam(key, value) {
