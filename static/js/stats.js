@@ -220,9 +220,33 @@ import { getChipIcon, icon } from "./icons.js";
                 <span>·</span>
                 <span>${rs.high_rated_count ?? 0} rated 8.0+ ★</span>
               </div>
+              ${renderRatingRows(rs.distribution || [])}
             </div>
           </div>
         </section>
+      </div>
+    `;
+  }
+
+  // One row per score given, highest first; each opens the grid filtered to exactly that score.
+  function renderRatingRows(dist) {
+    if (!dist.length) return "";
+    const max = Math.max(1, ...dist.map((d) => d.count));
+    return `
+      <div class="stat-rating-rows">
+        ${dist
+          .map(
+            (d) => `
+          <a class="stat-rating-row" href="#/?score=${encodeURIComponent(d.rating)}" aria-label="${d.count} rated ${Number(d.rating).toFixed(1)}">
+            <span class="stat-rating-score">★ ${Number(d.rating).toFixed(1)}</span>
+            <div class="stat-progress-bar">
+              <div class="stat-progress-fill" style="width: ${Math.round((d.count / max) * 100)}%; background: var(--amber);"></div>
+            </div>
+            <span class="stat-rating-count">${d.count}</span>
+          </a>
+        `
+          )
+          .join("")}
       </div>
     `;
   }

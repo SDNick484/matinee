@@ -28,6 +28,8 @@ Matinee separates the *movie* from the *copies owned*:
 
 Titles without owned copies are retained in the database but do not appear in the public poster grid.
 
+On the Stats page, the Family Ratings card lists each score the family has given (★ 10.0, ★ 9.5, …) with how many titles have it; tapping one opens the grid filtered to exactly that score (`#/?score=10`). Like the ratings themselves, it is public when `PUBLIC_VIEW=1`.
+
 ---
 
 ## Look & Feel

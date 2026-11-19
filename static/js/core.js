@@ -33,6 +33,7 @@
       quality: [],
       genre: [],
       rating: "",
+      score: "",
       watched: "",
       kind: "",
       format: "",

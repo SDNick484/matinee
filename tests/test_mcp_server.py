@@ -57,6 +57,7 @@ def test_mcp_get_collection_stats_direct_sqlite(test_env):
     stats = client.get_collection_stats()
     assert stats["overview"]["titles_count"] == 1
     assert stats["overview"]["physical_count"] == 1
+    assert stats["rating_stats"]["distribution"] == [{"rating": 9.5, "count": 1}]
 
 def test_mcp_get_recommendations_direct_sqlite(test_env):
     client = mcp_server.MatineeClient(db_path=str(test_env))

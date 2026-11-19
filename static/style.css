@@ -928,6 +928,30 @@ main#view {
   flex-wrap: wrap;
   margin-top: 2px;
 }
+/* Ratings breakdown: one tappable row per score, opening #/?score= */
+.stat-rating-rows {
+  display: flex;
+  flex-direction: column;
+  margin-top: var(--s2);
+  border-top: 1px solid var(--line);
+}
+.stat-rating-row {
+  display: grid;
+  grid-template-columns: 52px 1fr 36px;
+  align-items: center;
+  gap: var(--s3);
+  min-height: 44px;
+  color: var(--ink);
+  text-decoration: none;
+  font-size: var(--fs-sm);
+}
+.stat-rating-row + .stat-rating-row { border-top: 1px solid var(--line); }
+.stat-rating-row .stat-progress-bar { margin-top: 0; }
+.stat-rating-score { font-weight: 600; white-space: nowrap; }
+.stat-rating-count { text-align: right; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+@media (hover: hover) {
+  .stat-rating-row:hover .stat-rating-score { color: var(--accent); }
+}
 
 /* Placeholders */
 .placeholders-grid {

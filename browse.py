@@ -379,6 +379,16 @@ def list_titles(private):
     elif raw_rating == "unrated":
         where.append("NOT EXISTS (SELECT 1 FROM user_ratings r WHERE r.title_id=t.id)")
 
+    if "score" in a:   # one exact score, from the Stats breakdown (`rating` keeps its 8+/unrated meaning)
+        try:
+            score = float(a["score"])
+        except ValueError:
+            score = -1.0
+        if not (0.0 <= score <= 10.0) or (score * 2) % 1:
+            return make_err(400, "score must be between 0 and 10 in 0.5 steps.")
+        where.append("EXISTS (SELECT 1 FROM user_ratings r WHERE r.title_id=t.id AND r.rating = ?)")
+        args.append(score)
+
     watched_param = (a.get("watched") or "").strip().lower()
     if watched_param == "watched":
         where.append("EXISTS (SELECT 1 FROM watches w WHERE w.title_id=t.id)")
@@ -536,6 +546,15 @@ def collection_stats(private):
         "rated_percent": rated_pct,
         "average_rating": round(avg_rating, 1) if avg_rating is not None else 0.0,
         "high_rated_count": high_rated,
+        # titles with a copy only, the set the grid lists, so a row's count matches what #/?score= shows
+        "distribution": [
+            {"rating": r["rating"], "count": r["count"]}
+            for r in con.execute(
+                """SELECT r.rating, count(*) AS count FROM user_ratings r
+                   WHERE EXISTS (SELECT 1 FROM copies c WHERE c.title_id=r.title_id)
+                   GROUP BY r.rating ORDER BY r.rating DESC"""
+            ).fetchall()
+        ],
     }
 
     extra = {}
