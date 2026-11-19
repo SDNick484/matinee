@@ -452,18 +452,18 @@ def test_where_is_returns_title_id_db_and_rest(test_env, monkeypatch):
 
 ALL_TOOLS = {"search_collection", "get_movie", "where_is", "get_recommendations",
              "get_collection_stats", "list_people", "rate_movie", "log_watch", "search_tmdb", "add_movie",
-             "get_wishlist", "want_movie", "get_lists", "get_list", "set_list_membership"}
+             "get_wishlist", "want_movie", "get_lists", "get_list", "set_list_membership", "list_copies"}
 
 
 def _names(server):
     return {t.name for t in asyncio.run(server.list_tools())}
 
 
-def test_build_server_writes_true_lists_fifteen_tools():
+def test_build_server_writes_true_lists_sixteen_tools():
     assert _names(mcp_server.build_server(writes=True)) == ALL_TOOLS
 
 
-def test_build_server_writes_false_lists_ten_tools():
+def test_build_server_writes_false_lists_eleven_tools():
     assert _names(mcp_server.build_server(writes=False)) == ALL_TOOLS - set(mcp_server.WRITE_TOOLS)
 
 
@@ -668,6 +668,7 @@ EXPECTED_HINTS = {
     "get_lists": (True, False, True, False),
     "get_list": (True, False, True, False),
     "set_list_membership": (False, True, True, False),
+    "list_copies": (True, False, True, False),
 }
 
 
@@ -700,7 +701,7 @@ def test_annotation_kwargs_guarded_on_tool_signature():
     assert "annotations" in mcp_server._annotation_kwargs(WithAnnotations, "where_is")
 
 
-def test_annotation_table_covers_exactly_the_fifteen_tools():
+def test_annotation_table_covers_exactly_the_sixteen_tools():
     assert set(mcp_server.TOOL_HINTS) == set(EXPECTED_HINTS)
 
 
@@ -1076,8 +1077,8 @@ def test_log_watch_with_attendees_refuses_an_older_server(monkeypatch):
 
 def test_tool_lists_per_level():
     sizes = {level: _names(mcp_server.build_server(writes=level)) for level in ("none", "log", "all")}
-    assert (len(sizes["none"]), len(sizes["log"]), len(sizes["all"])) == (10, 13, 15)
-    assert {"list_people", "get_wishlist", "get_lists", "get_list"} <= sizes["none"] and "want_movie" not in sizes["log"]
+    assert (len(sizes["none"]), len(sizes["log"]), len(sizes["all"])) == (11, 14, 16)
+    assert {"list_people", "get_wishlist", "get_lists", "get_list", "list_copies"} <= sizes["none"] and "want_movie" not in sizes["log"]
     assert sizes["log"] - sizes["none"] == {"rate_movie", "log_watch", "set_list_membership"}
     assert sizes["all"] - sizes["log"] == {"add_movie", "want_movie"}
 
@@ -1450,3 +1451,336 @@ def test_the_tools_describe_themselves_to_the_model():
     tools = {t.name: t for t in asyncio.run(mcp_server.mcp.list_tools())}
     assert "wish list" in tools["get_wishlist"].description.lower()
     assert "tmdb_id" in tools["want_movie"].description and "title_id" in tools["want_movie"].description
+
+
+# --------------------------------------------------------------- list_copies (spec 2026-11-18-mcp-list-copies)
+# The Dark Knight (TMDB 155): a 4K UHD Steelbook (bought for 2499 cents) on Family Room › Media Cabinet › Shelf 1 and
+# a Digital HD copy on Movies Anywhere. Paddington 2 (346648): a Blu-ray on Shelf 2. Amélie (194): Digital HD on Apple TV.
+SHELF_1 = "Family Room › Media Cabinet › Shelf 1"
+STEELBOOK_WHERE = f"4K UHD Steelbook @ {SHELF_1}; Digital HD @ Movies Anywhere"
+PRIVATE_COPY_KEYS = ("code_status", "purchased_on", "price_cents")
+COPY_KEYS = ["title_id", "title", "year", "kind", "format", "service", "edition", "location_path"]
+TITLE_KEYS = ["title_id", "title", "year", "copies", "formats", "services", "locations", "where"]
+
+
+@pytest.fixture
+def inventory(test_env):
+    """test_env without Inception, plus the three titles above; returns their ids."""
+    from conftest import seed_title
+    con = db()
+    for table in ("watches", "user_ratings", "copies", "title_genres"):
+        con.execute(f"DELETE FROM {table} WHERE title_id=1")
+    con.execute("DELETE FROM titles WHERE id=1")
+    con.execute("INSERT INTO locations (id, parent_id, name) VALUES (1, NULL, 'Family Room'), "
+                "(2, 1, 'Media Cabinet'), (3, 2, 'Shelf 1'), (4, 2, 'Shelf 2'), (5, NULL, 'Garage')")
+    dk = seed_title(con, 155, copies=("4K UHD",), digital=("Digital HD",))
+    con.execute("UPDATE copies SET location_id=3, edition='Steelbook', code_status='unredeemed', "
+                "purchased_on='2026-10-31', price_cents=2499, created_at='2026-11-02 18:04:11' "
+                "WHERE title_id=? AND kind='physical'", (dk,))
+    con.execute("UPDATE copies SET service='Movies Anywhere', created_at='2026-11-03 09:00:00' "
+                "WHERE title_id=? AND kind='digital'", (dk,))
+    pad = seed_title(con, 346648)
+    con.execute("UPDATE copies SET location_id=4 WHERE title_id=?", (pad,))
+    am = seed_title(con, 194, copies=(), digital=("Digital HD",))
+    con.execute("UPDATE copies SET service='Apple TV' WHERE title_id=?", (am,))
+    con.commit()
+    return {"dark_knight": dk, "paddington": pad, "amelie": am, "db": test_env}
+
+
+def _direct(inventory):
+    return mcp_server.MatineeClient(db_path=str(inventory["db"]))
+
+
+def _all_clients(inventory, monkeypatch):
+    """The same question asked three ways: direct SQLite, REST with a key (/admin/api) and REST with none (/api)."""
+    return {"direct": _direct(inventory), "keyed": _admin_rest_client(monkeypatch), "public": _admin_rest_client(monkeypatch, key="")}
+
+
+def _pairs(out):
+    return [(r["title"], r["format"]) for r in out["rows"]]
+
+
+def test_list_copies_rows_have_the_public_keys_in_order(inventory):
+    out = _direct(inventory).list_copies(service="Movies Anywhere", limit=2)
+    assert out == {"total": 1, "offset": 0, "returned": 1, "next_offset": None, "shape": "copy",
+                   "rows": [{"title_id": inventory["dark_knight"], "title": "The Dark Knight", "year": 2008,
+                             "kind": "digital", "format": "Digital HD", "service": "Movies Anywhere",
+                             "edition": None, "location_path": None}]}
+    assert list(out["rows"][0]) == COPY_KEYS
+
+
+def test_list_copies_with_no_filter_is_every_copy_in_the_exports_order(inventory):
+    out = _direct(inventory).list_copies()
+    assert out["total"] == 4 and out["returned"] == 4 and out["next_offset"] is None
+    assert _pairs(out) == [("Amélie", "Digital HD"), ("The Dark Knight", "4K UHD"),
+                           ("The Dark Knight", "Digital HD"), ("Paddington 2", "Blu-ray")]
+
+
+def test_list_copies_location_includes_the_locations_below_it(inventory):
+    out = _direct(inventory).list_copies(location="Family Room › Media Cabinet")
+    assert _pairs(out) == [("The Dark Knight", "4K UHD"), ("Paddington 2", "Blu-ray")]
+    assert [r["location_path"] for r in out["rows"]] == [SHELF_1, "Family Room › Media Cabinet › Shelf 2"]
+    assert out["rows"][0]["edition"] == "Steelbook"
+
+
+@pytest.mark.parametrize("filters", [
+    {}, {"service": "Movies Anywhere"}, {"location": "Family Room › Media Cabinet"}, {"location": "3"},
+    {"location": "family room > media cabinet > shelf 2"}, {"kind": "physical", "format": "Blu-ray"},
+    {"kind": "digital"}, {"kind": "digital", "format": "Blu-ray"}, {"service": ""},
+])
+@pytest.mark.parametrize("shape", ["copy", "title"])
+@pytest.mark.parametrize("output", ["rows", "csv"])
+def test_list_copies_direct_sqlite_matches_rest_with_and_without_a_key(inventory, monkeypatch, filters, shape, output):
+    got = {name: c.list_copies(shape=shape, output=output, **filters)
+           for name, c in _all_clients(inventory, monkeypatch).items()}
+    assert got["direct"] == got["keyed"] == got["public"]
+    assert got["direct"]["shape"] == shape
+
+
+@pytest.mark.parametrize("shape,limit,offset", [("copy", 2, 0), ("copy", 2, 2), ("copy", 3, 3), ("title", 1, 0),
+                                                ("title", 1, 1), ("title", 2, 2), ("title", 5, 7)])
+def test_list_copies_paging_is_the_same_in_every_mode(inventory, monkeypatch, shape, limit, offset):
+    got = [c.list_copies(shape=shape, limit=limit, offset=offset)
+           for c in _all_clients(inventory, monkeypatch).values()]
+    assert got[0] == got[1] == got[2]
+
+
+def test_list_copies_paging_three_copies_with_limit_two(inventory):
+    con = db()
+    con.execute("INSERT INTO copies (title_id, kind, format, location_id) VALUES (?, 'physical', 'DVD', 4)",
+                (inventory["paddington"],))
+    con.commit()
+    client = _direct(inventory)
+    first = client.list_copies(kind="physical", limit=2)
+    assert (first["total"], first["returned"], first["next_offset"]) == (3, 2, 2)
+    second = client.list_copies(kind="physical", limit=2, offset=first["next_offset"])
+    assert (second["total"], second["returned"], second["offset"], second["next_offset"]) == (3, 1, 2, None)
+    assert _pairs(first) + _pairs(second) == _pairs(client.list_copies(kind="physical"))
+
+
+def test_list_copies_an_offset_past_the_end_is_empty_with_the_total_in_its_hint(inventory):
+    out = _direct(inventory).list_copies(offset=10)
+    assert (out["total"], out["returned"], out["rows"], out["next_offset"]) == (4, 0, [], None)
+    assert "past the end" in out["hint"] and "4" in out["hint"]
+
+
+def test_list_copies_title_shape_is_one_row_per_title_with_where(inventory):
+    out = _direct(inventory).list_copies(shape="title")
+    assert out["total"] == 3 and out["returned"] == 3
+    assert [r["title"] for r in out["rows"]] == ["Amélie", "The Dark Knight", "Paddington 2"]
+    dk = out["rows"][1]
+    assert list(dk) == TITLE_KEYS
+    assert dk == {"title_id": inventory["dark_knight"], "title": "The Dark Knight", "year": 2008, "copies": 2,
+                  "formats": "4K UHD; Digital HD", "services": "Movies Anywhere", "locations": SHELF_1,
+                  "where": STEELBOOK_WHERE}
+    assert out["rows"][0]["where"] == "Digital HD @ Apple TV"
+
+
+def test_list_copies_title_shape_summarizes_only_the_matching_copies(inventory):
+    [dk] = _direct(inventory).list_copies(shape="title", service="Movies Anywhere")["rows"]
+    assert (dk["copies"], dk["formats"], dk["locations"], dk["where"]) == (
+        1, "Digital HD", "", "Digital HD @ Movies Anywhere")
+
+
+def test_list_copies_title_pages_never_split_a_title(inventory):
+    client = _direct(inventory)
+    page = client.list_copies(shape="title", limit=1, offset=1)
+    assert (page["total"], page["returned"], page["next_offset"]) == (3, 1, 2)
+    assert page["rows"][0]["title"] == "The Dark Knight" and page["rows"][0]["copies"] == 2
+
+
+def test_list_copies_a_physical_copy_with_no_shelf_and_a_digital_one_with_no_service_read_like_where_is(inventory):
+    con = db()
+    con.execute("INSERT INTO copies (title_id, kind, format) VALUES (?, 'physical', 'DVD')", (inventory["amelie"],))
+    con.execute("INSERT INTO copies (title_id, kind, format) VALUES (?, 'digital', 'Digital SD')", (inventory["amelie"],))
+    con.commit()
+    am = next(r for r in _direct(inventory).list_copies(shape="title")["rows"] if r["title"] == "Amélie")
+    assert am["where"] == "Digital HD @ Apple TV; DVD @ Unassigned shelf; Digital SD @ Digital"
+
+
+def _csv_rows(text):
+    import csv as csvlib
+    import io
+    return list(csvlib.reader(io.StringIO(text, newline="")))
+
+
+def test_list_copies_csv_has_a_header_only_on_the_first_page(inventory):
+    client = _direct(inventory)
+    first = client.list_copies(output="csv", limit=2)
+    rest = client.list_copies(output="csv", limit=2, offset=2)
+    assert set(first) == {"total", "offset", "returned", "next_offset", "shape", "csv"}
+    assert first["total"] == 4 and first["returned"] == 2 and first["next_offset"] == 2
+    rows = _csv_rows(first["csv"])
+    assert rows[0] == COPY_KEYS and len(rows) == 3
+    assert _csv_rows(rest["csv"])[0][1] != "title" and len(_csv_rows(rest["csv"])) == 2
+    whole = client.list_copies(output="csv")["csv"]
+    assert first["csv"] + rest["csv"] == whole
+    assert not whole.startswith("﻿") and "\r\n" in whole and whole.endswith("\r\n")
+
+
+def test_list_copies_csv_keeps_accents_and_the_title_shape_header(inventory):
+    out = _direct(inventory).list_copies(output="csv", shape="title")
+    rows = _csv_rows(out["csv"])
+    assert rows[0] == TITLE_KEYS
+    assert rows[1][1] == "Amélie" and "Amélie" in out["csv"]
+    assert rows[2][-1] == STEELBOOK_WHERE
+
+
+def test_list_copies_csv_of_an_empty_first_page_is_the_header_alone(inventory):
+    out = _direct(inventory).list_copies(output="csv", kind="digital", format="Blu-ray")
+    assert _csv_rows(out["csv"]) == [COPY_KEYS] and out["returned"] == 0 and out["total"] == 0
+
+
+@pytest.mark.parametrize("name", ["direct", "keyed", "public"])
+def test_list_copies_csv_guards_a_title_that_starts_like_a_formula(inventory, monkeypatch, name):
+    con = db()
+    con.execute("UPDATE titles SET title='=HYPERLINK(\"x\")' WHERE id=?", (inventory["amelie"],))
+    con.commit()
+    client = _all_clients(inventory, monkeypatch)[name]
+    for shape in ("copy", "title"):
+        text = client.list_copies(output="csv", shape=shape)["csv"]
+        assert _csv_rows(text)[1][1] == "'=HYPERLINK(\"x\")"
+        assert '"\'=HYPERLINK(""x"")"' in text
+        # the rows output is data, not a spreadsheet, and is left as it is
+        assert client.list_copies(shape=shape)["rows"][0]["title"] == '=HYPERLINK("x")'
+
+
+def test_list_copies_csv_guard_is_the_exports_guard():
+    import export
+    assert mcp_server.FORMULA_LEAD == export.FORMULA_LEAD
+    for value in ("=1+1", "+1", "-1", "@SUM(A1)", "\tx", "\rx", "Amélie", "", "a=b", None, 2008, 0):
+        assert mcp_server._csv_cell(value) == export.csv_cell(value), repr(value)
+
+
+def test_list_copies_valid_values_are_the_apps():
+    import db as appdb
+    assert mcp_server.COPY_FORMATS == [f for fs in appdb.FORMATS.values() for f in fs]
+    assert mcp_server.COPY_SERVICES == appdb.SERVICES
+
+
+@pytest.mark.parametrize("name", ["direct", "keyed", "public"])
+def test_list_copies_never_returns_code_status_purchase_date_or_price(inventory, monkeypatch, name):
+    client = _all_clients(inventory, monkeypatch)[name]
+    for shape in ("copy", "title"):
+        for output in ("rows", "csv"):
+            text = str(client.list_copies(shape=shape, output=output))
+            for secret in ("2499", "24.99", "unredeemed", "2026-10-31", *PRIVATE_COPY_KEYS):
+                assert secret not in text, (name, shape, output, secret)
+    if name == "keyed":   # the keyed route does carry the price; the tool drops it
+        assert client.requested and all(p.startswith("/admin/api/copies") for _, p in client.requested)
+
+
+def test_list_copies_projects_a_keyed_response_down_to_the_public_keys(monkeypatch):
+    private = {"title_id": 7, "title": "Paddington 2", "year": 2017, "kind": "physical", "format": "Blu-ray",
+               "service": None, "edition": None, "location_id": 4, "location_path": "Shelf 2",
+               "code_status": "redeemed", "purchased_on": "2026-01-02", "price_cents": 1299}
+    client = mcp_server.MatineeClient(api_url="http://fake-host", api_key="k", db_path="")
+    monkeypatch.setattr(client, "_api_request", lambda m, p, d=None: {"total": 1, "copies": [dict(private)]})
+    out = client.list_copies()
+    assert list(out["rows"][0]) == COPY_KEYS
+    assert "1299" not in str(out) and "redeemed" not in str(out)
+
+
+def test_list_copies_rest_sends_the_filters_to_the_read_prefix(monkeypatch):
+    sent = []
+    keyed = mcp_server.MatineeClient(api_url="http://fake-host", api_key="k", db_path="")
+    public = mcp_server.MatineeClient(api_url="http://fake-host", api_key="", db_path="")
+    for client in (keyed, public):
+        monkeypatch.setattr(client, "_api_request", lambda m, p, d=None: sent.append((m, p)) or {"total": 0, "copies": []})
+    keyed.list_copies(service="Movies Anywhere", location="Family Room › Media Cabinet", limit=2, offset=4)
+    public.list_copies(kind="physical")
+    first = urllib.parse.urlsplit(sent[0][1])
+    assert (sent[0][0], first.path) == ("GET", "/admin/api/copies")
+    assert urllib.parse.parse_qs(first.query) == {"service": ["Movies Anywhere"],
+                                                  "location": ["Family Room › Media Cabinet"],
+                                                  "limit": ["2"], "offset": ["4"]}
+    assert [urllib.parse.urlsplit(p).path for _, p in sent if "/copies" in p] == ["/admin/api/copies", "/api/copies"]
+
+
+def test_list_copies_title_shape_reads_every_matching_copy_in_pages_of_a_thousand(monkeypatch):
+    copies = [{"title_id": i // 2, "title": f"T{i // 2}", "year": 2000, "kind": "digital", "format": "Digital HD",
+               "service": "Amazon", "edition": None, "location_path": None} for i in range(2400)]
+    seen = []
+
+    def fake(method, path, data=None):
+        q = urllib.parse.parse_qs(urllib.parse.urlsplit(path).query)
+        limit, offset = int(q["limit"][0]), int(q["offset"][0])
+        seen.append((limit, offset))
+        return {"total": len(copies), "copies": copies[offset:offset + limit]}
+
+    client = mcp_server.MatineeClient(api_url="http://fake-host", api_key="k", db_path="")
+    monkeypatch.setattr(client, "_api_request", fake)
+    out = client.list_copies(shape="title", limit=500, offset=100)
+    assert seen == [(1000, 0), (1000, 1000), (1000, 2000)]
+    assert (out["total"], out["returned"], out["next_offset"]) == (1200, 500, 600)
+    assert out["rows"][0]["title_id"] == 100 and out["rows"][0]["copies"] == 2
+
+
+def test_list_copies_a_404_means_the_server_is_too_old(monkeypatch):
+    client = mcp_server.MatineeClient(api_url="http://fake-host", api_key="k", db_path="")
+
+    def gone(method, path, data=None):
+        raise mcp_server.MatineeError("Matinee API error (404)", status=404)
+
+    monkeypatch.setattr(client, "_api_request", gone)
+    for shape in ("copy", "title"):
+        with pytest.raises(mcp_server.MatineeError) as err:
+            client.list_copies(shape=shape)
+        assert str(err.value) == "This Matinee server is too old for list_copies. Update Matinee."
+
+
+FORMATS_SENTENCE = ('Unknown format "Betamax". '
+                    'Use one of: 4K UHD, Blu-ray, 3D Blu-ray, DVD, VHS, Digital 4K, Digital HD, Digital SD.')
+
+
+@pytest.mark.parametrize("name", ["direct", "keyed", "public"])
+def test_list_copies_an_unknown_value_names_the_valid_ones(inventory, monkeypatch, name):
+    client = _all_clients(inventory, monkeypatch)[name]
+    for kwargs, sentence in (
+            ({"format": "Betamax"}, FORMATS_SENTENCE),
+            ({"kind": "laserdisc"}, 'Unknown kind "laserdisc". Use one of: physical, digital.'),
+            ({"service": "Netflix"}, 'Unknown service "Netflix". Use one of: Movies Anywhere, Apple TV, Fandango at Home, '
+                                     'Amazon, Google Play, Plex/Jellyfin, Other.'),
+            ({"location": "Attic"}, 'Unknown location "Attic". Use a location id or a path such as: Family Room,')):
+        with pytest.raises(mcp_server.MatineeError) as err:
+            client.list_copies(**kwargs)
+        assert str(err.value).startswith(sentence), (name, kwargs, str(err.value))
+
+
+@pytest.mark.parametrize("kwargs,fragment", [
+    ({"shape": "row"}, "shape must be copy or title"),
+    ({"output": "xml"}, "output must be rows or csv"),
+    ({"limit": 0}, "limit must be a whole number from 1 to 1000"),
+    ({"limit": 1001}, "limit must be a whole number from 1 to 1000"),
+    ({"offset": -1}, "offset must be a whole number, 0 or more"),
+])
+def test_list_copies_rejects_bad_arguments_before_reading(kwargs, fragment, monkeypatch):
+    client = mcp_server.MatineeClient(api_url="http://fake-host", api_key="k", db_path="")
+    monkeypatch.setattr(client, "_api_request", lambda *a, **k: pytest.fail("nothing should be sent"))
+    with pytest.raises(mcp_server.MatineeError, match=fragment):
+        client.list_copies(**kwargs)
+
+
+@pytest.mark.parametrize("name", ["direct", "keyed", "public"])
+def test_list_copies_an_empty_result_lists_the_valid_values(inventory, monkeypatch, name):
+    out = _all_clients(inventory, monkeypatch)[name].list_copies(kind="digital", format="Blu-ray")
+    assert (out["total"], out["returned"], out["next_offset"], out["rows"]) == (0, 0, None, [])
+    hint = out["hint"]
+    for word in ("physical, digital", "4K UHD", "Digital SD", "Movies Anywhere", "Plex/Jellyfin",
+                 "Family Room › Media Cabinet › Shelf 1", "Garage"):
+        assert word in hint, (name, word)
+
+
+def test_list_copies_a_non_empty_page_has_no_hint(inventory):
+    assert "hint" not in _direct(inventory).list_copies()
+
+
+def test_list_copies_tool_wrapper_and_instructions(inventory, monkeypatch):
+    monkeypatch.setattr(mcp_server, "_default_client", _direct(inventory))
+    out = mcp_server.list_copies(service="Apple TV", output="csv")
+    assert out["total"] == 1 and "Amélie" in out["csv"]
+    for level in ("none", "log", "all"):
+        text = mcp_server.instructions_for(level)
+        assert "list_copies" in text and "next_offset" in text and "null" in text
+    desc = {t.name: t.description for t in asyncio.run(mcp_server.mcp.list_tools())}["list_copies"]
+    assert "next_offset" in desc and "price" in desc
