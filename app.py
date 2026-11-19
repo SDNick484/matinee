@@ -15,7 +15,8 @@ Editors: /admin            same UI with editing; put this path behind Cloudflare
                            requires a verified Access JWT (or a direct LAN request when LAN_EDIT=1,
                            addressed by IP, localhost or a LAN_HOSTS name), or MATINEE_API_KEY;
                            MATINEE_READ_KEY may GET it but not write
-                           GET /admin/api/export.csv is the whole collection, one row per copy
+                           GET /admin/api/export.csv is the whole collection, one row per copy (or per title);
+                           GET /api/copies and /admin/api/copies list copies, filtered
 Health:  /healthz          {ok, titles, copies}
 
 Environment (see /etc/conf.d/matinee and .env.example):
@@ -56,7 +57,8 @@ from browse import CODE_PARAM_PUBLIC_ERROR, CODE_PARAM_VALUE_ERROR, code_param_r
 from browse import api_locations, collection_stats, recommendations  # noqa: F401
 from wishlist import ALL_FORMATS, want_format_arg, want_note_arg, want_satisfied_by, get_want, wishes_for_title  # noqa: F401
 from wishlist import list_wants, want_query, wish_item, wishlist_call, wishlist_available  # noqa: F401
-from export import EXPORT_COLUMNS, FORMULA_LEAD, csv_cell, dollars, export_rows, export_csv  # noqa: F401
+from export import (EXPORT_COLUMNS, FORMULA_LEAD, TITLE_EXPORT_COLUMNS, InventoryError, copy_inventory, csv_cell,  # noqa: F401
+                    dollars, export_csv, export_rows, title_rows)
 from lists import ListError, WATCH_SOON, has_lists, pacific_today, list_out, all_lists, get_list_row  # noqa: F401
 from lists import find_list, title_lists, list_members, create_list, update_list, delete_list  # noqa: F401
 from lists import set_membership, clear_watch_soon  # noqa: F401
@@ -364,13 +366,55 @@ def fetch_images(t):
 
 
 # ============================================================================ export
+
+def copy_filters():
+    """The inventory filters in the query string, as copy_inventory keywords (a missing or empty one is None)."""
+    a = request.args
+    return {"kind": a.get("kind") or None, "format": a.get("format") or None, "service": a.get("service") or None,
+            "location_id": a.get("location") or None}
+
+
 @app.get("/admin/api/export.csv")
 @editor_required
 def export_csv_route():
-    """The whole collection as a spreadsheet. GET only, so MATINEE_READ_KEY may use it."""
-    body, filename = export_csv(db())
+    """The collection as a spreadsheet, a row per copy or (shape=title) per title, optionally filtered by kind,
+    format, service and location. GET only, so MATINEE_READ_KEY may use it."""
+    try:
+        body, filename = export_csv(db(), shape=request.args.get("shape") or "copy", **copy_filters())
+    except InventoryError as e:
+        return make_err(400, str(e))
     return app.response_class(body, mimetype="text/csv", headers={
         "Content-Disposition": f'attachment; filename="{filename}"', "Cache-Control": "no-store"})
+
+
+def _whole_arg(name, default, low, high=None):
+    """An integer query argument in [low, high], else a ValueError with the sentence for the 400."""
+    raw = request.args.get(name)
+    if raw in (None, ""):
+        return default
+    bounds = f" from {low} to {high}" if high else f", {low} or more"
+    try:
+        n = int(raw)
+    except ValueError:
+        n = low - 1
+    if n < low or (high is not None and n > high):
+        raise ValueError(f"{name} must be a whole number{bounds}")
+    return n
+
+
+def copies_index(private):
+    """Every copy that matches the filters, a page at a time. Public data: edition and location are already in
+    the public title detail; code status, purchase date and price are editor-only (copy_inventory(private))."""
+    try:
+        limit = _whole_arg("limit", 1000, 1, 1000)
+        offset = _whole_arg("offset", 0, 0)
+        copies = copy_inventory(db(), private=private, **copy_filters())
+    except (InventoryError, ValueError) as e:
+        return make_err(400, str(e))
+    page = copies[offset:offset + limit]
+    more = offset + limit < len(copies)
+    return jsonify(total=len(copies), offset=offset, limit=limit, next_offset=offset + limit if more else None,
+                   copies=page)
 
 
 # ============================================================================= lists
@@ -404,6 +448,7 @@ for prefix, private in (("/api", False), ("/admin/api", True)):
     app.add_url_rule(f"{prefix}/stats", f"stats_{private}", _wrap(collection_stats))
     app.add_url_rule(f"{prefix}/recommendations", f"recommendations_{private}", _wrap(recommendations))
     app.add_url_rule(f"{prefix}/locations", f"locations_{private}", _wrap(api_locations))
+    app.add_url_rule(f"{prefix}/copies", f"copies_{private}", _wrap(copies_index))
     app.add_url_rule(f"{prefix}/lists", f"lists_{private}", _wrap(lists_index))
     app.add_url_rule(f"{prefix}/lists/<int:list_id>", f"list_{private}", _wrap(list_page))
 

@@ -97,3 +97,80 @@ def test_failed_write_leaves_no_partial_file(dbfile, tmp_path, monkeypatch):
         cli.main(["--db-path", str(dbfile), "-o", str(target)])
     assert target.read_text() == "keep me"
     assert sorted(p.name for p in tmp_path.iterdir() if p.is_file()) == ["movies.csv"]
+
+
+# ------------------------------------------------------------------------------------- shapes and filters
+
+def rows_in(body):
+    import csv
+    import io
+    return list(csv.reader(io.StringIO(body.decode("utf-8-sig"), newline="")))
+
+
+@pytest.fixture
+def shelved(dbfile):
+    """The Dark Knight's disc on Family Room > Media Cabinet > Shelf 1, its Digital HD copy on Movies Anywhere."""
+    con = db()
+    con.execute("INSERT INTO locations (id, parent_id, name) VALUES (1, NULL, 'Family Room'), "
+                "(2, 1, 'Media Cabinet'), (3, 2, 'Shelf 1')")
+    dk = "(SELECT id FROM titles WHERE tmdb_id=155)"
+    con.execute(f"UPDATE copies SET location_id=3 WHERE kind='physical' AND title_id={dk}")
+    con.execute(f"UPDATE copies SET service='Movies Anywhere' WHERE kind='digital' AND title_id={dk}")
+    con.commit()
+    return dbfile
+
+
+def test_title_shape_to_stdout_matches_export_csv(shelved, capsysbinary):
+    assert cli.main(["--db-path", str(shelved), "--shape", "title"]) == 0
+    out = capsysbinary.readouterr().out
+    con = sqlite3.connect(shelved)
+    con.row_factory = sqlite3.Row
+    assert out == matinee.export_csv(con, shape="title")[0]
+    rows = rows_in(out)
+    assert [r[0] for r in rows[1:]] == ["Amélie", "The Dark Knight"]
+    assert rows[2][6:11] == ["2", "4K UHD; Digital HD", "Movies Anywhere", "Family Room › Media Cabinet › Shelf 1",
+                             "4K UHD @ Family Room › Media Cabinet › Shelf 1; Digital HD @ Movies Anywhere"]
+
+
+def test_filters_keep_only_the_matching_copies(shelved, capsysbinary):
+    assert cli.main(["--db-path", str(shelved), "--service", "Movies Anywhere"]) == 0
+    assert [(r[0], r[7]) for r in rows_in(capsysbinary.readouterr().out)[1:]] == [("The Dark Knight", "Digital HD")]
+    assert cli.main(["--db-path", str(shelved), "--kind", "physical", "--format", "4K UHD",
+                     "--location", "Family Room › Media Cabinet"]) == 0
+    assert [(r[0], r[7]) for r in rows_in(capsysbinary.readouterr().out)[1:]] == [("The Dark Knight", "4K UHD")]
+
+
+def test_filters_and_shape_in_the_output_directory_file_name(shelved, tmp_path):
+    out_dir = tmp_path / "exports"
+    out_dir.mkdir()
+    assert cli.main(["--db-path", str(shelved), "-o", str(out_dir), "--shape", "title", "--location", "3"]) == 0
+    [f] = out_dir.iterdir()
+    assert f.name == f"matinee-{dt.date.today().isoformat()}-titles.csv"
+    assert [r[0] for r in rows_in(f.read_bytes())[1:]] == ["The Dark Knight"]
+
+
+def test_default_run_ignores_the_new_options(shelved, capsysbinary):
+    assert cli.main(["--db-path", str(shelved)]) == 0
+    assert capsysbinary.readouterr().out == expected_body(shelved)
+
+
+def test_a_title_starting_with_equals_is_quoted_in_both_shapes(shelved, capsysbinary):
+    db().execute("UPDATE titles SET title='=SUM(1)' WHERE tmdb_id=155")
+    db().commit()
+    for shape in ("copy", "title"):
+        assert cli.main(["--db-path", str(shelved), "--shape", shape]) == 0
+        titles = [r[0] for r in rows_in(capsysbinary.readouterr().out)[1:]]
+        assert "'=SUM(1)" in titles and "=SUM(1)" not in titles
+
+
+@pytest.mark.parametrize("args, sentence", [
+    (["--format", "Betamax"], 'Unknown format "Betamax". Use one of: 4K UHD, Blu-ray,'),
+    (["--kind", "laserdisc"], 'Unknown kind "laserdisc". Use one of: physical, digital.'),
+    (["--shape", "wide"], 'Unknown shape "wide". Use one of: copy, title.'),
+    (["--location", "Attic"], 'Unknown location "Attic".'),
+])
+def test_bad_values_exit_2_with_the_sentence_and_write_nothing(shelved, tmp_path, capsys, args, sentence):
+    target = tmp_path / "out.csv"
+    assert cli.main(["--db-path", str(shelved), "-o", str(target), *args]) == 2
+    assert sentence in capsys.readouterr().err
+    assert not target.exists()

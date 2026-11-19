@@ -267,3 +267,140 @@ def test_rows_are_ordered_by_title_then_copy(client, dark_knight):
 def test_location_without_a_shelf_is_empty(client):
     seed_title(db(), 155)
     assert rows_of(client.get("/admin/api/export.csv", headers=bearer(API_KEY)))[1][9] == ""
+
+
+# ------------------------------------------------------------------------------------- filters and the title shape
+# Scenario: The Dark Knight (4K UHD Steelbook on Shelf 1, Digital HD on Movies Anywhere), Paddington 2 (Blu-ray on
+# Shelf 2) and Amélie (Digital HD on Apple TV), each copy added on a known day.
+
+TITLE_HEADER = ["title", "year", "tmdb_id", "imdb_id", "certification", "runtime", "copies", "formats", "services",
+                "locations", "where", "user_rating", "watch_count", "last_watched", "added_on"]
+SHELF_1 = "Family Room › Media Cabinet › Shelf 1"
+SHELF_2 = "Family Room › Media Cabinet › Shelf 2"
+DARK_KNIGHT_TITLE_ROW = ["The Dark Knight", "2008", "155", "tt0468569", "PG-13", "152", "2", "4K UHD; Digital HD",
+                         "Movies Anywhere", SHELF_1, f"4K UHD Steelbook @ {SHELF_1}; Digital HD @ Movies Anywhere",
+                         "9.5", "1", "2026-11-07", "2026-11-02"]
+# What the export wrote before filters and shapes existed, for the three titles of `inventory` (checked in as bytes).
+UNFILTERED_BYTES = (
+    b"\xef\xbb\xbftitle,year,tmdb_id,imdb_id,certification,runtime,kind,format,service,location_path,user_rating,"
+    b"watch_count,last_watched,added_on,edition,code_status,purchased_on,price\r\n"
+    b"Am\xc3\xa9lie,2001,194,tt0211915,R,122,digital,Digital HD,Apple TV,,,0,,2026-11-05,,none,,\r\n"
+    b"The Dark Knight,2008,155,tt0468569,PG-13,152,physical,4K UHD,,Family Room \xe2\x80\xba Media Cabinet \xe2\x80\xba "
+    b"Shelf 1,9.5,1,2026-11-07,2026-11-02,Steelbook,unredeemed,2026-10-31,24.99\r\n"
+    b"The Dark Knight,2008,155,tt0468569,PG-13,152,digital,Digital HD,Movies Anywhere,,9.5,1,2026-11-07,2026-11-03,,none,,\r\n"
+    b"Paddington 2,2017,346648,tt4468740,PG,103,physical,Blu-ray,,Family Room \xe2\x80\xba Media Cabinet \xe2\x80\xba "
+    b"Shelf 2,,0,,2026-11-04,,none,,\r\n")
+
+
+@pytest.fixture
+def inventory(client, dark_knight):
+    con = db()
+    con.execute("INSERT INTO locations (id, parent_id, name) VALUES (4, 2, 'Shelf 2')")
+    con.execute("UPDATE copies SET edition='Steelbook', code_status='unredeemed', purchased_on='2026-10-31', "
+                "price_cents=2499 WHERE title_id=? AND kind='physical'", (dark_knight,))
+    pad = seed_title(con, 346648)
+    con.execute("UPDATE copies SET location_id=4, created_at='2026-11-04 10:00:00' WHERE title_id=?", (pad,))
+    am = seed_title(con, 194, copies=(), digital=("Digital HD",))
+    con.execute("UPDATE copies SET service='Apple TV', created_at='2026-11-05 10:00:00' WHERE title_id=?", (am,))
+    con.commit()
+
+
+def get_csv(client, query=""):
+    return client.get(f"/admin/api/export.csv{query}", headers=bearer(READ_KEY))
+
+
+def test_default_export_is_byte_identical_to_before(client, inventory):
+    assert get_csv(client).data == UNFILTERED_BYTES
+    assert get_csv(client, "?shape=copy&kind=&service=").data == UNFILTERED_BYTES
+    assert matinee.export_csv(db(), dt.date(2026, 11, 18)) == (UNFILTERED_BYTES, "matinee-2026-11-18.csv")
+
+
+def test_filtered_export_has_only_the_matching_copies(client, inventory):
+    rows = rows_of(get_csv(client, "?service=Movies Anywhere"))
+    assert rows[0] == HEADER + DETAILS
+    assert [(r[0], r[7], r[8]) for r in rows[1:]] == [("The Dark Knight", "Digital HD", "Movies Anywhere")]
+    rows = rows_of(get_csv(client, "?location=Family Room › Media Cabinet"))
+    assert [(r[0], r[7]) for r in rows[1:]] == [("The Dark Knight", "4K UHD"), ("Paddington 2", "Blu-ray")]
+    rows = rows_of(get_csv(client, "?kind=physical&format=Blu-ray"))
+    assert [(r[0], r[7]) for r in rows[1:]] == [("Paddington 2", "Blu-ray")]
+
+
+def test_filtered_export_to_nothing_is_header_only(client, inventory):
+    assert rows_of(get_csv(client, "?format=VHS")) == [HEADER + DETAILS]
+
+
+def test_title_shape_puts_the_dark_knight_on_one_row(client, inventory):
+    rows = rows_of(get_csv(client, "?shape=title"))
+    assert rows[0] == TITLE_HEADER
+    assert [r[0] for r in rows[1:]] == ["Amélie", "The Dark Knight", "Paddington 2"]
+    assert rows[2] == DARK_KNIGHT_TITLE_ROW
+    assert rows[3] == ["Paddington 2", "2017", "346648", "tt4468740", "PG", "103", "1", "Blu-ray", "", SHELF_2,
+                       f"Blu-ray @ {SHELF_2}", "", "0", "", "2026-11-04"]
+
+
+def test_title_shape_keeps_amelies_accent_and_drops_the_per_copy_columns(client, inventory):
+    res = get_csv(client, "?shape=title")
+    assert res.data.startswith(BOM) and "Amélie".encode() in res.data
+    rows = rows_of(res)
+    assert rows[1] == ["Amélie", "2001", "194", "tt0211915", "R", "122", "1", "Digital HD", "Apple TV", "",
+                       "Digital HD @ Apple TV", "", "0", "", "2026-11-05"]
+    assert not {"edition", "code_status", "purchased_on", "price"} & set(rows[0])
+    body = res.data.decode("utf-8-sig")
+    assert "unredeemed" not in body and "24.99" not in body and "2026-10-31" not in body
+
+
+def test_title_shape_with_a_filter_summarizes_only_the_matching_copies(client, inventory):
+    rows = rows_of(get_csv(client, "?shape=title&service=Movies Anywhere"))
+    assert rows[1:] == [["The Dark Knight", "2008", "155", "tt0468569", "PG-13", "152", "1", "Digital HD",
+                         "Movies Anywhere", "", "Digital HD @ Movies Anywhere", "9.5", "1", "2026-11-07", "2026-11-03"]]
+    [dk] = [r for r in rows_of(get_csv(client, "?shape=title&kind=physical"))[1:] if r[0] == "The Dark Knight"]
+    assert dk[6:11] == ["1", "4K UHD", "", SHELF_1, f"4K UHD Steelbook @ {SHELF_1}"]
+
+
+def test_title_shape_copies_without_a_place_use_where_is_wording(client):
+    con = db()
+    seed_title(con, 155, copies=("DVD",), digital=("Digital SD",))
+    [row] = rows_of(get_csv(client, "?shape=title"))[1:]
+    assert row[6:11] == ["2", "DVD; Digital SD", "", "", "DVD @ Unassigned shelf; Digital SD @ Digital"]
+
+
+def test_title_shape_filename_ends_with_titles(client, inventory):
+    today = dt.date.today().isoformat()
+    assert get_csv(client, "?shape=title").headers["Content-Disposition"] == \
+        f'attachment; filename="matinee-{today}-titles.csv"'
+    assert get_csv(client, "?shape=copy").headers["Content-Disposition"] == f'attachment; filename="matinee-{today}.csv"'
+    assert matinee.export_csv(db(), dt.date(2026, 11, 18), shape="title")[1] == "matinee-2026-11-18-titles.csv"
+
+
+@pytest.mark.parametrize("shape", ["copy", "title"])
+def test_a_title_starting_with_equals_is_quoted_in_both_shapes(client, shape):
+    con = db()
+    tid = seed_title(con, 155)
+    con.execute("UPDATE titles SET title='=HYPERLINK(\"http://x\",\"y\")' WHERE id=?", (tid,))
+    con.commit()
+    rows = rows_of(get_csv(client, f"?shape={shape}"))
+    assert rows[1][0] == "'=" + 'HYPERLINK("http://x","y")'
+
+
+def test_the_where_and_services_cells_are_formula_guarded(client):
+    con = db()
+    tid = seed_title(con, 194, copies=(), digital=("Digital HD",))
+    con.execute("UPDATE copies SET service='-cmd' WHERE title_id=?", (tid,))
+    con.commit()
+    [row] = rows_of(get_csv(client, "?shape=title"))[1:]
+    assert row[8] == "'-cmd" and row[10] == "Digital HD @ -cmd"          # `where` itself starts with the format...
+    con.execute("UPDATE copies SET format='=1+1' WHERE title_id=?", (tid,))
+    con.commit()
+    [row] = rows_of(get_csv(client, "?shape=title"))[1:]
+    assert row[7] == "'=1+1" and row[10] == "'=1+1 @ -cmd"               # ...so a format that looks like a formula is quoted too
+
+
+def test_bad_filter_or_shape_is_a_400_with_the_valid_values(client, inventory):
+    res = get_csv(client, "?format=Betamax")
+    assert res.status_code == 400
+    assert res.get_json()["error"] == ('Unknown format "Betamax". '
+                                       'Use one of: 4K UHD, Blu-ray, 3D Blu-ray, DVD, VHS, Digital 4K, Digital HD, Digital SD.')
+    res = get_csv(client, "?shape=wide")
+    assert res.status_code == 400
+    assert res.get_json()["error"] == 'Unknown shape "wide". Use one of: copy, title.'
+    assert get_csv(client, "?location=Attic").status_code == 400
