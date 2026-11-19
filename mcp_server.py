@@ -8,7 +8,9 @@ Can operate in:
 2. Direct SQLite Mode: Accelerates read operations directly against MATINEE_DB_PATH.
 """
 import builtins
+import csv
 import inspect
+import io
 import json
 import logging
 import os
@@ -82,6 +84,7 @@ TOOL_HINTS: Dict[str, Tuple[bool, bool, bool, bool]] = {
     "list_people": (True, False, True, False),
     "get_lists": (True, False, True, False),
     "get_list": (True, False, True, False),
+    "list_copies": (True, False, True, False),
     "search_tmdb": (True, False, True, True),   # reads TMDB
     "rate_movie": (False, True, True, False),   # overwrites or clears the previous rating
     "log_watch": (False, False, False, False),  # appends a watch row each call
@@ -140,6 +143,70 @@ MATINEE_DB_PATH = os.environ.get("MATINEE_DB_PATH", "").strip()
 TOO_OLD_FOR_PEOPLE = "This Matinee server is too old to pick for specific people. Update Matinee."
 TOO_OLD_FOR_LISTS = "This Matinee server is too old for lists. Update Matinee."
 _LIST_KEYS = ("id", "name", "kind", "season_start", "season_end", "in_season", "count")
+TOO_OLD_FOR_COPIES = "This Matinee server is too old for list_copies. Update Matinee."
+# list_copies: the values a filter accepts, copied from db.py (tests/test_mcp_server.py keeps them equal), and the
+# public keys of a row. The editor-only code_status, purchased_on and price_cents are never in either shape.
+COPY_KINDS = ["physical", "digital"]
+COPY_FORMATS = ["4K UHD", "Blu-ray", "3D Blu-ray", "DVD", "VHS", "Digital 4K", "Digital HD", "Digital SD"]
+COPY_SERVICES = ["Movies Anywhere", "Apple TV", "Fandango at Home", "Amazon", "Google Play", "Plex/Jellyfin", "Other"]
+COPY_ROW_KEYS = ("title_id", "title", "year", "kind", "format", "service", "edition", "location_path")
+TITLE_ROW_KEYS = ("title_id", "title", "year", "copies", "formats", "services", "locations", "where")
+FORMULA_LEAD = ("=", "+", "-", "@", "\t", "\r")   # copy of export.FORMULA_LEAD
+
+
+def _csv_cell(v):
+    """Copy of export.csv_cell: None is blank and text a spreadsheet could run as a formula gets a leading quote."""
+    if v is None:
+        return ""
+    if isinstance(v, str) and v.startswith(FORMULA_LEAD):
+        return "'" + v
+    return v
+
+
+def _path_key(path) -> str:
+    """Copy of export._path_key: a breadcrumb case-folded and split on a real or typed separator ('›' or '>')."""
+    return " › ".join(p.strip() for p in str(path).replace(">", "›").split("›")).casefold()
+
+
+def _distinct(values) -> str:
+    return "; ".join(dict.fromkeys(v for v in values if v))
+
+
+def _copy_where(c: Dict[str, Any]) -> str:
+    """Copy of export._where: '4K UHD Steelbook @ Family Room › Media Cabinet › Shelf 1'."""
+    place = c["location_path"] or c["service"] or ("Unassigned shelf" if c["kind"] == "physical" else "Digital")
+    return f"{_format_edition(c['format'], c['edition'])} @ {place}"
+
+
+def _pick(label: str, value: Any, valid: List[str]) -> str:
+    """`value` when it is one of `valid`; otherwise the sentence the Matinee server answers with (export._pick)."""
+    if value not in valid:
+        raise MatineeError(f'Unknown {label} "{value}". Use one of: {", ".join(valid)}.', status=400)
+    return value
+
+
+def _title_rows(copies: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """One row per title, in the order titles first appear, summarizing only the copies given (export.title_rows)."""
+    by_title: Dict[Any, List[Dict[str, Any]]] = {}
+    for c in copies:
+        by_title.setdefault(c["title_id"], []).append(c)
+    return [{"title_id": cs[0]["title_id"], "title": cs[0]["title"], "year": cs[0]["year"], "copies": len(cs),
+             "formats": _distinct(c["format"] for c in cs), "services": _distinct(c["service"] for c in cs),
+             "locations": _distinct(c["location_path"] for c in cs), "where": "; ".join(_copy_where(c) for c in cs)}
+            for cs in by_title.values()]
+
+
+def _copies_csv(rows: List[Dict[str, Any]], keys: Tuple[str, ...], header: bool) -> str:
+    """The rows as RFC 4180 text (CRLF, no BOM) with the formula guard on every cell; the header row only if asked."""
+    out = io.StringIO(newline="")
+    w = csv.writer(out)
+    if header:
+        w.writerow(keys)
+    for r in rows:
+        w.writerow([_csv_cell(r[k]) for k in keys])
+    return out.getvalue()
+
+
 _MEMBER_KEYS = ("id", "title", "year", "formats", "owned", "added_at", "seen_by")
 # recommend.py's wording, written out here because the REST path does not import recommend.py
 # (tests/test_mcp_server.py::test_rest_people_messages_match_the_server keeps them equal).
@@ -644,6 +711,155 @@ class MatineeClient:
             "summary": summary_str,
         }
 
+    # ------------------------------------------------------------------------ Copy inventory
+    @staticmethod
+    def _location_ids(paths: Dict[int, str], children: Dict[Any, List[int]], value: Any) -> List[int]:
+        """The ids a `location` filter means: an id or a breadcrumb path, plus every location below it (a path may
+        name more than one location). The same rule and sentence as export._location_ids."""
+        text = str(value).strip()
+        if text.isascii() and text.isdigit() and int(text) in paths:
+            roots = [int(text)]
+        else:
+            roots = [i for i, p in paths.items() if _path_key(p) == _path_key(text)]
+        if not roots:
+            shown = sorted(paths.values())[:8]
+            hint = f"Use a location id or a path such as: {', '.join(shown)}." if shown else "No locations are set up yet."
+            raise MatineeError(f'Unknown location "{value}". {hint}', status=400)
+        found: set = set()
+        queue = list(roots)
+        while queue:
+            cur = queue.pop()
+            if cur not in found:
+                found.add(cur)
+                queue.extend(children.get(cur, []))
+        return sorted(found)
+
+    def _copies_db(self, con, filters: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Direct SQLite: every copy that matches `filters`, as the public COPY_ROW_KEYS, in the export's order
+        (title sort name, year, date added, copy id). export.py needs Flask and this venv has none, so this is its
+        own SQL; tests/test_mcp_server.py keeps it equal to GET /api/copies."""
+        where, args = [], []
+        for col in ("kind", "format", "service"):
+            if col in filters:
+                where.append(f"c.{col}=?")
+                args.append(filters[col])
+        paths = _location_paths(con)
+        if "location" in filters:
+            children: Dict[Any, List[int]] = {}
+            for r in con.execute("SELECT id, parent_id FROM locations"):
+                children.setdefault(r["parent_id"], []).append(r["id"])
+            ids = self._location_ids(paths, children, filters["location"])
+            where.append(f"c.location_id IN ({','.join('?' * len(ids))})")
+            args += ids
+        rows = con.execute(
+            f"SELECT t.id AS title_id, t.title, t.year, c.kind, c.format, c.service, c.{self._edition_col(con)}, "
+            "c.location_id FROM copies c JOIN titles t ON t.id=c.title_id "
+            f"{'WHERE ' + ' AND '.join(where) if where else ''} "
+            "ORDER BY t.sort_title, t.year, c.created_at, c.id", args).fetchall()
+        return [{**{k: r[k] for k in COPY_ROW_KEYS if k != "location_path"},
+                 "location_path": paths.get(r["location_id"]) if r["location_id"] else None} for r in rows]
+
+    def _copies_rest(self, filters: Dict[str, Any], limit: int, offset: int) -> Tuple[int, List[Dict[str, Any]]]:
+        """REST: one page of GET {read prefix}/copies as (total, copies projected to the public keys). With a key
+        that route also sends code_status, purchased_on and price_cents; they are dropped here, never passed on."""
+        qs = urllib.parse.urlencode({**filters, "limit": limit, "offset": offset})
+        try:
+            res = self._api_request("GET", f"{self._read_prefix}/copies?{qs}")
+        except MatineeError as e:
+            if e.status == 404:
+                raise MatineeError(TOO_OLD_FOR_COPIES, status=404) from None
+            if e.status == 400:   # the server's own sentence (an unknown location), without the wrapper
+                raise MatineeError(re.sub(r"^Matinee API error \(400\): ", "", str(e)), status=400) from None
+            raise
+        copies = res.get("copies") if isinstance(res, dict) else None
+        if not isinstance(copies, list):
+            raise MatineeError("Matinee answered list_copies in a form this server does not understand. Update Matinee.")
+        return int(res.get("total", len(copies))), [{k: c.get(k) for k in COPY_ROW_KEYS} for c in copies]
+
+    def _copies_hint(self, total: int, offset: int, shape: str, location_paths) -> str:
+        """The `hint` of an empty page. `location_paths` is a callable, so the lookup only happens when it is used."""
+        if total:
+            return (f"offset {offset} is past the end: {total} {'titles' if shape == 'title' else 'copies'} match. "
+                    f"Use an offset from 0 to {total - 1}.")
+        paths = sorted(location_paths())
+        shown = ", ".join(paths[:40]) + (", ..." if len(paths) > 40 else "") if paths else "none set up"
+        return ("No copies match. Valid values: kind: " + ", ".join(COPY_KINDS) + "; format: " + ", ".join(COPY_FORMATS) +
+                "; service: " + ", ".join(COPY_SERVICES) + "; location: " + shown + ".")
+
+    def list_copies(
+        self,
+        kind: Optional[str] = None,
+        format: Optional[str] = None,
+        service: Optional[str] = None,
+        location: Optional[Any] = None,
+        shape: str = "copy",
+        output: str = "rows",
+        limit: int = 300,
+        offset: int = 0,
+    ) -> Dict[str, Any]:
+        """The whole inventory a page at a time: a row per copy (shape="copy") or per title (shape="title"), as rows
+        or CSV text. Public fields only, in every mode and with every key (see the list_copies tool)."""
+        if shape not in ("copy", "title"):
+            raise MatineeError("shape must be copy or title.")
+        if output not in ("rows", "csv"):
+            raise MatineeError("output must be rows or csv.")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 1000:
+            raise MatineeError("limit must be a whole number from 1 to 1000.")
+        if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+            raise MatineeError("offset must be a whole number, 0 or more.")
+        filters: Dict[str, Any] = {}
+        for name, value, valid in (("kind", kind, COPY_KINDS), ("format", format, COPY_FORMATS),
+                                   ("service", service, COPY_SERVICES)):
+            if value not in (None, ""):
+                filters[name] = _pick(name, value, valid)
+        if location not in (None, ""):
+            filters["location"] = str(location)
+
+        hint = None
+        con = self._get_db()
+        if con is not None:
+            try:
+                copies = self._copies_db(con, filters)
+                everything = copies if shape == "copy" else _title_rows(copies)
+                total, page = len(everything), everything[offset:offset + limit]
+                if not page:
+                    hint = self._copies_hint(total, offset, shape, lambda: _location_paths(con).values())
+            finally:
+                con.close()
+        else:
+            if shape == "copy":
+                total, page = self._copies_rest(filters, limit, offset)
+            else:   # a title's copies are not split across pages: read them all, group, then page over titles
+                total, everything = self._copies_rest(filters, 1000, 0)
+                while len(everything) < total:
+                    more = self._copies_rest(filters, 1000, len(everything))[1]
+                    if not more:
+                        break
+                    everything += more
+                everything = _title_rows(everything)
+                total, page = len(everything), everything[offset:offset + limit]
+            if not page:
+                hint = self._copies_hint(total, offset, shape, self._location_paths_rest)
+
+        out: Dict[str, Any] = {"total": total, "offset": offset, "returned": len(page),
+                               "next_offset": offset + limit if offset + limit < total else None, "shape": shape}
+        if output == "csv":
+            out["csv"] = _copies_csv(page, COPY_ROW_KEYS if shape == "copy" else TITLE_ROW_KEYS, header=offset == 0)
+        else:
+            out["rows"] = page
+        if hint:
+            out["hint"] = hint
+        return out
+
+    def _location_paths_rest(self) -> List[str]:
+        """REST: the location breadcrumbs, for an empty page's hint; none if the server will not say."""
+        try:
+            res = self._api_request("GET", f"{self._read_prefix}/locations")
+        except MatineeError:
+            return []
+        locs = res.get("locations") if isinstance(res, dict) else None
+        return [l["path"] for l in locs if isinstance(l, dict) and l.get("path")] if isinstance(locs, list) else []
+
     def get_recommendations(
         self,
         mode: Optional[str] = None,
@@ -932,6 +1148,9 @@ If a tool answers that no people are set up, repeat the call without audience.
 - "Pick something" with nothing else to go on: call get_recommendations with no mode; it uses the family's Watch Soon list first. \
 Near a holiday, call get_lists and pass in_season=true when a list is in season; list="Christmas" picks from one list.
 - "Add it to Watch Soon" or "save it for later": set_list_membership(list="Watch Soon", title_id=..., on=true).
+- "Everything I own on Movies Anywhere", "what is on Shelf 2", "list my 4K discs", "my whole collection as a CSV": \
+call list_copies(service=, location=, format=, kind=), not repeated search_collection or get_movie calls. \
+Keep calling with next_offset until it is null before saying the list is complete.
 """
 # For build_server(writes=False): the remote read-only service has no log_watch or rate_movie to point at.
 READONLY_INSTRUCTIONS = SERVER_INSTRUCTIONS.replace(
@@ -1094,6 +1313,43 @@ def get_list(list: str) -> Dict[str, Any]:
     return _default_client.get_list(list)
 
 
+def list_copies(
+    kind: Optional[Literal["physical", "digital"]] = None,
+    format: Optional[str] = None,
+    service: Optional[str] = None,
+    location: Optional[str] = None,
+    shape: Literal["copy", "title"] = "copy",
+    output: Literal["rows", "csv"] = "rows",
+    limit: int = 300,
+    offset: int = 0,
+) -> Dict[str, Any]:
+    """List what the family owns, with the service, format and shelf of every copy, in one call: "everything on
+    Movies Anywhere", "what is on Shelf 2", "all my 4K discs", "my whole collection as a CSV". Use this instead of
+    searching and calling get_movie once per title.
+    <use_case>
+    - Filters combine with AND; leave one out for no filter. kind: physical or digital. format: 4K UHD, Blu-ray,
+      3D Blu-ray, DVD, VHS, Digital 4K, Digital HD or Digital SD. service: Movies Anywhere, Apple TV, Fandango at Home,
+      Amazon, Google Play, Plex/Jellyfin or Other. location: a shelf id or a path such as "Family Room › Media
+      Cabinet"; it includes everything shelved below it.
+    - shape="copy" (default): a row per copy: title_id, title, year, kind, format, service, edition, location_path.
+      shape="title": a row per title: title_id, title, year, copies, formats, services, locations and where
+      ("4K UHD Steelbook @ Family Room › Media Cabinet › Shelf 1; Digital HD @ Movies Anywhere"). A title row
+      covers only the copies that match the filters.
+    - output="rows" (default) returns rows; output="csv" returns the same page as CSV text in `csv`, with the header
+      row on the first page (offset 0) only, so pages join by concatenation. Hand the text to the user as it is.
+    </use_case>
+    <important_notes>
+    - The answer is one page: total counts every match, returned is this page, next_offset is where the next page
+      starts. Call again with offset=next_offset until next_offset is null before saying the list is complete.
+      limit is 1 to 1000 (default 300).
+    - An empty page carries a `hint` with the valid kinds, formats, services and locations; follow it.
+    - Never returns a copy's code status, purchase date or price, even to a keyed client; get_movie has those.
+    </important_notes>
+    """
+    return _default_client.list_copies(kind=kind, format=format, service=service, location=location, shape=shape,
+                                       output=output, limit=limit, offset=offset)
+
+
 def set_list_membership(list: str, title_id: int, on: bool = True) -> Dict[str, Any]:
     """Put a movie on a list (on=true) or take it off (on=false), for example list="Watch Soon". Watching a movie
     with a date takes it off Watch Soon by itself; seasonal lists keep their movies."""
@@ -1211,9 +1467,9 @@ def prompt_log_movie_night(movie_title: str = "") -> str:
 
 
 def build_server(*, writes=True):
-    """Build a MCP server. `writes` is True (all fifteen tools), False (the ten read tools) or a level from
-    WRITE_LEVELS: "none", "log" (adds rate_movie, log_watch and set_list_membership: thirteen tools) or "all" (adds
-    add_movie and want_movie: fifteen).
+    """Build a MCP server. `writes` is True (all sixteen tools), False (the eleven read tools) or a level from
+    WRITE_LEVELS: "none", "log" (adds rate_movie, log_watch and set_list_membership: fourteen tools) or "all" (adds
+    add_movie and want_movie: sixteen).
     Anything else raises ValueError.
 
     Tool functions are module-level and read _default_client at call time.
@@ -1227,7 +1483,7 @@ def build_server(*, writes=True):
         server.tool(**_annotation_kwargs(FastMCP, fn.__name__))(fn)
 
     for fn in (search_collection, get_movie, where_is, get_recommendations, get_collection_stats, list_people,
-               get_lists, get_list, search_tmdb, get_wishlist):
+               get_lists, get_list, list_copies, search_tmdb, get_wishlist):
         register(fn)
     for fn in (rate_movie, log_watch, add_movie, want_movie, set_list_membership):
         if fn.__name__ in WRITE_LEVELS[level]:
