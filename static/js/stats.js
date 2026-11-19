@@ -1,5 +1,5 @@
 // Matinee — stats view and CSV export link.
-import { api, esc, getChipClass, isAdmin, state } from "./core.js";
+import { api, esc, exportHref, getChipClass, isAdmin, state } from "./core.js";
 import { getChipIcon, icon } from "./icons.js";
 
   // Editor-only: how many discs still have a digital code to redeem, linking to the grid filtered to them. Plain text
@@ -56,7 +56,10 @@ import { getChipIcon, icon } from "./icons.js";
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg>
               Back to collection
             </a>
-            ${isAdmin ? `<a href="/admin/api/export.csv" class="btn btn-sm btn-ghost" id="btn-export-csv" download>${icon("download")} Export CSV</a>` : ""}
+            <div class="export-links">
+              ${isAdmin ? `<a href="/admin/api/export.csv" class="btn btn-sm btn-ghost export-link" id="btn-export-csv" aria-label="Export CSV, one row per copy" download>${icon("download")} Export CSV</a>` : ""}
+              ${isAdmin ? `<a href="${exportHref({}, "title")}" class="btn btn-sm btn-ghost export-link" id="btn-export-csv-titles" download>${icon("download")} One row per title</a>` : ""}
+            </div>
           </div>
           <h1 style="margin-top:var(--s2)">Collection Stats</h1>
           <p>Breakdown of movies, formats, qualities, and services in your family library.</p>

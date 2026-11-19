@@ -473,6 +473,57 @@ main#view {
   color: var(--ink);
 }
 
+/* Export these (grid) and the export links (stats): 44 px targets, wrapping inside a 360 px viewport */
+.export-bar {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--s2);
+  margin-bottom: var(--s4);
+}
+.export-bar:empty {
+  display: none;
+}
+.filter-btn.export-btn {
+  height: auto;
+  min-height: 44px;
+  padding: 0 var(--s4);
+  font-size: var(--fs-sm);
+}
+.export-bar .popover-menu {
+  min-width: 220px;
+  padding: var(--s1) 0;
+}
+.export-choice {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 var(--s4);
+  color: var(--ink);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  text-decoration: none;
+}
+.export-choice:hover {
+  background: var(--raised);
+  text-decoration: none;
+}
+.export-note {
+  margin: 0;
+  color: var(--ink-3);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+}
+.export-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s2);
+}
+.btn.export-link {
+  height: auto;
+  min-height: 44px;
+}
+
 .filter-row {
   display: flex;
   align-items: center;
