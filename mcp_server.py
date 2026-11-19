@@ -951,6 +951,14 @@ class MatineeClient:
                 total_watched = con.execute("SELECT count(DISTINCT title_id) FROM watches").fetchone()[0]
                 rated_count = con.execute("SELECT count(*) FROM user_ratings").fetchone()[0]
                 avg_rating = con.execute("SELECT avg(rating) FROM user_ratings").fetchone()[0]
+                distribution = [  # titles with a copy, as /api/stats counts them
+                    {"rating": r[0], "count": r[1]}
+                    for r in con.execute(
+                        """SELECT r.rating, count(*) FROM user_ratings r
+                           WHERE EXISTS (SELECT 1 FROM copies c WHERE c.title_id=r.title_id)
+                           GROUP BY r.rating ORDER BY r.rating DESC"""
+                    )
+                ]
 
                 return {
                     "overview": {
@@ -966,6 +974,7 @@ class MatineeClient:
                     "rating_stats": {
                         "rated_titles_count": rated_count,
                         "average_user_rating": round(avg_rating, 2) if avg_rating else None,
+                        "distribution": distribution,
                     },
                 }
             finally:
@@ -1363,7 +1372,8 @@ def list_people() -> List[Dict[str, Any]]:
 
 
 def get_collection_stats() -> Dict[str, Any]:
-    """Get summary statistics for the collection: total movies, formats, watch coverage, and ratings."""
+    """Get summary statistics for the collection: total movies, formats, watch coverage, and ratings
+    (rating_stats.distribution: how many movies have each family score, for example how many are rated 10)."""
     return _default_client.get_collection_stats()
 
 

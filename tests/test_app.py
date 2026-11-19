@@ -913,6 +913,47 @@ def test_stats_watched_and_rating():
     assert rs["high_rated_count"] == 1
 
 
+def test_stats_rating_distribution():
+    """Spec 2026-11-18-rating-breakdown: one entry per score given, highest first, titles with a copy only."""
+    assert c.get("/api/stats").get_json()["rating_stats"]["distribution"] == []
+
+    dark, elf, padd, hp = add(155), add(10719), add(346648), add(672)
+    for t, r in ((dark, 10.0), (elf, 10.0), (padd, 9.5)):
+        c.put(f"/admin/api/titles/{t['id']}/rating", json={"rating": r})
+    gone = add(671)   # rated, then its only copy goes: rated_titles_count keeps it, the breakdown does not
+    c.put(f"/admin/api/titles/{gone['id']}/rating", json={"rating": 4.0})
+    con = matinee.connect()
+    con.execute("DELETE FROM copies WHERE title_id=?", (gone["id"],))
+    con.commit()
+    con.close()
+
+    rs = c.get("/api/stats").get_json()["rating_stats"]
+    assert rs["distribution"] == [{"rating": 10.0, "count": 2}, {"rating": 9.5, "count": 1}]
+    assert c.get("/admin/api/stats").get_json()["rating_stats"]["distribution"] == rs["distribution"]
+    assert hp["id"] not in {t["id"] for t in c.get("/api/titles?score=10").get_json()["titles"]}
+
+
+def test_titles_score_filter_is_exact():
+    dark, elf, padd = add(155), add(10719, fmt="4K UHD"), add(346648)
+    for t, r in ((dark, 10.0), (elf, 10.0), (padd, 9.5)):
+        c.put(f"/admin/api/titles/{t['id']}/rating", json={"rating": r})
+
+    def ids(qs):
+        res = c.get(f"/api/titles?{qs}")
+        assert res.status_code == 200, res.get_json()
+        return {t["id"] for t in res.get_json()["titles"]}
+
+    assert ids("score=10") == {dark["id"], elf["id"]}
+    assert ids("score=10.0") == {dark["id"], elf["id"]}
+    assert ids("score=%209.5%20") == {padd["id"]}
+    assert ids("score=8") == set()
+    assert ids("score=10&format=4K+UHD") == {elf["id"]}
+    for bad in ("abc", "9.3", "11", "-0.5", "", "nan", "inf"):
+        res = c.get(f"/api/titles?score={bad}")
+        assert res.status_code == 400, bad
+        assert res.get_json()["error"] == "score must be between 0 and 10 in 0.5 steps."
+
+
 # ------------------------------------------------------------------- ES module cache busting
 JS_FILES = sorted(p.name for p in (matinee.APP_DIR / "static" / "js").glob("*.js"))
 
