@@ -126,6 +126,7 @@ add_setting "$CONF" MCP_HTTP_PATH /matinee/mcp "URL path of the MCP endpoint (th
 add_setting "$CONF" MCP_PUBLIC_HOSTS "" "Public hostname(s) of the tunnel, e.g. mcp.example.com (required)"
 add_setting "$CONF" CF_ACCESS_AUD "" "AUD tag of the Access application that fronts mcp.<your-domain> (required)"
 add_setting "$CONF" MCP_ALLOWED_EMAILS "" "Only these Access emails may use the MCP tools (comma separated); empty = anyone Access lets in"
+add_setting "$CONF" MCP_ALLOWED_SERVICE_TOKENS "" "Access service-token client IDs (comma separated) that may use the read tools, e.g. a monitor; empty = none"
 # Holds API keys, so root only: OpenRC and the cron jobs run as root; services get what they need from the environment.
 chmod 600 "$CONF"; chown root:root "$CONF"
 
@@ -208,7 +209,7 @@ case "$(mcp_level "${MATINEE_MCP_READONLY:-}" "${MATINEE_MCP_WRITES:-}")" in
   none) unset MATINEE_API_KEY; export MATINEE_READ_KEY ;;
   *) unset MATINEE_READ_KEY; export MATINEE_API_KEY ;;
 esac
-export MATINEE_URL MATINEE_MCP_READONLY MATINEE_MCP_WRITES MCP_HTTP_BIND MCP_HTTP_PORT MCP_HTTP_PATH MCP_PUBLIC_HOSTS CF_ACCESS_TEAM_DOMAIN CF_ACCESS_AUD MCP_ALLOWED_EMAILS CF_TEAM_DOMAIN
+export MATINEE_URL MATINEE_MCP_READONLY MATINEE_MCP_WRITES MCP_HTTP_BIND MCP_HTTP_PORT MCP_HTTP_PATH MCP_PUBLIC_HOSTS CF_ACCESS_TEAM_DOMAIN CF_ACCESS_AUD MCP_ALLOWED_EMAILS MCP_ALLOWED_SERVICE_TOKENS CF_TEAM_DOMAIN
 supervisor="supervise-daemon"
 respawn_delay=5
 respawn_max=10

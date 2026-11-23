@@ -37,7 +37,8 @@ def test_init_script_contents():
         assert needle in s, needle
     export = next(l for l in s.splitlines() if l.startswith("export "))
     assert "TMDB_READ_TOKEN" not in export and "OMDB_API_KEY" not in export
-    for key in ("MATINEE_URL", "MATINEE_MCP_READONLY", "MATINEE_MCP_WRITES", "MCP_HTTP_BIND", "CF_ACCESS_AUD"):
+    for key in ("MATINEE_URL", "MATINEE_MCP_READONLY", "MATINEE_MCP_WRITES", "MCP_HTTP_BIND", "CF_ACCESS_AUD",
+                "MCP_ALLOWED_SERVICE_TOKENS"):
         assert key in export, key
     # the keys are exported by the per-mode case below, never unconditionally
     assert "MATINEE_API_KEY" not in export and "MATINEE_READ_KEY" not in export
@@ -47,7 +48,7 @@ def test_init_script_contents():
 @pytest.mark.parametrize("key,value", [
     ("MATINEE_MCP_READONLY", "1"), ("MCP_HTTP_PORT", "8719"), ("MCP_HTTP_PATH", "/matinee/mcp"),
     ("MCP_HTTP_BIND", '"$IP"'), ("MCP_PUBLIC_HOSTS", '""'),
-    ("CF_ACCESS_AUD", '""'), ("MCP_ALLOWED_EMAILS", '""'),
+    ("CF_ACCESS_AUD", '""'), ("MCP_ALLOWED_EMAILS", '""'), ("MCP_ALLOWED_SERVICE_TOKENS", '""'),
 ])
 def test_new_settings_are_added_with_defaults(key, value):
     assert re.search(rf'^add_setting "\$CONF" {key} {re.escape(value)} ".+"$', HEAD, re.M), key
@@ -161,7 +162,7 @@ def test_health_checks_added_once_and_matinee_does_not_hide_matinee_mcp(tmp_path
 
 # ------------------------------------------------------------------ docs
 NEW_KEYS = ["MATINEE_MCP_READONLY", "MATINEE_MCP_WRITES", "MCP_HTTP_PORT", "MCP_HTTP_BIND", "MCP_HTTP_PATH", "MCP_PUBLIC_HOSTS",
-            "CF_ACCESS_AUD", "MCP_ALLOWED_EMAILS"]
+            "CF_ACCESS_AUD", "MCP_ALLOWED_EMAILS", "MCP_ALLOWED_SERVICE_TOKENS"]
 
 
 @pytest.mark.parametrize("key", NEW_KEYS)

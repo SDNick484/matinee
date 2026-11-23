@@ -26,11 +26,19 @@ from typing import Any, Dict, List, Literal, Optional, Tuple
 
 try:
     from mcp.server.mcpserver import MCPServer as FastMCP
+    _TIERED = True
 except ImportError:
+    _TIERED = False
     try:
         from mcp.server.fastmcp import FastMCP
     except ImportError:
         FastMCP = None
+
+try:
+    import mcp_remote  # the shared auth module: @tier and request_state_security (needs MCPServer and PyJWT)
+except ImportError:
+    mcp_remote = None
+    _TIERED = False
 
 
 def _fold(s: str) -> str:
@@ -1188,8 +1196,9 @@ def _make_server(instructions: str = SERVER_INSTRUCTIONS):
     """Build the FastMCP server; older mcp releases may not accept instructions=."""
     if not FastMCP:
         return None
+    extra = {"request_state_security": mcp_remote.request_state_security()} if _TIERED else {}
     try:
-        return FastMCP("matinee", instructions=instructions)
+        return FastMCP("matinee", instructions=instructions, **extra)
     except TypeError:
         return FastMCP("matinee")
 
@@ -1197,6 +1206,15 @@ def _make_server(instructions: str = SERVER_INSTRUCTIONS):
 _default_client = MatineeClient()
 
 WRITE_TOOLS = ("rate_movie", "log_watch", "add_movie", "want_movie", "set_list_membership")
+# What each tool is, for mcp_remote's @tier: "read" changes nothing; "everyday" writes to the collection. An
+# automated caller (an Access service token) gets only MCP_AUTOMATION_TIERS (default read,power-off), so it can
+# read but never write, whatever the write level. Matinee has no "power-off" or "costly" tool.
+TOOL_TIERS: Dict[str, str] = {
+    **{name: "read" for name in ("search_collection", "get_movie", "where_is", "get_recommendations",
+                                 "get_collection_stats", "list_people", "get_lists", "get_list", "list_copies",
+                                 "search_tmdb", "get_wishlist")},
+    **{name: "everyday" for name in WRITE_TOOLS},
+}
 # Which write tools each level registers. "log" is what the phone needs to log a movie night: it can record a
 # watch and a rating and put a title on Watch Soon, but cannot import titles (add_movie spends TMDB quota and adds
 # copies; want_movie can create a title too, so it is at "all" only).
@@ -1490,7 +1508,11 @@ def build_server(*, writes=True):
         return None
 
     def register(fn):
-        server.tool(**_annotation_kwargs(FastMCP, fn.__name__))(fn)
+        # The tier is what a service token (an automated caller) may do: see mcp_remote's docstring. Local
+        # (stdio) callers and people may use every tier. Wrapped here, not on the function, so tests and
+        # other Python callers still call the plain function.
+        tool_fn = mcp_remote.tier(TOOL_TIERS[fn.__name__])(fn) if _TIERED else fn
+        server.tool(**_annotation_kwargs(FastMCP, fn.__name__))(tool_fn)
 
     for fn in (search_collection, get_movie, where_is, get_recommendations, get_collection_stats, list_people,
                get_lists, get_list, list_copies, search_tmdb, get_wishlist):

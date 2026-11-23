@@ -7,8 +7,8 @@ import pytest
 pytest.importorskip("mcp.server.mcpserver")
 
 ROOT = Path(__file__).resolve().parent.parent
-UPSTREAM_SHA256 = "cb14c336003cf48afe1aee5bead964adf2c8ca3c23627eb166d07ef3a4dc6c84"
-UPSTREAM_COMMIT = "3ccb5f1e1139abb708c113f6663e64eb953cb702"
+UPSTREAM_SHA256 = "72b0d768bcf6db1b1a0b26b1dd4a0566627c8e2d535b5f76a6fe011f7f164ad1"
+UPSTREAM_COMMIT = "a48209bc6a615a22f16418cf4d8a3575b238d313"
 
 
 def test_mcp_remote_copy_is_unmodified():
@@ -180,7 +180,9 @@ def make_client(env, signing_key):
         return signing_key.public_key()
 
     policy = mcp_remote.AccessPolicy(team_domain=TEAM, audiences=(AUD,),
-                                     emails=frozenset(e for e in env.get("MCP_ALLOWED_EMAILS", "").split(",") if e))
+                                     emails=frozenset(e for e in env.get("MCP_ALLOWED_EMAILS", "").split(",") if e),
+                                     service_tokens=frozenset(
+                                         t for t in env.get("MCP_ALLOWED_SERVICE_TOKENS", "").split(",") if t))
     app = mcp_http.build_http_app(env, verifier=mcp_remote.AccessVerifier(policy, key_resolver=resolver))
     return TestClient(app, base_url=f"http://{HOST}")
 
@@ -746,3 +748,63 @@ def test_setup_doc_describes_an_unset_readonly_as_the_code_does():
     row = next(line for line in doc.splitlines() if line.startswith("| `MATINEE_MCP_READONLY` |"))
     assert "including unset and empty" not in row
     assert "Unset or empty" in row and "`MATINEE_MCP_WRITES` decides" in row
+
+
+# ------------------------------------------------------------------ service tokens and tiers
+SERVICE_ID = "0123456789abcdef.access"
+
+
+def test_every_tool_has_a_tier():
+    assert set(mcp_server.TOOL_TIERS) == READ_TOOLS | WRITE
+    assert {n for n, t in mcp_server.TOOL_TIERS.items() if t == "read"} == READ_TOOLS
+    assert {n for n, t in mcp_server.TOOL_TIERS.items() if t == "everyday"} == WRITE
+
+
+def test_unlisted_service_token_is_refused(client, token, fake_matinee):
+    r = rpc(client, "tools/call", {"name": "where_is", "arguments": {"title": "Paddington 2"}},
+            token=token(email=None, common_name=SERVICE_ID))
+    assert r.status_code == 403
+    assert r.json() == {"error": "forbidden"}
+    assert fake_matinee.requests == []
+
+
+def test_listed_service_token_may_read(env, signing_key, where_is_calls, token):
+    env["MCP_ALLOWED_SERVICE_TOKENS"] = SERVICE_ID
+    with make_client(env, signing_key) as c:
+        tok = token(email=None, common_name=SERVICE_ID)
+        sid = open_session(c, tok)
+        msg = call_tool(c, tok, sid, "where_is", {"title": "Paddington 2"})
+        assert msg["result"]["isError"] is False
+    assert where_is_calls == ["Paddington 2"]
+
+
+def test_service_token_is_not_stopped_by_the_email_list(env, signing_key, where_is_calls, token):
+    # MCP_ALLOWED_EMAILS is for people: it must not shut out a listed service token (no email claim).
+    env["MCP_ALLOWED_SERVICE_TOKENS"] = SERVICE_ID
+    assert env["MCP_ALLOWED_EMAILS"]
+    with make_client(env, signing_key) as c:
+        r = rpc(c, "initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
+                                  "clientInfo": {"name": "workbench", "version": "1"}},
+                token=token(email=None, common_name=SERVICE_ID))
+    assert r.status_code == 200
+
+
+def test_service_token_cannot_write_but_a_person_can(env, signing_key, where_is_calls, token, fake_matinee):
+    env["MATINEE_MCP_READONLY"] = "0"
+    env["MCP_ALLOWED_SERVICE_TOKENS"] = SERVICE_ID
+    with make_client(env, signing_key) as c:
+        bot = token(email=None, common_name=SERVICE_ID)
+        sid = open_session(c, bot)
+        msg = call_tool(c, bot, sid, "rate_movie", {"title_id": 214, "rating": 8.5})
+        assert msg["result"]["isError"] is True
+        assert "needs a person" in msg["result"]["content"][0]["text"]
+        assert not [r for r in fake_matinee.requests if r[0] == "PUT"]
+        me = token()
+        sid = open_session(c, me)
+        assert call_tool(c, me, sid, "rate_movie", {"title_id": 214, "rating": 8.5})["result"]["isError"] is False
+
+
+def test_healthz_under_the_mcp_path_answers_without_auth(client):
+    r = client.get("/matinee/mcp/healthz")
+    assert r.status_code == 200
+    assert r.json()["status"] == "ok"
