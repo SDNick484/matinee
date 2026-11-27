@@ -26,6 +26,7 @@ Environment (see /etc/conf.d/matinee and .env.example):
 """
 import datetime as dt, hashlib, hmac, ipaddress, json, os, re, sys, threading, time, types
 import urllib.error, urllib.parse, urllib.request
+import sqlite3
 from functools import wraps
 
 from flask import Flask, abort, g, jsonify, make_response, redirect, request, send_from_directory
@@ -107,6 +108,8 @@ def read_key_setting(env):
 
 
 app = Flask(__name__, static_folder=None)
+# Above the 8 MB poster cap; a bigger body is a JSON 413 (see _too_large) instead of being read into memory
+app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024
 # a second key that may GET /admin/api (notes included) but never write; see editor_required
 MATINEE_READ_KEY = read_key_setting(os.environ)
 
@@ -121,6 +124,46 @@ def _close(_exc):
 
 # ============================================================================== auth
 _jwks = None
+JWKS_MIN_REFETCH = 60.0  # seconds between key fetches triggered by a token naming a key id we don't have
+
+
+class JwksThrottle:
+    """PyJWKClient that refetches the key set at most once a minute for an unknown key id.
+
+    PyJWKClient refetches on every token naming a key it lacks, and a token is read before it is verified, so
+    anyone could make this server fetch (blocking, up to the timeout) on every request, even the unauthenticated
+    /api/me. Cloudflare rotates keys rarely: a new key waits at most a minute. mcp_remote.py throttles the same way."""
+
+    def __init__(self, client, min_interval=JWKS_MIN_REFETCH, clock=time.monotonic):
+        self.client = client
+        self.min_interval = min_interval
+        self.clock = clock
+        self.last_fetch = None       # when the client last went to the network, whether or not it worked
+        self.lock = threading.Lock()
+        fetch_data = client.fetch_data
+
+        def fetch_and_record():
+            try:
+                return fetch_data()
+            finally:
+                self.last_fetch = self.clock()
+        client.fetch_data = fetch_and_record
+
+    def cached_key_ids(self):
+        cache = self.client.jwk_set_cache
+        if cache is None or cache.is_expired():
+            return set()
+        keys = cache.get()
+        return {k.key_id for k in keys.keys} if keys is not None else set()
+
+    def get_signing_key_from_jwt(self, token):
+        import jwt
+        kid = jwt.get_unverified_header(token).get("kid")
+        with self.lock:
+            if (kid not in self.cached_key_ids() and self.last_fetch is not None
+                    and self.clock() - self.last_fetch < self.min_interval):
+                raise jwt.PyJWKClientError(f"Unable to find a signing key that matches {kid!r}")
+            return self.client.get_signing_key_from_jwt(token)
 
 
 KEY_IDENTITIES = ("api-key", "read-key")  # scripts and the MCP server, not browsers
@@ -150,7 +193,8 @@ def access_identity():
         import jwt
         try:
             if _jwks is None:
-                _jwks = jwt.PyJWKClient(f"https://{CF_TEAM_DOMAIN}/cdn-cgi/access/certs", cache_keys=True)
+                _jwks = JwksThrottle(jwt.PyJWKClient(f"https://{CF_TEAM_DOMAIN}/cdn-cgi/access/certs",
+                                                     cache_keys=True, timeout=10))
             key = _jwks.get_signing_key_from_jwt(token).key
             claims = jwt.decode(token, key, algorithms=["RS256"], audience=CF_AUD,
                                 issuer=f"https://{CF_TEAM_DOMAIN}")
@@ -223,6 +267,14 @@ def security_headers(resp):
     resp.headers.setdefault("X-Content-Type-Options", "nosniff")
     resp.headers.setdefault("Referrer-Policy", "same-origin")
     resp.headers.setdefault("Content-Security-Policy", "frame-ancestors 'self'")
+    return resp
+
+
+@app.after_request
+def admin_api_no_store(resp):
+    """The editor API carries notes, people and private copy data, so no browser or proxy keeps an answer."""
+    if request.path.startswith("/admin/api/"):
+        resp.headers["Cache-Control"] = "no-store"
     return resp
 
 
@@ -343,6 +395,11 @@ def _tmdb_error(e):
 @app.errorhandler(ListError)
 def _list_error(e):
     return make_err(e.status, str(e))
+
+
+@app.errorhandler(413)
+def _too_large(_e):
+    return make_err(413, "That request is too large.")
 
 
 # ======================================================================= image cache
@@ -612,6 +669,15 @@ def check_youtube_free(con, youtube_id, copy_id=None):
         abort(make_err(409, f"That YouTube link is already on {name}."))
 
 
+def refuse_link_race(con, vals, copy_id=None):
+    """A unique index refused a copy's write after the free checks passed: another request took the link first.
+    Roll back and answer 409 naming the film, as the checks do (a generic 409 if the cause was something else)."""
+    con.rollback()
+    check_youtube_free(con, vals["youtube_id"], copy_id)
+    check_fandango_free(con, vals["fandango_id"], copy_id)
+    abort(make_err(409, "That copy changed while it was being saved. Reload and try again."))
+
+
 def copy_values(data, youtube_stored=False, fandango_stored=False):
     """Validate {kind, format, service, location_id, edition, code_status, purchased_on, price_cents, youtube_link,
     fandango_link} -> clean values (the links become youtube_id and fandango_id), or abort 400 with a message for the
@@ -708,12 +774,21 @@ def ensure_title(con, data):
         return row["id"]
     t = tmdb_details(tmdb_id)  # raises before anything is written
     files = fetch_images(t)
+    ratings = omdb_get(t["imdb_id"]) if t.get("imdb_id") and OMDB_API_KEY else None  # slow: before the write opens
     row = con.execute("SELECT id FROM titles WHERE tmdb_id=?", (tmdb_id,)).fetchone()  # added meanwhile?
-    title_id = row["id"] if row else write_title(con, t, files)
-    if t.get("imdb_id") and OMDB_API_KEY:
-        ratings = omdb_get(t["imdb_id"])
-        if ratings:
-            write_omdb_ratings(con, title_id, t["imdb_id"], ratings)
+    if row:
+        title_id = row["id"]
+    else:
+        try:
+            title_id = write_title(con, t, files)
+        except sqlite3.IntegrityError:  # another request added it between that check and this write
+            con.rollback()
+            row = con.execute("SELECT id FROM titles WHERE tmdb_id=?", (tmdb_id,)).fetchone()
+            if not row:
+                raise
+            title_id = row["id"]
+    if ratings:
+        write_omdb_ratings(con, title_id, t["imdb_id"], ratings)
     return title_id
 
 
@@ -829,6 +904,21 @@ def api_upc_lookup(upc):
     })
 
 
+def location_sort_arg(raw, default=0):
+    """A location's sort_order: a whole number, or its digits in a string; blank or null is `default`; else a 400."""
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return default
+    try:
+        if isinstance(raw, bool) or isinstance(raw, (list, dict)):
+            raise ValueError
+        n = int(raw)
+    except (ValueError, TypeError, OverflowError):
+        abort(make_err(400, "sort_order must be a whole number."))
+    if not -2 ** 31 <= n < 2 ** 31:
+        abort(make_err(400, "sort_order must be a whole number."))
+    return n
+
+
 @app.post("/admin/api/locations")
 @editor_required
 def add_location():
@@ -847,7 +937,7 @@ def add_location():
             abort(make_err(400, "Parent location does not exist."))
     else:
         parent_id = None
-    sort_order = int(data.get("sort_order") or 0)
+    sort_order = location_sort_arg(data.get("sort_order"))
     cur = con.execute("INSERT INTO locations(parent_id, name, sort_order) VALUES (?, ?, ?)",
                       (parent_id, name, sort_order))
     con.commit()
@@ -887,7 +977,7 @@ def edit_location(loc_id):
         else:
             parent_id = None
 
-    sort_order = int(data.get("sort_order") if "sort_order" in data else cur["sort_order"])
+    sort_order = location_sort_arg(data.get("sort_order"), cur["sort_order"])
     con.execute("UPDATE locations SET name=?, parent_id=?, sort_order=? WHERE id=?",
                 (name, parent_id, sort_order, loc_id))
     con.commit()
@@ -1031,11 +1121,15 @@ def add_copy():
     check_youtube_free(con, vals["youtube_id"])       # before ensure_title, so a refusal creates nothing
     check_fandango_free(con, vals["fandango_id"])
     title_id = ensure_title(con, data)
-    cid = con.execute("INSERT INTO copies(title_id, kind, format, service, location_id, edition, code_status, "
-                      "purchased_on, price_cents, youtube_id, fandango_id, added_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-                      (title_id, vals["kind"], vals["format"], vals["service"], vals["location_id"], vals["edition"],
-                       vals["code_status"], vals["purchased_on"], vals["price_cents"], vals["youtube_id"],
-                       vals["fandango_id"], who())).lastrowid
+    try:
+        cid = con.execute("INSERT INTO copies(title_id, kind, format, service, location_id, edition, code_status, "
+                          "purchased_on, price_cents, youtube_id, fandango_id, added_by) "
+                          "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                          (title_id, vals["kind"], vals["format"], vals["service"], vals["location_id"],
+                           vals["edition"], vals["code_status"], vals["purchased_on"], vals["price_cents"],
+                           vals["youtube_id"], vals["fandango_id"], who())).lastrowid
+    except sqlite3.IntegrityError:
+        refuse_link_race(con, vals)
     # a copy that satisfies the title's want ends it, in the same transaction (wish_items stay as history)
     wanted = get_want(con, title_id)
     cleared = bool(wanted) and want_satisfied_by(wanted["wanted_format"], vals["format"])
@@ -1076,11 +1170,15 @@ def edit_copy(copy_id):
     con = db()
     check_youtube_free(con, vals["youtube_id"], copy_id)
     check_fandango_free(con, vals["fandango_id"], copy_id)
-    con.execute("UPDATE copies SET kind=?, format=?, service=?, location_id=?, edition=?, code_status=?, "
-                "purchased_on=?, price_cents=?, youtube_id=?, fandango_id=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
-                (vals["kind"], vals["format"], vals["service"], vals["location_id"], vals["edition"],
-                 vals["code_status"], vals["purchased_on"], vals["price_cents"], vals["youtube_id"],
-                 vals["fandango_id"], copy_id))
+    try:
+        con.execute("UPDATE copies SET kind=?, format=?, service=?, location_id=?, edition=?, code_status=?, "
+                    "purchased_on=?, price_cents=?, youtube_id=?, fandango_id=?, updated_at=CURRENT_TIMESTAMP "
+                    "WHERE id=?",
+                    (vals["kind"], vals["format"], vals["service"], vals["location_id"], vals["edition"],
+                     vals["code_status"], vals["purchased_on"], vals["price_cents"], vals["youtube_id"],
+                     vals["fandango_id"], copy_id))
+    except sqlite3.IntegrityError:
+        refuse_link_race(con, vals, copy_id)
     con.commit()
     return jsonify(title_detail(cur["title_id"], True))
 
@@ -1126,7 +1224,10 @@ def load_link_list(kind: LinkKind, csv_name: str):
     if (request.content_length or 0) > LOAD_LIST_MAX_BYTES:
         return make_err(413, "That list is too large to load in one go.")
     try:
-        rows = read_library(request.get_data(), request.content_type or "", kind)
+        body = request.get_data()
+        if len(body) > LOAD_LIST_MAX_BYTES:  # a chunked upload has no Content-Length to check above
+            return make_err(413, "That list is too large to load in one go.")
+        rows = read_library(body, request.content_type or "", kind)
     except ValueError as e:
         return make_err(400, str(e))
     try:
@@ -1180,14 +1281,20 @@ def remove_want(title_id):
     return jsonify(ok=True)
 
 
+WISHLIST_SHAPE_ERROR = "The Wish Lists app answered in a way Matinee doesn't understand."
+
+
 @app.get("/admin/api/wishlist/people")
 @editor_required
 def wishlist_people():
     try:
         people = wishlist_call("GET", "/api/people")
+        out = [{"id": p["id"], "name": p["name"], "color": p.get("color")} for p in people]
     except RuntimeError as e:
         return make_err(502, str(e))
-    return jsonify(people=[{"id": p["id"], "name": p["name"], "color": p.get("color")} for p in people])
+    except (TypeError, KeyError, AttributeError):
+        return make_err(502, WISHLIST_SHAPE_ERROR)
+    return jsonify(people=out)
 
 
 @app.post("/admin/api/titles/<int:title_id>/wishlist")
@@ -1218,10 +1325,13 @@ def add_to_wishlist(title_id):
         created = wishlist_call("POST", f"/api/people/{pid}/items", item)
     except RuntimeError as e:
         return make_err(502, str(e))
+    except (TypeError, KeyError, AttributeError):
+        return make_err(502, WISHLIST_SHAPE_ERROR)
+    item_id = created.get("id") if isinstance(created, dict) else None  # the item exists there either way
     con.execute("INSERT INTO wish_items(title_id, person_id, person_name, item_id, wanted_format) VALUES (?,?,?,?,?)",
-                (title_id, pid, people[pid], created.get("id"), wanted["wanted_format"]))
+                (title_id, pid, people[pid], item_id, wanted["wanted_format"]))
     con.commit()
-    return jsonify(ok=True, person=people[pid], item_id=created.get("id"))
+    return jsonify(ok=True, person=people[pid], item_id=item_id)
 
 
 @app.put("/admin/api/titles/<int:title_id>/rating")
@@ -1490,11 +1600,10 @@ def refresh_from_tmdb(con, title_id, tmdb_id):
     Raises TmdbError before anything is written, so a failed fetch leaves the row as it was."""
     t = tmdb_details(tmdb_id)
     files = fetch_images(t)
+    ratings = omdb_get(t["imdb_id"]) if t.get("imdb_id") and OMDB_API_KEY else None  # slow: before the write opens
     write_title(con, t, files, title_id)
-    if t.get("imdb_id") and OMDB_API_KEY:
-        ratings = omdb_get(t["imdb_id"])
-        if ratings:
-            write_omdb_ratings(con, title_id, t["imdb_id"], ratings)
+    if ratings:
+        write_omdb_ratings(con, title_id, t["imdb_id"], ratings)
     return t
 
 
@@ -1558,8 +1667,11 @@ def batch_refresh_ratings():
                 refreshed += 1
             else:
                 skipped += 1
-        except Exception:
+        except Exception as e:  # noqa: BLE001 — one bad title must not stop the batch
+            con.rollback()
             errors += 1
+            if errors == 1:
+                app.logger.warning("refresh-ratings: %s failed: %s", imdb_id, e, exc_info=True)
         time.sleep(0.1)
 
     return jsonify(ok=True, refreshed=refreshed, errors=errors, skipped=skipped)
