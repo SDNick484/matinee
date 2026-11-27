@@ -42,7 +42,7 @@ HOST = "mcp.example.com"
 READ_TOOLS = {"search_collection", "get_movie", "where_is", "get_recommendations",
               "get_collection_stats", "list_people", "get_lists", "get_list", "list_copies", "search_tmdb",
               "get_wishlist", "watch_calendar"}
-WRITE = {"rate_movie", "log_watch", "add_movie", "want_movie", "set_list_membership"}
+WRITE = {"rate_movie", "log_watch", "add_movie", "want_movie", "set_list_membership", "play_on_tv"}
 
 
 class FakeMatinee:
@@ -96,6 +96,14 @@ class FakeMatinee:
                                     "location_id": 9, "location_path": "Family Room › Media Cabinet › Shelf 2"}]})
                 if self.command == "POST" and self.path == "/admin/api/titles/214/watches":
                     return self._send(201, {"ok": True, "watch": {"id": 8, "watched_date": "2026-11-10"}})
+                if self.command == "POST" and self.path == "/admin/api/titles/214/play":
+                    return self._send(200, {
+                        "ok": True, "mode": "disc", "title": "Paddington 2", "watch_added": True,
+                        "message": "Starting Paddington 2 on Family Room TV. Added to watch history.",
+                        "disc": [{"copy_id": 351, "label": "Blu-ray", "location_path": "Family Room › Media Cabinet › Shelf 2",
+                                  "line": "Blu-ray · Family Room › Media Cabinet › Shelf 2"}],
+                        "detail": {"id": 214, "play": {"youtube": {"copy_id": 352, "label": "Digital HD"}, "disc": None},
+                                   "copies": [{"id": 352, "youtube_id": "dQw4w9WgXcQ"}]}})
                 if self.command == "PUT":
                     return self._send(200, {"ok": True})
                 return self._send(404, {"error": "not found"})
@@ -305,7 +313,7 @@ def test_default_is_read_only(client, token):
     assert tool_names(client, tok, open_session(client, tok)) == READ_TOOLS
 
 
-def test_writes_enabled_lists_seventeen(env, signing_key, where_is_calls, token):
+def test_writes_enabled_lists_eighteen(env, signing_key, where_is_calls, token):
     env["MATINEE_MCP_READONLY"] = "0"
     with make_client(env, signing_key) as c:
         tok = token()
@@ -808,3 +816,59 @@ def test_healthz_under_the_mcp_path_answers_without_auth(client):
     r = client.get("/matinee/mcp/healthz")
     assert r.status_code == 200
     assert r.json()["status"] == "ok"
+
+
+# ------------------------------------------------------------------ play_on_tv (spec 2026-11-26-play-on-tv-design §7)
+def test_play_on_tv_goes_through_the_play_route_at_all(env, signing_key, where_is_calls, token, fake_matinee):
+    """The service is given no Home Assistant setting: it only calls Matinee's own route, with its write key."""
+    env.update(level_env("0", "all"))
+    assert not [k for k in env if k.startswith("HA_")]
+    with make_client(env, signing_key) as c:
+        tok = token()
+        sid = open_session(c, tok)
+        msg = call_tool(c, tok, sid, "play_on_tv", {"title_id": 214, "mode": "disc"}, id_=4)
+    assert msg["result"]["isError"] is False
+    res = msg["result"]["structuredContent"]["result"]
+    assert res["played"] is True and res["mode"] == "disc" and res["watch_added"] is True
+    assert res["message"] == "Starting Paddington 2 on Family Room TV. Added to watch history."
+    assert "dQw4w9WgXcQ" not in json.dumps(msg) and "detail" not in res         # the id never leaves Matinee
+    posts = [(r, b) for r, b in zip(fake_matinee.requests, fake_matinee.bodies) if r[0] == "POST"]
+    assert [(r[1], r[2], json.loads(b)) for r, b in posts] == [
+        ("/admin/api/titles/214/play", f"Bearer {KEY}", {"mode": "disc"})]
+
+
+def test_play_on_tv_is_unknown_below_all(env, signing_key, where_is_calls, token, fake_matinee):
+    for level in ("none", "log"):
+        env.update(level_env("0", level))
+        with make_client(env, signing_key) as c:
+            tok = token()
+            sid = open_session(c, tok)
+            msg = call_tool(c, tok, sid, "play_on_tv", {"title_id": 214, "mode": "disc"}, id_=4)
+        assert msg["result"]["isError"] is True and msg["result"]["content"][0]["text"] == "Unknown tool: play_on_tv"
+    assert [r for r in fake_matinee.requests if r[0] in ("POST", "PUT", "DELETE")] == []
+
+
+def test_play_on_tv_is_refused_to_a_service_token(env, signing_key, where_is_calls, token, fake_matinee):
+    env.update(level_env("0", "all"))
+    env["MCP_ALLOWED_SERVICE_TOKENS"] = SERVICE_ID
+    with make_client(env, signing_key) as c:
+        bot = token(email=None, common_name=SERVICE_ID)
+        sid = open_session(c, bot)
+        msg = call_tool(c, bot, sid, "play_on_tv", {"title_id": 214, "mode": "disc"})
+    assert msg["result"]["isError"] is True and "needs a person" in msg["result"]["content"][0]["text"]
+    assert not [r for r in fake_matinee.requests if r[0] == "POST"]
+
+
+def test_the_services_environment_check_does_not_want_the_play_webhook(served):
+    """The webhook is the app's secret: the service at `all` starts with its own two keys and no HA_ setting."""
+    import asyncio
+
+    import mcp_http
+    env = full_env()
+    del env["MATINEE_READ_KEY"]
+    env.update(MATINEE_MCP_READONLY="0", MATINEE_MCP_WRITES="all", MATINEE_API_KEY=KEY)
+    assert not [k for k in env if k.startswith("HA_")]
+    assert mcp_http.main([], env) == 0
+    server, _, _ = served[0]
+    assert "play_on_tv" in {t.name for t in asyncio.run(server.list_tools())}
+    assert "HA_PLAY_WEBHOOK_URL" not in Path(mcp_http.__file__).read_text(encoding="utf-8")

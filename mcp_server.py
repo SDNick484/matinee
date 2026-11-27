@@ -101,6 +101,7 @@ TOOL_HINTS: Dict[str, Tuple[bool, bool, bool, bool]] = {
     "want_movie": (False, True, True, True),    # replaces the title's earlier want; may create the title from TMDB
     "set_list_membership": (False, True, True, False),  # on=false takes a title off a list; same call, same state
     "watch_calendar": (True, False, True, False),
+    "play_on_tv": (False, False, False, True),  # a call starts the TV again; it reaches the TV through Home Assistant
 }
 
 
@@ -153,6 +154,10 @@ TOO_OLD_FOR_PEOPLE = "This Matinee server is too old to pick for specific people
 TOO_OLD_FOR_LISTS = "This Matinee server is too old for lists. Update Matinee."
 _LIST_KEYS = ("id", "name", "kind", "season_start", "season_end", "in_season", "count")
 TOO_OLD_FOR_CALENDAR = "This Matinee server is too old for watch_calendar. Update Matinee."
+TOO_OLD_FOR_PLAY = "This Matinee server is too old for play_on_tv. Update Matinee."
+CANT_PLAY = "This connection can't play: it has no Matinee key that can write (MATINEE_API_KEY)."
+PLAY_MODES = ("youtube", "disc")
+_API_ERROR_PREFIX = re.compile(r"^Matinee API error \(\d+\): ")
 TOO_OLD_FOR_COPIES = "This Matinee server is too old for list_copies. Update Matinee."
 # list_copies: the values a filter accepts, copied from db.py (tests/test_mcp_server.py keeps them equal), and the
 # public keys of a row. The editor-only code_status, purchased_on and price_cents are never in either shape.
@@ -1132,6 +1137,50 @@ class MatineeClient:
             raise MatineeError(f"{TOO_OLD_FOR_PEOPLE} The watch was logged for everyone.")
         return res
 
+    def play_on_tv(self, title_id: int, mode: Optional[str] = None) -> Dict[str, Any]:
+        """Start an owned film on the TV: POST /admin/api/titles/<id>/play, which checks the copy, waits for Home
+        Assistant, then logs today's watch. With no `mode` the title's `play` (editors' title detail) says what it
+        can do: one way plays that way; two ways plays nothing and answers with the choices. No attendees are sent.
+        The answer never carries the title detail, so it never carries the YouTube id. This only calls Matinee's own
+        route: the Home Assistant webhook stays in the app's environment."""
+        if not self.api_key:
+            raise MatineeError(CANT_PLAY)
+        if mode is not None and mode not in PLAY_MODES:
+            raise MatineeError("mode must be youtube or disc.")
+        title_id = int(title_id)
+        if mode is None:
+            try:
+                detail = self._api_request("GET", f"/admin/api/titles/{title_id}")
+            except MatineeError as e:
+                if e.status == 404:
+                    raise MatineeError(f"Movie with id {title_id} not found.", status=404) from None
+                raise
+            play = detail.get("play") if isinstance(detail, dict) else None
+            if not isinstance(play, dict):  # Play off (the setting is empty), a read key, or a server that predates it
+                raise MatineeError("Play on TV isn't set up on this Matinee server, or this connection's key can't "
+                                   "play (it needs MATINEE_API_KEY).")
+            name = detail.get("title") or f"Movie {title_id}"
+            youtube, disc = play.get("youtube"), play.get("disc")
+            if youtube and disc:
+                return {"played": False, "choices": list(PLAY_MODES),
+                        "message": f"{name} can play on YouTube or from the disc. Which one?", "disc": disc}
+            if not (youtube or disc):
+                raise MatineeError(f"{name} can't play: it has no disc and no YouTube link.", status=409)
+            mode = "youtube" if youtube else "disc"
+        try:
+            res = self._api_request("POST", f"/admin/api/titles/{title_id}/play", {"mode": mode})
+        except MatineeError as e:
+            sentence = _API_ERROR_PREFIX.sub("", str(e))
+            if e.status == 404:
+                if sentence == "No such title":
+                    raise MatineeError(f"Movie with id {title_id} not found.", status=404) from None
+                raise MatineeError(TOO_OLD_FOR_PLAY, status=404) from None
+            if e.status in (400, 409, 502, 503) and sentence:   # the route's own sentence, as it wrote it
+                raise MatineeError(sentence, status=e.status) from None
+            raise
+        return {"played": True, "mode": res.get("mode", mode), "message": res.get("message"),
+                "disc": res.get("disc"), "watch_added": res.get("watch_added")}
+
     def search_tmdb(self, query: str) -> List[Dict[str, Any]]:
         """Search TMDB for movies to add to the collection."""
         qs = urllib.parse.urlencode({"q": query})
@@ -1188,6 +1237,11 @@ class MatineeClient:
                 "summary": f"{d.get('title')}{year} is on the wish list for {wanted or 'any format'}."}
 
 
+# The one line that names play_on_tv: only the `all` level registers it, so the other levels drop it.
+_PLAY_LINE = ('- "Put on Brooklyn", "play Heat on the TV": find the id with search_collection, then call '
+              'play_on_tv(title_id=...). It turns the TV on and logs a watch. A film that can play on YouTube and from '
+              'a disc answers with the two choices and plays nothing: ask which, then call again with mode="youtube" '
+              'or mode="disc". For a disc, say where it is shelved from the answer.\n')
 SERVER_INSTRUCTIONS = """\
 Matinee is the family's own collection of physical discs and digital copies.
 - Recommend only what get_recommendations or search_collection return. Use search_tmdb only when the user asks about movies they do not own.
@@ -1206,7 +1260,7 @@ call list_copies(service=, location=, format=, kind=), not repeated search_colle
 Keep calling with next_offset until it is null before saying the list is complete.
 - "What did we watch in November?", "when did we last watch Elf?", "which nights did we have a movie": call watch_calendar(month="2026-11"). \
 It lists only watches with an exact date; one logged as "1-2 Years ago" has no day and is not there.
-"""
+""" + _PLAY_LINE
 # For build_server(writes=False): the remote read-only service has no log_watch or rate_movie to point at.
 READONLY_INSTRUCTIONS = SERVER_INSTRUCTIONS.replace(
     " After watching: call log_watch, then rate_movie if the user gives a rating.", "").replace(
@@ -1214,7 +1268,7 @@ READONLY_INSTRUCTIONS = SERVER_INSTRUCTIONS.replace(
     "- log_watch with no attendees records only the adults for an R or NC-17 movie (and for a watch over ten years "
     "ago): pass attendees to name the kids if they watched. PG-13 and anything lower records everyone.\n", "").replace(
     '- "Add it to Watch Soon" or "save it for later": set_list_membership(list="Watch Soon", title_id=..., on=true).\n',
-    "")
+    "").replace(_PLAY_LINE, "")
 # Said at the levels that lack tools, in words that name none of them.
 _NO_WRITES_NOTE = ("- This connection is read-only: it cannot log watches, rate movies, change lists or add titles. "
                    "For those, tell the user to use the Matinee app.\n")
@@ -1228,7 +1282,7 @@ def instructions_for(writes) -> str:
     if level == "all":
         return SERVER_INSTRUCTIONS
     if level == "log":
-        return SERVER_INSTRUCTIONS + _LOG_ONLY_NOTE
+        return SERVER_INSTRUCTIONS.replace(_PLAY_LINE, "") + _LOG_ONLY_NOTE
     return READONLY_INSTRUCTIONS + _NO_WRITES_NOTE
 
 
@@ -1245,7 +1299,7 @@ def _make_server(instructions: str = SERVER_INSTRUCTIONS):
 
 _default_client = MatineeClient()
 
-WRITE_TOOLS = ("rate_movie", "log_watch", "add_movie", "want_movie", "set_list_membership")
+WRITE_TOOLS = ("rate_movie", "log_watch", "add_movie", "want_movie", "set_list_membership", "play_on_tv")
 # What each tool is, for mcp_remote's @tier: "read" changes nothing; "everyday" writes to the collection. An
 # automated caller (an Access service token) gets only MCP_AUTOMATION_TIERS (default read,power-off), so it can
 # read but never write, whatever the write level. Matinee has no "power-off" or "costly" tool.
@@ -1467,6 +1521,17 @@ def log_watch(
                                      attendees=attendees, date_bucket=date_bucket)
 
 
+def play_on_tv(title_id: int, mode: Optional[Literal["youtube", "disc"]] = None) -> Dict[str, Any]:
+    """Put an owned film on the Family Room TV (it turns the TV on) and log today's watch. title_id comes from
+    search_collection or where_is. mode: "youtube" or "disc". Leave it out when the film can play only one way: it
+    plays that way. When it can play both ways and no mode is given, nothing plays and the answer is
+    {"played": false, "choices": ["youtube", "disc"], "message", "disc"}: ask which, then call again with that mode.
+    A disc answer lists where the disc is shelved (disc[].line). Who watched is decided by Matinee from the film's
+    rating (everyone for PG-13 and below, the adults for R); there is nothing to pass. Needs a Matinee key that can
+    write, and Play on TV set up on the Matinee host; otherwise the answer is the reason."""
+    return _default_client.play_on_tv(title_id, mode=mode)
+
+
 def search_tmdb(query: str) -> List[Dict[str, Any]]:
     """Search TMDB for movies not yet in the collection (or to add additional copies)."""
     return _default_client.search_tmdb(query)
@@ -1545,9 +1610,9 @@ def prompt_log_movie_night(movie_title: str = "") -> str:
 
 
 def build_server(*, writes=True):
-    """Build a MCP server. `writes` is True (all seventeen tools), False (the twelve read tools) or a level from
+    """Build a MCP server. `writes` is True (all eighteen tools), False (the twelve read tools) or a level from
     WRITE_LEVELS: "none", "log" (adds rate_movie, log_watch and set_list_membership: fifteen tools) or "all" (adds
-    add_movie and want_movie: seventeen).
+    add_movie, want_movie and play_on_tv: eighteen).
     Anything else raises ValueError.
 
     Tool functions are module-level and read _default_client at call time.
@@ -1567,7 +1632,7 @@ def build_server(*, writes=True):
     for fn in (search_collection, get_movie, where_is, get_recommendations, get_collection_stats, list_people,
                get_lists, get_list, list_copies, search_tmdb, get_wishlist, watch_calendar):
         register(fn)
-    for fn in (rate_movie, log_watch, add_movie, want_movie, set_list_membership):
+    for fn in (rate_movie, log_watch, add_movie, want_movie, set_list_membership, play_on_tv):
         if fn.__name__ in WRITE_LEVELS[level]:
             register(fn)
     server.resource("matinee://stats")(resource_stats)

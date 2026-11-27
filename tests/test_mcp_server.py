@@ -1,6 +1,9 @@
 import asyncio
+import inspect
+import json
 import re
 import urllib.parse
+from pathlib import Path
 import pytest
 mcp = pytest.importorskip("mcp")
 
@@ -454,14 +457,14 @@ def test_where_is_returns_title_id_db_and_rest(test_env, monkeypatch):
 ALL_TOOLS = {"search_collection", "get_movie", "where_is", "get_recommendations",
              "get_collection_stats", "list_people", "rate_movie", "log_watch", "search_tmdb", "add_movie",
              "get_wishlist", "want_movie", "get_lists", "get_list", "set_list_membership", "list_copies",
-             "watch_calendar"}
+             "watch_calendar", "play_on_tv"}
 
 
 def _names(server):
     return {t.name for t in asyncio.run(server.list_tools())}
 
 
-def test_build_server_writes_true_lists_seventeen_tools():
+def test_build_server_writes_true_lists_eighteen_tools():
     assert _names(mcp_server.build_server(writes=True)) == ALL_TOOLS
 
 
@@ -672,6 +675,7 @@ EXPECTED_HINTS = {
     "set_list_membership": (False, True, True, False),
     "list_copies": (True, False, True, False),
     "watch_calendar": (True, False, True, False),
+    "play_on_tv": (False, False, False, True),  # a call starts the TV again; it reaches the TV through Home Assistant
 }
 
 
@@ -704,7 +708,7 @@ def test_annotation_kwargs_guarded_on_tool_signature():
     assert "annotations" in mcp_server._annotation_kwargs(WithAnnotations, "where_is")
 
 
-def test_annotation_table_covers_exactly_the_seventeen_tools():
+def test_annotation_table_covers_exactly_the_eighteen_tools():
     assert set(mcp_server.TOOL_HINTS) == set(EXPECTED_HINTS)
 
 
@@ -741,7 +745,7 @@ def test_instructions_for_each_level():
     log = mcp_server.instructions_for("log")
     full = mcp_server.instructions_for("all")
     assert full == mcp_server.SERVER_INSTRUCTIONS
-    assert log.startswith(mcp_server.SERVER_INSTRUCTIONS)
+    assert log.startswith(mcp_server.SERVER_INSTRUCTIONS.replace(mcp_server._PLAY_LINE, ""))   # all but play_on_tv
     assert "cannot add movies" in log and "log_watch" in log and "rate_movie" in log
     assert none.startswith(mcp_server.READONLY_INSTRUCTIONS)
     assert "read-only" in none and "log_watch" not in none and "rate_movie" not in none
@@ -1080,10 +1084,10 @@ def test_log_watch_with_attendees_refuses_an_older_server(monkeypatch):
 
 def test_tool_lists_per_level():
     sizes = {level: _names(mcp_server.build_server(writes=level)) for level in ("none", "log", "all")}
-    assert (len(sizes["none"]), len(sizes["log"]), len(sizes["all"])) == (12, 15, 17)
+    assert (len(sizes["none"]), len(sizes["log"]), len(sizes["all"])) == (12, 15, 18)
     assert {"list_people", "get_wishlist", "get_lists", "get_list", "list_copies"} <= sizes["none"] and "want_movie" not in sizes["log"]
     assert sizes["log"] - sizes["none"] == {"rate_movie", "log_watch", "set_list_membership"}
-    assert sizes["all"] - sizes["log"] == {"add_movie", "want_movie"}
+    assert sizes["all"] - sizes["log"] == {"add_movie", "want_movie", "play_on_tv"}
 
 
 def test_readonly_instructions_name_no_write_tool():
@@ -1932,3 +1936,205 @@ def test_list_copies_projects_a_keyed_response_without_the_youtube_id(monkeypatc
     client = mcp_server.MatineeClient(api_url="http://fake-host", api_key="k", db_path="")
     monkeypatch.setattr(client, "_api_request", lambda m, p, d=None: {"total": 1, "copies": [dict(private)]})
     assert "dQw4w9WgXcQ" not in str(client.list_copies())
+
+
+# --------------------------------------------------------------- play_on_tv (spec 2026-11-26-play-on-tv-design §7)
+# One write tool, at "all" only. It goes through POST /admin/api/titles/<id>/play and nothing else: the answer never
+# carries the YouTube id, and the tool never reads the webhook setting. Brooklyn (2015, PG-13) plays on YouTube
+# through a Movies Anywhere copy; Heat (1995, R) is on Blu-ray on a shelf; the ids are made up.
+PLAY_URL = "http://192.168.1.100:8123/api/webhook/Zp4-q8Rw2LmXv7Tk-matinee-play"
+
+
+@pytest.fixture
+def ha_play(monkeypatch):
+    """Play enabled in the app, with the one request to Home Assistant recorded and answered by a stub."""
+    from conftest import FakeResponse
+    monkeypatch.setattr("app.HA_PLAY_WEBHOOK_URL", PLAY_URL)
+    monkeypatch.setattr("app.HA_WEBHOOK_URL", "")
+
+    class Calls(list):
+        exc = None
+        status = 200
+
+    calls = Calls()
+
+    def fake_urlopen(req, timeout=None):
+        calls.append(json.loads(req.data))
+        if calls.exc is not None:
+            raise calls.exc
+        return FakeResponse(calls.status)
+
+    monkeypatch.setattr("app.urllib.request.urlopen", fake_urlopen)
+    return calls
+
+
+def _play_films():
+    from test_play_core import YT_ID, brooklyn, heat, seed_film
+    con = db()
+    both = seed_film(con, "Casablanca", 1942, "PG", copies=[
+        ("digital", "Digital HD", "Movies Anywhere", "Zq3-RnT8vLk", None), ("physical", "DVD", None, None, None)])
+    return {"brooklyn": brooklyn(con)["id"], "heat": heat(con)["id"], "both": both["id"], "yt_id": YT_ID,
+            "bare": seed_film(con, "Nosferatu", 1922, None, copies=[("digital", "Digital HD", "Vudu", None, None)])["id"]}
+
+
+def test_play_one_way(test_env, monkeypatch, ha_play):
+    films = _play_films()
+    client = _admin_rest_client(monkeypatch)
+    res = client.play_on_tv(films["brooklyn"])
+    assert res["played"] is True and res["mode"] == "youtube" and res["watch_added"] is True
+    assert res["message"] == "Starting Brooklyn on Family Room TV. Added to watch history." and res["disc"] is None
+    assert set(res) == {"played", "mode", "message", "disc", "watch_added"}
+    assert films["yt_id"] not in json.dumps(res)                   # the id is editor-only, even in what Matinee answered
+    assert [b["content_id"] for b in ha_play] == [films["yt_id"]]  # what Home Assistant got came from Matinee, not the tool
+    assert len(client.requested) == 2 and client.requested[1] == ("POST", f"/admin/api/titles/{films['brooklyn']}/play")
+    disc = client.play_on_tv(films["heat"])
+    assert disc["mode"] == "disc" and disc["disc"][0]["line"].startswith("4K UHD · Family Room")
+    assert ha_play[-1]["mode"] == "disc"
+    assert client.play_on_tv(films["brooklyn"])["watch_added"] is False   # the second press the same day adds no watch
+
+
+def test_play_two_ways_needs_mode(test_env, monkeypatch, ha_play):
+    films = _play_films()
+    client = _admin_rest_client(monkeypatch)
+    res = client.play_on_tv(films["both"])
+    assert res == {"played": False, "choices": ["youtube", "disc"],
+                   "message": "Casablanca can play on YouTube or from the disc. Which one?",
+                   "disc": [{"copy_id": res["disc"][0]["copy_id"], "label": "DVD", "location_path": None,
+                             "line": "DVD"}]}
+    assert not ha_play                                                          # nothing reached Home Assistant
+    assert client.requested == [("GET", f"/admin/api/titles/{films['both']}")]  # and the play route was not called
+    assert "Zq3-RnT8vLk" not in json.dumps(res)
+    assert db().execute("SELECT COUNT(*) FROM watches WHERE title_id=?", (films["both"],)).fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("mode", ["youtube", "disc"])
+def test_play_two_ways_with_mode(test_env, monkeypatch, ha_play, mode):
+    films = _play_films()
+    client = _admin_rest_client(monkeypatch)
+    res = client.play_on_tv(films["both"], mode=mode)
+    assert res["played"] is True and res["mode"] == mode and (res["disc"] is not None) == (mode == "disc")
+    assert [b["mode"] for b in ha_play] == [{"youtube": "stream", "disc": "disc"}[mode]]
+    assert client.requested == [("POST", f"/admin/api/titles/{films['both']}/play")]   # a mode needs no lookup first
+
+
+def test_play_errors(test_env, monkeypatch, ha_play):
+    films = _play_films()
+    client = _admin_rest_client(monkeypatch)
+    with pytest.raises(mcp_server.MatineeError) as e:
+        client.play_on_tv(films["heat"], mode="youtube")
+    assert str(e.value) == "Heat has no YouTube link." and e.value.status == 409
+    with pytest.raises(mcp_server.MatineeError) as e:
+        client.play_on_tv(films["brooklyn"], mode="disc")
+    assert str(e.value) == "We don't own Brooklyn on disc." and e.value.status == 409
+    ha_play.exc = OSError("connection refused: " + PLAY_URL)
+    with pytest.raises(mcp_server.MatineeError) as e:
+        client.play_on_tv(films["brooklyn"])
+    assert str(e.value) == "Couldn't reach the TV. Brooklyn wasn't started." and e.value.status == 502
+    assert PLAY_URL not in str(e.value) and db().execute("SELECT COUNT(*) FROM watches WHERE title_id=?", (films["brooklyn"],)).fetchone()[0] == 0
+    monkeypatch.setattr("app.HA_PLAY_WEBHOOK_URL", "")
+    with pytest.raises(mcp_server.MatineeError) as e:
+        client.play_on_tv(films["brooklyn"], mode="youtube")
+    assert str(e.value) == "Play on TV isn't set up." and e.value.status == 503
+    with pytest.raises(mcp_server.MatineeError) as e:        # no mode: the lookup finds Play off and says so, too
+        client.play_on_tv(films["brooklyn"])
+    assert "isn't set up" in str(e.value)
+    monkeypatch.setattr("app.HA_PLAY_WEBHOOK_URL", PLAY_URL)
+    with pytest.raises(mcp_server.MatineeError, match="Movie with id 9999 not found"):
+        client.play_on_tv(9999, mode="disc")
+    with pytest.raises(mcp_server.MatineeError, match="Movie with id 9999 not found"):
+        client.play_on_tv(9999)
+    with pytest.raises(mcp_server.MatineeError, match="Nosferatu can't play"):   # no disc and no YouTube link
+        client.play_on_tv(films["bare"])
+    with pytest.raises(mcp_server.MatineeError, match="mode must be"):
+        client.play_on_tv(films["brooklyn"], mode="stream")
+    assert len(ha_play) == 1          # only the 502 attempt reached Home Assistant; no other error got that far
+
+
+@pytest.mark.parametrize("status,sentence", [
+    (409, "Heat has no YouTube link."), (502, "Couldn't reach the TV. Heat wasn't started."),
+    (503, "Play on TV isn't set up.")])
+def test_play_errors_pass_the_route_sentence_through_the_real_client(monkeypatch, status, sentence):
+    """Through _api_request itself: the route's sentence, without the 'Matinee API error (409):' prefix."""
+    client = mcp_server.MatineeClient(api_url="http://fake-host", api_key="k", db_path="")
+
+    def refuse(req, timeout=None):
+        raise urllib.error.HTTPError(req.full_url, status, "x", {}, io.BytesIO(json.dumps({"error": sentence}).encode()))
+
+    monkeypatch.setattr(mcp_server.urllib.request, "urlopen", refuse)
+    with pytest.raises(mcp_server.MatineeError) as e:
+        client.play_on_tv(7, mode="youtube")
+    assert str(e.value) == sentence and e.value.status == status
+
+
+def test_play_without_a_write_key_cannot_play(monkeypatch):
+    for key in ("", None):
+        client = mcp_server.MatineeClient(api_url="http://fake-host", api_key=key, db_path="")
+        monkeypatch.setattr(client, "_api_request", lambda *a, **k: pytest.fail("no request without a key"))
+        with pytest.raises(mcp_server.MatineeError, match="can't play"):
+            client.play_on_tv(7, mode="disc")
+
+
+def test_play_with_a_read_key_cannot_play(test_env, monkeypatch, ha_play):
+    """The read key reads the title (play: null) and is refused by the route; nothing is sent either way."""
+    films = _play_films()
+    monkeypatch.setattr("app.MATINEE_READ_KEY", "rk", raising=False)
+    client = _admin_rest_client(monkeypatch, key="rk")
+    with pytest.raises(mcp_server.MatineeError, match="can't play"):
+        client.play_on_tv(films["brooklyn"])
+    with pytest.raises(mcp_server.MatineeError):
+        client.play_on_tv(films["brooklyn"], mode="youtube")
+    assert not ha_play
+
+
+def test_play_sends_no_attendees(monkeypatch):
+    client = mcp_server.MatineeClient(api_url="http://fake-host", api_key="k", db_path="")
+    sent = []
+    monkeypatch.setattr(client, "_api_request", lambda m, p, d=None: sent.append((m, p, d)) or
+                        {"ok": True, "mode": "youtube", "title": "Brooklyn", "message": "Starting Brooklyn.",
+                         "disc": None, "watch_added": True, "detail": {"id": 7, "youtube_id": "dQw4w9WgXcQ"}})
+    res = client.play_on_tv(7, mode="youtube")
+    assert sent == [("POST", "/admin/api/titles/7/play", {"mode": "youtube"})]    # no attendees key, no source
+    assert "detail" not in res and "dQw4w9WgXcQ" not in json.dumps(res)
+    monkeypatch.setattr(mcp_server._default_client, "api_key", "k")
+    monkeypatch.setattr(mcp_server._default_client, "_api_request",
+                        lambda m, p, d=None: sent.append((m, p, d)) or {"ok": True, "mode": "disc", "message": "m",
+                                                                         "disc": [], "watch_added": False})
+    assert mcp_server.play_on_tv(title_id=7, mode="disc")["mode"] == "disc"
+    assert sent[-1] == ("POST", "/admin/api/titles/7/play", {"mode": "disc"})
+    assert "attendees" not in inspect.signature(mcp_server.play_on_tv).parameters
+
+
+def test_play_tool_never_touches_the_webhook_setting():
+    """The webhook stays in the app's environment: neither the tool's module nor the service's names it."""
+    root = Path(mcp_server.__file__).parent
+    for name in ("mcp_server.py", "mcp_http.py", "mcp_remote.py"):
+        assert "HA_PLAY_WEBHOOK_URL" not in (root / name).read_text(encoding="utf-8"), name
+
+
+def test_play_schema():
+    t = _tool("play_on_tv")
+    props = (getattr(t, "inputSchema", None) or t.input_schema)["properties"]
+    assert set(props) == {"title_id", "mode"} and _schema_values(props["mode"]) == {"youtube", "disc"}
+    assert (getattr(t, "inputSchema", None) or t.input_schema)["required"] == ["title_id"]
+
+
+def test_registered_only_at_all():
+    for level in ("none", "log", False):
+        assert "play_on_tv" not in _names(mcp_server.build_server(writes=level)), level
+    for level in ("all", True):
+        assert "play_on_tv" in _names(mcp_server.build_server(writes=level)), level
+    assert "play_on_tv" in _names(mcp_server.mcp)                            # stdio registers every tool
+    assert mcp_server.WRITE_LEVELS["all"] == mcp_server.WRITE_TOOLS and "play_on_tv" in mcp_server.WRITE_TOOLS
+    for level in ("none", "log"):
+        assert "play_on_tv" not in mcp_server.WRITE_LEVELS[level]
+    assert mcp_server.TOOL_TIERS["play_on_tv"] == "everyday"                 # a service token never gets it
+
+
+def test_instructions_name_it_only_when_registered():
+    for level in ("none", "log", False):
+        assert "play_on_tv" not in mcp_server.instructions_for(level), level
+    for level in ("all", True):
+        text = mcp_server.instructions_for(level)
+        assert "play_on_tv" in text and "mode" in text and "which" in text.lower()
+    assert "play_on_tv" not in mcp_server.READONLY_INSTRUCTIONS
+    assert "play_on_tv" in mcp_server.mcp.instructions
