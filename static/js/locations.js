@@ -1,34 +1,23 @@
-// Matinee — locations manager modal.
+// Matinee — locations manager (a section of the Settings page).
 import { api, esc, toast } from "./core.js";
 import { icon } from "./icons.js";
-import { closeModal } from "./forms.js";
 
-  // ================================================================= Locations Manager Modal
-  async function openLocationsManagerModal() {
-    const modalRoot = document.getElementById("modal-root");
-    if (!modalRoot) return;
-
+  // ================================================================= Locations manager
+  // Draws the manager into `root` and redraws it there after every write.
+  async function renderLocationsManager(root) {
     let locations = [];
     try {
       const data = await api("/admin/api/locations");
       locations = data.locations || [];
     } catch (err) {
       toast(err.message || "Failed to load locations");
+      root.innerHTML = `<div class="settings-sub">Could not load the locations.</div>`;
       return;
     }
 
-    modalRoot.innerHTML = `
-      <div class="modal-overlay" id="modal-overlay">
-        <div class="modal-dialog" style="max-width:640px">
-          <div class="modal-header">
-            <div>
-              <div class="modal-title">${icon("pin")} Shelves &amp; Locations</div>
-              <div style="font-size:var(--fs-xs);color:var(--ink-3)">Manage physical storage locations (rooms, cabinets, shelves, bins)</div>
-            </div>
-            <button type="button" class="btn-close" id="btn-modal-close" aria-label="Close">✕</button>
-          </div>
-
-          <div style="display:flex;flex-direction:column;gap:var(--s4)">
+    root.innerHTML = `
+      <div class="settings-sub">Manage physical storage locations (rooms, cabinets, shelves, bins)</div>
+      <div class="settings-stack">
             <!-- Add New Location Form -->
             <form id="add-location-form" style="display:flex;flex-direction:column;gap:var(--s3);padding:var(--s3);background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--radius-sm)">
               <div style="font-weight:600;font-size:var(--fs-sm)">Add New Shelf / Location</div>
@@ -80,26 +69,14 @@ import { closeModal } from "./forms.js";
               `
               }
             </div>
-
-            <div class="modal-actions" style="margin-top:var(--s2)">
-              <button type="button" class="btn btn-ghost" id="btn-modal-cancel">Close</button>
-            </div>
-          </div>
-        </div>
       </div>
     `;
 
-    document.getElementById("btn-modal-close")?.addEventListener("click", closeModal);
-    document.getElementById("btn-modal-cancel")?.addEventListener("click", closeModal);
-    document.getElementById("modal-overlay")?.addEventListener("click", (e) => {
-      if (e.target.id === "modal-overlay") closeModal();
-    });
-
     // Add location form submit
-    document.getElementById("add-location-form")?.addEventListener("submit", async (e) => {
+    root.querySelector("#add-location-form")?.addEventListener("submit", async (e) => {
       e.preventDefault();
-      const nameInput = document.getElementById("loc-add-name");
-      const parentSelect = document.getElementById("loc-add-parent");
+      const nameInput = root.querySelector("#loc-add-name");
+      const parentSelect = root.querySelector("#loc-add-parent");
       const name = nameInput ? nameInput.value.trim() : "";
       const parent_id = parentSelect && parentSelect.value ? parseInt(parentSelect.value, 10) : null;
       if (!name) return;
@@ -110,14 +87,14 @@ import { closeModal } from "./forms.js";
           body: { name, parent_id },
         });
         toast(`Location "${name}" added`);
-        await openLocationsManagerModal();
+        await renderLocationsManager(root);
       } catch (err) {
         toast(err.message || "Failed to add location");
       }
     });
 
     // Edit location button
-    modalRoot.querySelectorAll(".btn-loc-edit").forEach(btn => {
+    root.querySelectorAll(".btn-loc-edit").forEach(btn => {
       btn.addEventListener("click", async () => {
         const id = btn.dataset.id;
         const currentName = btn.dataset.name;
@@ -132,7 +109,7 @@ import { closeModal } from "./forms.js";
             body: { name: trimmed },
           });
           toast("Location updated");
-          await openLocationsManagerModal();
+          await renderLocationsManager(root);
         } catch (err) {
           toast(err.message || "Failed to update location");
         }
@@ -140,7 +117,7 @@ import { closeModal } from "./forms.js";
     });
 
     // Delete location button
-    modalRoot.querySelectorAll(".btn-loc-delete").forEach(btn => {
+    root.querySelectorAll(".btn-loc-delete").forEach(btn => {
       btn.addEventListener("click", async () => {
         const id = btn.dataset.id;
         const name = btn.dataset.name;
@@ -155,7 +132,7 @@ import { closeModal } from "./forms.js";
             method: "DELETE",
           });
           toast("Location deleted");
-          await openLocationsManagerModal();
+          await renderLocationsManager(root);
         } catch (err) {
           toast(err.message || "Failed to delete location");
         }
@@ -163,4 +140,4 @@ import { closeModal } from "./forms.js";
     });
   }
 
-export { openLocationsManagerModal };
+export { renderLocationsManager };

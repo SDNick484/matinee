@@ -1,7 +1,6 @@
-// Matinee — household people: state.people, person dots/toggles, and the People manager modal.
+// Matinee — household people: state.people, person dots/toggles, and the People manager (a section of the Settings page).
 import { api, esc, state, toast } from "./core.js";
 import { icon } from "./icons.js";
-import { closeModal } from "./forms.js";
 
   const COLORS = ["green", "blue", "red", "pink", "purple"];
 
@@ -54,7 +53,7 @@ import { closeModal } from "./forms.js";
       .filter((n) => Number.isInteger(n));
   }
 
-  // ================================================================= People manager modal
+  // ================================================================= People manager (Settings page)
   function personRowHTML(p, idx, total) {
     const swatches = COLORS.map((c) => `<button type="button" class="people-swatch person-${c}" data-act="color" data-color="${c}" aria-pressed="${p.color === c ? "true" : "false"}" aria-label="Color ${c} for ${esc(p.name)}" title="${c}"></button>`).join("");
     const kindBtn = (k, label) => `<button type="button" class="people-kind${p.kind === k ? " is-on" : ""}" data-act="kind" data-kind="${k}" aria-pressed="${p.kind === k ? "true" : "false"}" aria-label="${label}: ${esc(p.name)}">${label}</button>`;
@@ -86,91 +85,37 @@ import { closeModal } from "./forms.js";
       </div>`;
   }
 
-  function peopleModalHTML() {
+  function peopleManagerHTML() {
     const people = state.people || [];
     const used = new Set(people.filter((p) => p.active).map((p) => p.color));
     const nextColor = COLORS.find((c) => !used.has(c)) || COLORS[0];
     return `
-      <div class="modal-overlay" id="modal-overlay">
-        <div class="modal-dialog people-dialog" style="max-width:640px" role="dialog" aria-modal="true" aria-label="People">
-          <div class="modal-header">
-            <div>
-              <div class="modal-title">${icon("dot")} People</div>
-              <div style="font-size:var(--fs-xs);color:var(--ink-3)">Who watches and rates here: name, adult or kid, color, order</div>
-            </div>
-            <button type="button" class="btn-close" id="btn-modal-close" aria-label="Close">✕</button>
-          </div>
-          <div style="display:flex;flex-direction:column;gap:var(--s4)">
-            <div class="people-list">
-              ${people.length ? people.map((p, i) => personRowHTML(p, i, people.length)).join("") : `<div style="text-align:center;padding:var(--s4);color:var(--ink-3);font-size:var(--fs-sm)">No people yet. Add one below.</div>`}
-            </div>
-            <form id="add-person-form" class="people-add">
-              <div style="font-weight:600;font-size:var(--fs-sm)">Add person</div>
-              <div class="people-add-grid">
-                <input type="text" id="person-add-name" class="form-input" placeholder="First name" maxlength="40" required autocapitalize="words" autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="done" aria-label="New person's name">
-                <select id="person-add-kind" class="form-select" aria-label="Adult or kid">
-                  <option value="adult">Adult</option>
-                  <option value="kid">Kid</option>
-                </select>
-                <select id="person-add-color" class="form-select" aria-label="Color">
-                  ${COLORS.map((c) => `<option value="${c}"${c === nextColor ? " selected" : ""}>${c}</option>`).join("")}
-                </select>
-              </div>
-              <button type="submit" class="btn people-btn">＋ Add person</button>
-            </form>
-            <div class="modal-actions"><button type="button" class="btn btn-ghost people-btn" id="btn-modal-cancel">Close</button></div>
-          </div>
+      <div class="settings-sub">Who watches and rates here: name, adult or kid, color, order</div>
+      <div class="settings-stack">
+        <div class="people-list">
+          ${people.length ? people.map((p, i) => personRowHTML(p, i, people.length)).join("") : `<div style="text-align:center;padding:var(--s4);color:var(--ink-3);font-size:var(--fs-sm)">No people yet. Add one below.</div>`}
         </div>
+        <form id="add-person-form" class="people-add">
+          <div style="font-weight:600;font-size:var(--fs-sm)">Add person</div>
+          <div class="people-add-grid">
+            <input type="text" id="person-add-name" class="form-input" placeholder="First name" maxlength="40" required autocapitalize="words" autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="done" aria-label="New person's name">
+            <select id="person-add-kind" class="form-select" aria-label="Adult or kid">
+              <option value="adult">Adult</option>
+              <option value="kid">Kid</option>
+            </select>
+            <select id="person-add-color" class="form-select" aria-label="Color">
+              ${COLORS.map((c) => `<option value="${c}"${c === nextColor ? " selected" : ""}>${c}</option>`).join("")}
+            </select>
+          </div>
+          <button type="submit" class="btn people-btn">＋ Add person</button>
+        </form>
       </div>`;
   }
 
-  // True once a change in the People modal has been saved; closing the modal then re-renders the current view
-  // when it shows people (the grid's Unseen by filters, a title's Who watched row). Other views (Add, Stats,
-  // About, Ask) are left alone: re-running their route would reset a half-typed search or the scanner.
-  // Reset each time the modal opens.
-  let peopleChanged = false;
+  // Draws the People manager into `root` (a section of the Settings page) and redraws it after every write.
+  async function renderPeopleManager(root) {
+    root.innerHTML = peopleManagerHTML();
 
-  function peopleModalOpen() {
-    return Boolean(document.querySelector("#modal-root .people-dialog"));
-  }
-
-  function closePeopleModal() {
-    const wasOpen = peopleModalOpen();
-    closeModal();
-    if (wasOpen && peopleChanged) {
-      peopleChanged = false;
-      if (!["/", "/t/:id"].includes(state.route?.path)) return;
-      // main.js routes on hashchange; this re-renders the current route in place (no history entry).
-      window.dispatchEvent(new HashChangeEvent("hashchange"));
-    }
-  }
-
-  // Escape: forms.js closes any modal on window; this runs first (document) so a change is not lost.
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && peopleModalOpen()) closePeopleModal();
-  });
-
-  async function renderPeopleModal() {
-    const modalRoot = document.getElementById("modal-root");
-    if (!modalRoot) return;
-    const prev = modalRoot.querySelector(".modal-dialog");
-    const scroll = prev ? prev.scrollTop : 0;
-    modalRoot.innerHTML = peopleModalHTML();
-    const dialog = modalRoot.querySelector(".modal-dialog");
-    if (dialog) dialog.scrollTop = scroll;
-
-    document.getElementById("btn-modal-close")?.addEventListener("click", closePeopleModal);
-    document.getElementById("btn-modal-cancel")?.addEventListener("click", closePeopleModal);
-    document.getElementById("modal-overlay")?.addEventListener("click", (e) => {
-      if (e.target.id === "modal-overlay") closePeopleModal();
-    });
-
-    // Every write goes through send(): a saved one marks the view for a refresh when the modal closes.
-    const send = async (path, opts) => {
-      const res = await api(path, opts);
-      peopleChanged = true;
-      return res;
-    };
     // Run a change, show the server's message on failure, then reload and re-render either way.
     const change = async (fn, okMsg) => {
       try {
@@ -180,20 +125,21 @@ import { closeModal } from "./forms.js";
         toast(err.message || "Could not save");
       }
       await loadPeople();
-      await renderPeopleModal();
+      await renderPeopleManager(root);
     };
+    const send = (path, opts) => api(path, opts);
     const put = (id, body) => send(`/admin/api/people/${id}`, { method: "PUT", body });
 
-    document.getElementById("add-person-form")?.addEventListener("submit", (e) => {
+    root.querySelector("#add-person-form")?.addEventListener("submit", (e) => {
       e.preventDefault();
-      const name = document.getElementById("person-add-name").value.trim();
+      const name = root.querySelector("#person-add-name").value.trim();
       if (!name) return;
-      const kind = document.getElementById("person-add-kind").value;
-      const color = document.getElementById("person-add-color").value;
+      const kind = root.querySelector("#person-add-kind").value;
+      const color = root.querySelector("#person-add-color").value;
       change(() => send("/admin/api/people", { method: "POST", body: { name, kind, color } }), name + " added");
     });
 
-    modalRoot.querySelectorAll(".people-row").forEach((row) => {
+    root.querySelectorAll(".people-row").forEach((row) => {
       const id = parseInt(row.dataset.id, 10);
       const p = (state.people || []).find((x) => x.id === id);
       if (!p) return;
@@ -229,10 +175,10 @@ import { closeModal } from "./forms.js";
     });
   }
 
-  async function openPeopleModal() {
-    peopleChanged = false;
+  // Reload the people, then draw the manager (the Settings page calls this once per visit).
+  async function openPeopleManager(root) {
     await loadPeople();
-    await renderPeopleModal();
+    await renderPeopleManager(root);
   }
 
-export { activePeople, loadPeople, openPeopleModal, personDotsHTML, personTogglesHTML, readToggles };
+export { activePeople, loadPeople, openPeopleManager, personDotsHTML, personTogglesHTML, readToggles };
