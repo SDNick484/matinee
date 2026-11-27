@@ -164,8 +164,8 @@ import { icon } from "./icons.js";
 
   // Delegated clicks for every [data-play-title] inside `root`. lookup(id) returns the title object. A button with a
   // data-play-mode (the details page and Movie Night) sends that way; the grid's ▶ sends Fandango when the title has
-  // it, else its only way, or opens the chooser for YouTube and a disc. onDone(answer, title) runs after a start. The poster's own link must not also open
-  // the details page, so the click is always cancelled. Calling it again on one root replaces the earlier listener.
+  // it, else its only way, or opens the chooser for YouTube and a disc. onDone(answer, title) runs after a start. The
+  // poster's own link must not also open the details page, so the click is always cancelled. Calling it again on one root replaces the earlier listener.
   function wirePlay(root, lookup, attendees, onDone) {
     if (!root) return;
     if (wired.has(root)) root.removeEventListener("click", wired.get(root));
