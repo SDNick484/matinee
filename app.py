@@ -65,6 +65,7 @@ from lists import set_membership, clear_watch_soon  # noqa: F401
 from watched_days import parse_month, month_view  # noqa: F401
 from youtube import YOUTUBE_ID_RE, youtube_id_ok, parse_youtube_link  # noqa: F401
 from youtube import LoadConflict, load_links, plan_links, read_library  # noqa: F401
+from fandango import FANDANGO_ID_RE, fandango_id_ok, parse_fandango_link, fandango_details_url  # noqa: F401
 from export import not_loaded_csv  # noqa: F401
 from settings import HA_PLAY_WEBHOOK_URL  # noqa: F401
 import play  # Play on the Family Room TV: new code, not moved out of here, so the route uses play.<name>
@@ -75,7 +76,7 @@ import play  # Play on the Family Room TV: new code, not moved out of here, so t
 # so `app.X`, `from app import X` and `import app as matinee` work as before. A write to app.X (monkeypatch in the
 # tests, `matinee.TMDB_READ_TOKEN = ...` in ops/import_titles.py) also rebinds X in each split module that holds
 # it, so moved code reads the new value as it did when it lived here. Patch app.X, not the split module.
-_SPLIT_MODULES = ("settings", "common", "db", "clients", "images", "people", "browse", "export", "wishlist", "lists", "watched_days", "youtube", "play")
+_SPLIT_MODULES = ("settings", "common", "db", "clients", "images", "people", "browse", "export", "wishlist", "lists", "watched_days", "youtube", "fandango", "play")
 
 
 class _AppModule(types.ModuleType):
