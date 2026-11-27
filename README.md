@@ -99,6 +99,8 @@ rc-service matinee restart
 
 **Home Assistant.** Set `HA_WEBHOOK_URL` (a secret; empty = off) and Matinee POSTs a small JSON event to Home Assistant when someone taps **+ Watched Today**, so an automation can log the film, dim the lights or announce it. Log Date, MCP and back-filled watches never fire, and watch notes and people are never sent. See [docs/home-assistant.md](docs/home-assistant.md).
 
+**Play on the Family Room TV.** Set `HA_PLAY_WEBHOOK_URL` (a secret; empty = off, the default) and an editor can ask Home Assistant to start an owned film on the TV: on YouTube for a digital copy with a YouTube link, or the disc activity for a disc. Matinee waits up to 5 seconds for Home Assistant to take the request and only then adds the film to watch history for today (once a day per film; everyone for G, PG and PG-13, the adults otherwise). The route is `POST /admin/api/titles/<id>/play` with `{"mode": "youtube"}` or `{"mode": "disc"}`; there are no buttons yet. The Home Assistant script and automation are in [docs/home-assistant.md](docs/home-assistant.md#7-play-on-the-family-room-tv).
+
 ---
 
 ## LAN Editing
