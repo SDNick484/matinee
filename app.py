@@ -573,6 +573,33 @@ def copy_youtube_id(data, kind, stored=False):
     return found
 
 
+FANDANGO_LINK_ERROR = "That isn't a Fandango at Home link. Paste the address of the film's Fandango at Home page."
+
+
+def copy_fandango_id(data, kind, stored=False):
+    """The id for `fandango_link` in a request, exactly as copy_youtube_id reads `youtube_link`: None clears it. A link
+    needs a digital copy; `stored` says the link was already on the copy (an edit that turns it physical)."""
+    try:
+        found = parse_fandango_link(data.get("fandango_link"))
+    except ValueError:
+        abort(make_err(400, FANDANGO_LINK_ERROR))
+    if found and kind == "physical":
+        abort(make_err(400, "This copy has a Fandango at Home link. Clear it before making the copy physical." if stored
+                       else "A Fandango at Home link belongs on a digital copy. A physical copy can't have one."))
+    return found
+
+
+def check_fandango_free(con, fandango_id, copy_id=None):
+    """409 naming the film when another copy already has this Fandango at Home id (the unique index would refuse it)."""
+    if not fandango_id:
+        return
+    row = con.execute("SELECT t.title, t.year FROM copies c JOIN titles t ON t.id = c.title_id "
+                      "WHERE c.fandango_id = ? AND c.id IS NOT ?", (fandango_id, copy_id)).fetchone()
+    if row:
+        name = f"{row['title']} ({row['year']})" if row["year"] else row["title"]
+        abort(make_err(409, f"That Fandango at Home link is already on {name}."))
+
+
 def check_youtube_free(con, youtube_id, copy_id=None):
     """409 naming the film when another copy already has this id (the unique index would refuse it anyway)."""
     if not youtube_id:
@@ -584,9 +611,10 @@ def check_youtube_free(con, youtube_id, copy_id=None):
         abort(make_err(409, f"That YouTube link is already on {name}."))
 
 
-def copy_values(data, youtube_stored=False):
-    """Validate {kind, format, service, location_id, edition, code_status, purchased_on, price_cents, youtube_link}
-    -> clean values (youtube_link becomes youtube_id), or abort 400 with a message for the form."""
+def copy_values(data, youtube_stored=False, fandango_stored=False):
+    """Validate {kind, format, service, location_id, edition, code_status, purchased_on, price_cents, youtube_link,
+    fandango_link} -> clean values (the links become youtube_id and fandango_id), or abort 400 with a message for the
+    form."""
     kind = (clean(data.get("kind")) or "").lower()
     if kind not in FORMATS:
         abort(make_err(400, "Is it a physical copy or a digital one?"))
@@ -626,7 +654,8 @@ def copy_values(data, youtube_stored=False):
             "edition": copy_edition(data.get("edition")), "code_status": code_status,
             "purchased_on": copy_purchased_on(data.get("purchased_on")),
             "price_cents": copy_price_cents(data.get("price_cents")),
-            "youtube_id": copy_youtube_id(data, kind, youtube_stored)}
+            "youtube_id": copy_youtube_id(data, kind, youtube_stored),
+            "fandango_id": copy_fandango_id(data, kind, fandango_stored)}
 
 
 def tmdb_id_arg(v):
@@ -999,12 +1028,13 @@ def add_copy():
     vals = copy_values(data)
     con = db()
     check_youtube_free(con, vals["youtube_id"])       # before ensure_title, so a refusal creates nothing
+    check_fandango_free(con, vals["fandango_id"])
     title_id = ensure_title(con, data)
     cid = con.execute("INSERT INTO copies(title_id, kind, format, service, location_id, edition, code_status, "
-                      "purchased_on, price_cents, youtube_id, added_by) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                      "purchased_on, price_cents, youtube_id, fandango_id, added_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                       (title_id, vals["kind"], vals["format"], vals["service"], vals["location_id"], vals["edition"],
                        vals["code_status"], vals["purchased_on"], vals["price_cents"], vals["youtube_id"],
-                       who())).lastrowid
+                       vals["fandango_id"], who())).lastrowid
     # a copy that satisfies the title's want ends it, in the same transaction (wish_items stay as history)
     wanted = get_want(con, title_id)
     cleared = bool(wanted) and want_satisfied_by(wanted["wanted_format"], vals["format"])
@@ -1034,15 +1064,22 @@ def edit_copy(copy_id):
         "kind", "format", "service", "location_id", "edition", "code_status", "purchased_on", "price_cents")}
     keep = "youtube_link" not in data               # absent keeps what is stored, even a value this app wouldn't write
     merged["youtube_link"] = data["youtube_link"] if not keep else (cur["youtube_id"] if youtube_id_ok(cur["youtube_id"]) else None)
-    vals = copy_values(merged, youtube_stored=keep)
+    keep_fandango = "fandango_link" not in data     # the same for the Fandango at Home link, independently
+    merged["fandango_link"] = (data["fandango_link"] if not keep_fandango
+                               else (cur["fandango_id"] if fandango_id_ok(cur["fandango_id"]) else None))
+    vals = copy_values(merged, youtube_stored=keep, fandango_stored=keep_fandango)
     if keep:
         vals["youtube_id"] = cur["youtube_id"]
+    if keep_fandango:
+        vals["fandango_id"] = cur["fandango_id"]
     con = db()
     check_youtube_free(con, vals["youtube_id"], copy_id)
+    check_fandango_free(con, vals["fandango_id"], copy_id)
     con.execute("UPDATE copies SET kind=?, format=?, service=?, location_id=?, edition=?, code_status=?, "
-                "purchased_on=?, price_cents=?, youtube_id=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                "purchased_on=?, price_cents=?, youtube_id=?, fandango_id=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
                 (vals["kind"], vals["format"], vals["service"], vals["location_id"], vals["edition"],
-                 vals["code_status"], vals["purchased_on"], vals["price_cents"], vals["youtube_id"], copy_id))
+                 vals["code_status"], vals["purchased_on"], vals["price_cents"], vals["youtube_id"],
+                 vals["fandango_id"], copy_id))
     con.commit()
     return jsonify(title_detail(cur["title_id"], True))
 

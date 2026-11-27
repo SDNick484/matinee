@@ -6,13 +6,15 @@ import csv, datetime as dt, io
 from browse import get_descendant_location_ids, get_location_path_map
 from db import FORMATS, SERVICES
 from youtube import youtube_watch_url
+from fandango import fandango_details_url
 
 
 # ============================================================================ export
 EXPORT_COLUMNS = ("title", "year", "tmdb_id", "imdb_id", "certification", "runtime", "kind", "format", "service",
                   "location_path", "user_rating", "watch_count", "last_watched", "added_on",
                   "edition", "code_status", "purchased_on", "price",   # these four came with schema v10
-                  "youtube_link")   # v13: the full address of the copy's YouTube page; an address, since an id can start with "-"
+                  "youtube_link",   # v13: the full address of the copy's YouTube page; an address, since an id can start with "-"
+                  "fandango_link")  # v14: the copy's Fandango at Home page, .../details/title/<id> (the name isn't stored)
 FORMULA_LEAD = ("=", "+", "-", "@", "\t", "\r")   # a spreadsheet would run a text cell that starts like this
 
 
@@ -95,7 +97,7 @@ def _inventory(con, kind, format, service, location_id):
             f"""SELECT t.id AS title_id, t.title, t.year, t.tmdb_id, t.imdb_id, t.certification,
                        t.certification_override, t.runtime,
                        c.kind, c.format, c.service, c.location_id, c.created_at,
-                       c.edition, c.code_status, c.purchased_on, c.price_cents, c.youtube_id,
+                       c.edition, c.code_status, c.purchased_on, c.price_cents, c.youtube_id, c.fandango_id,
                        (SELECT rating FROM user_ratings u WHERE u.title_id=t.id) AS user_rating,
                        (SELECT count(*) FROM watches w WHERE w.title_id=t.id) AS watch_count,
                        (SELECT MAX(watched_date) FROM watches w WHERE w.title_id=t.id) AS last_watched
@@ -127,7 +129,7 @@ def export_rows(con, **filters):
              d["runtime"], d["kind"], d["format"], d["service"], d["location_path"],
              d["user_rating"], d["watch_count"], d["last_watched"], (d["created_at"] or "")[:10],
              d["edition"], d["code_status"], d["purchased_on"], dollars(d["price_cents"]),
-             youtube_watch_url(d["youtube_id"])]
+             youtube_watch_url(d["youtube_id"]), fandango_details_url(d["fandango_id"])]
             for d in _inventory(con, filters.get("kind"), filters.get("format"), filters.get("service"),
                                 filters.get("location_id"))]
 

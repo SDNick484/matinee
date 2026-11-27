@@ -1929,6 +1929,24 @@ def test_copies_never_carry_youtube_id(inventory, monkeypatch, name):
             assert secret not in text, (name, secret)
 
 
+@pytest.mark.parametrize("name", ["direct", "keyed", "public"])
+def test_copies_never_carry_fandango_id(inventory, monkeypatch, name):
+    """The Fandango at Home id (schema v14) is editor-only like the YouTube id (spec 2026-11-27-fandango-play §3)."""
+    con = db()
+    con.execute("UPDATE copies SET fandango_id='15429', youtube_id='dQw4w9WgXcQ' WHERE title_id=? AND kind='digital'",
+                (inventory["dark_knight"],))
+    con.commit()
+    client = _all_clients(inventory, monkeypatch)[name]
+    outputs = [client.list_copies(shape=shape, output=output) for shape in ("copy", "title") for output in ("rows", "csv")]
+    movie = client.get_movie(inventory["dark_knight"])
+    assert movie["copies"]
+    outputs += [movie, client.where_is("The Dark Knight")]
+    for out in outputs:
+        text = str(out)
+        for secret in ("15429", "fandango_id", "fandango_link", "dQw4w9WgXcQ", "youtube_id"):
+            assert secret not in text, (name, secret)
+
+
 def test_list_copies_projects_a_keyed_response_without_the_youtube_id(monkeypatch):
     private = {"title_id": 7, "title": "Paddington 2", "year": 2017, "kind": "digital", "format": "Digital HD",
                "service": "Movies Anywhere", "edition": None, "location_id": None, "location_path": None,

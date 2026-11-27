@@ -575,8 +575,9 @@ class MatineeClient:
             if e.status == 404:
                 raise MatineeError(f"Movie with id {title_id} not found.") from None
             raise
-        if isinstance(movie, dict):   # a keyed read carries the editor-only YouTube id; no tool passes it on
-            movie["copies"] = [{k: v for k, v in c.items() if k != "youtube_id"} if isinstance(c, dict) else c
+        if isinstance(movie, dict):   # a keyed read carries the editor-only YouTube and Fandango ids; no tool passes them on
+            movie["copies"] = [{k: v for k, v in c.items() if k not in ("youtube_id", "fandango_id")}
+                               if isinstance(c, dict) else c
                                for c in movie.get("copies") or []]
         return self._name_people(movie) if names else movie
 
