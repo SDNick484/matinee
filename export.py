@@ -5,14 +5,16 @@ import csv, datetime as dt, io
 
 from browse import get_descendant_location_ids, get_location_path_map
 from db import FORMATS, SERVICES
-from youtube import youtube_watch_url
+from youtube import YOUTUBE, youtube_watch_url
+from fandango import fandango_details_url
 
 
 # ============================================================================ export
 EXPORT_COLUMNS = ("title", "year", "tmdb_id", "imdb_id", "certification", "runtime", "kind", "format", "service",
                   "location_path", "user_rating", "watch_count", "last_watched", "added_on",
                   "edition", "code_status", "purchased_on", "price",   # these four came with schema v10
-                  "youtube_link")   # v13: the full address of the copy's YouTube page; an address, since an id can start with "-"
+                  "youtube_link",   # v13: the full address of the copy's YouTube page; an address, since an id can start with "-"
+                  "fandango_link")  # v14: the copy's Fandango at Home page, .../details/title/<id> (the name isn't stored)
 FORMULA_LEAD = ("=", "+", "-", "@", "\t", "\r")   # a spreadsheet would run a text cell that starts like this
 
 
@@ -95,7 +97,7 @@ def _inventory(con, kind, format, service, location_id):
             f"""SELECT t.id AS title_id, t.title, t.year, t.tmdb_id, t.imdb_id, t.certification,
                        t.certification_override, t.runtime,
                        c.kind, c.format, c.service, c.location_id, c.created_at,
-                       c.edition, c.code_status, c.purchased_on, c.price_cents, c.youtube_id,
+                       c.edition, c.code_status, c.purchased_on, c.price_cents, c.youtube_id, c.fandango_id,
                        (SELECT rating FROM user_ratings u WHERE u.title_id=t.id) AS user_rating,
                        (SELECT count(*) FROM watches w WHERE w.title_id=t.id) AS watch_count,
                        (SELECT MAX(watched_date) FROM watches w WHERE w.title_id=t.id) AS last_watched
@@ -127,7 +129,7 @@ def export_rows(con, **filters):
              d["runtime"], d["kind"], d["format"], d["service"], d["location_path"],
              d["user_rating"], d["watch_count"], d["last_watched"], (d["created_at"] or "")[:10],
              d["edition"], d["code_status"], d["purchased_on"], dollars(d["price_cents"]),
-             youtube_watch_url(d["youtube_id"])]
+             youtube_watch_url(d["youtube_id"]), fandango_details_url(d["fandango_id"])]
             for d in _inventory(con, filters.get("kind"), filters.get("format"), filters.get("service"),
                                 filters.get("location_id"))]
 
@@ -176,15 +178,15 @@ def export_csv(con, today=None, *, shape="copy", **filters):
     return b"\xef\xbb\xbf" + out.getvalue().encode("utf-8"), f"matinee-{day}{'' if shape == 'copy' else '-titles'}.csv"
 
 
-def not_loaded_csv(rows):
+def not_loaded_csv(rows, kind=YOUTUBE):
     """The not-loaded rows as a spreadsheet: title, year, youtube_link (the address that was given, else the id's),
-    reason, near. UTF-8 with a BOM and CRLF like the export; text that starts like a formula gets a leading quote,
+    reason, near; for a Fandango at Home list the link column is fandango_link. UTF-8 with a BOM and CRLF like the export; text that starts like a formula gets a leading quote,
     and an address starts with "https", so an id that begins with "-" stays whole."""
     out = io.StringIO(newline="")
     w = csv.writer(out)
-    w.writerow(("title", "year", "youtube_link", "reason", "near"))
+    w.writerow(("title", "year", kind.link_column, "reason", "near"))
     for r in rows:
-        link = r["play_link"] or youtube_watch_url(r["video_id"]) or r["video_id"]
+        link = r["play_link"] or kind.link_url(r[kind.id_field]) or r[kind.id_field]
         near = "; ".join(f"{n['title']} ({n['year']}) [{n['held']}]" if n["year"] else f"{n['title']} [{n['held']}]"
                          for n in r["near"])
         w.writerow([csv_cell(v) for v in (r["title"], r["year"], link, r["reason"], near)])

@@ -23,6 +23,7 @@ import { playBarHtml, wirePlay } from "./play.js";
     if (cp.kind === "physical" && CODE_LABELS[cp.code_status]) parts.push(CODE_LABELS[cp.code_status]);
     if (cp.purchased_on) parts.push(`Bought ${formatReadableDate(cp.purchased_on)}`);
     if (typeof cp.price_cents === "number") parts.push(centsToDollars(cp.price_cents));
+    if (cp.fandango_id) parts.push("Fandango at Home link");
     if (cp.youtube_id) parts.push("YouTube link");
     return parts.length ? `<span class="copy-meta copy-extra">${esc(parts.join(" · "))}</span>` : "";
   }

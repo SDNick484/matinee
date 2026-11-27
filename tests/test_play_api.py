@@ -18,7 +18,7 @@ import pytest
 import app as matinee
 from app import app, db, init_db
 from conftest import FakeResponse, FakeThread, seed_people
-from test_play_core import SHELF, YT_ID, brooklyn, heat, seed_film
+from test_play_core import SHELF, YT_ID, addams, brooklyn, heat, seed_film
 
 API_KEY = "test-write-key-0123456789"
 READ_KEY = "test-read-key-9876543210"
@@ -336,6 +336,63 @@ def test_stale_page(client, ha):
     res = press(client, b["id"], "youtube")
     assert res.status_code == 409 and res.get_json()["error"] == "Brooklyn has no YouTube link."
     assert ha == [] and watches(b["id"]) == []
+
+
+# ----------------------------------------------------------------------------- Fandango at Home (2026-11-27 design §4)
+def test_fandango_play_sends_payload_and_logs_watch_once(client, ha):
+    seed_people(db())
+    a = addams(db(), youtube=YT_ID, disc=True)
+    res = press(client, a["id"], "fandango")
+    assert res.status_code == 200
+    assert ha.play == [{"event": "matinee_play", "mode": "stream", "source": "Fandango at Home",
+                        "title": "The Addams Family", "content_id": "15429"}]
+    body = res.get_json()
+    assert body["mode"] == "fandango" and body["watch_added"] is True and body["disc"] is None
+    assert body["message"] == "Starting The Addams Family on Family Room TV. Added to watch history."
+    assert body["detail"]["play"]["fandango"]["copy_id"] == a["copies"][1]
+    assert "15429" not in json.dumps({k: v for k, v in body.items() if k != "detail"})
+    assert [w["watched_date"] for w in watches(a["id"])] == [today()]
+    assert attendance(watches(a["id"])[0]["id"]) == EVERYONE                  # PG-13: everyone
+    again = press(client, a["id"], "fandango")                                 # a second press the same day
+    assert again.status_code == 200 and again.get_json()["watch_added"] is False
+    assert again.get_json()["message"] == "Starting The Addams Family on Family Room TV."
+    assert len(watches(a["id"])) == 1 and len(ha.play) == 2
+    assert press(client, a["id"], "youtube").status_code == 200               # an explicit mode plays that mode
+    assert ha.play[-1]["source"] == "YouTube" and ha.play[-1]["content_id"] == YT_ID
+
+
+def test_no_fandango_link_is_409(client, ha):
+    b, h = brooklyn(db()), heat(db())
+    for t in (b, h):
+        res = press(client, t["id"], "fandango")
+        assert res.status_code == 409
+    assert res.get_json()["error"] == "Heat has no Fandango at Home link."
+    a = addams(db())
+    assert client.put(f"/admin/api/copies/{a['copies'][0]}", json={"fandango_link": ""},
+                      headers=bearer()).status_code == 200                      # a stale page: the link was cleared
+    res = press(client, a["id"], "fandango")
+    assert res.status_code == 409 and res.get_json()["error"] == "The Addams Family has no Fandango at Home link."
+    assert ha == [] and watches(a["id"]) == []
+
+
+def test_stored_bad_fandango_id_is_never_sent(client, ha, monkeypatch):
+    a = addams(db())
+    db().execute("UPDATE copies SET fandango_id='15429; rm' WHERE id=?", (a["copies"][0],))
+    db().commit()
+    assert press(client, a["id"], "fandango").status_code == 409
+    monkeypatch.setattr("play.fandango_id_for", lambda con, title_id: "1234567890123")   # slips past ways()
+    db().execute("UPDATE copies SET fandango_id=? WHERE id=?", ("15429", a["copies"][0]))
+    db().commit()
+    assert press(client, a["id"], "fandango").status_code == 409
+    assert ha == [] and watches(a["id"]) == []
+
+
+def test_fandango_failure_is_502_and_writes_nothing(client, ha):
+    a = addams(db())
+    ha.status = 500
+    res = press(client, a["id"], "fandango")
+    assert res.status_code == 502 and res.get_json()["error"] == "Couldn't reach the TV. The Addams Family wasn't started."
+    assert watches(a["id"]) == []
 
 
 def test_stale_page_disc_gone(client, ha):

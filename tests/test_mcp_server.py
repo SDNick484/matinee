@@ -1929,6 +1929,24 @@ def test_copies_never_carry_youtube_id(inventory, monkeypatch, name):
             assert secret not in text, (name, secret)
 
 
+@pytest.mark.parametrize("name", ["direct", "keyed", "public"])
+def test_copies_never_carry_fandango_id(inventory, monkeypatch, name):
+    """The Fandango at Home id (schema v14) is editor-only like the YouTube id (spec 2026-11-27-fandango-play §3)."""
+    con = db()
+    con.execute("UPDATE copies SET fandango_id='15429', youtube_id='dQw4w9WgXcQ' WHERE title_id=? AND kind='digital'",
+                (inventory["dark_knight"],))
+    con.commit()
+    client = _all_clients(inventory, monkeypatch)[name]
+    outputs = [client.list_copies(shape=shape, output=output) for shape in ("copy", "title") for output in ("rows", "csv")]
+    movie = client.get_movie(inventory["dark_knight"])
+    assert movie["copies"]
+    outputs += [movie, client.where_is("The Dark Knight")]
+    for out in outputs:
+        text = str(out)
+        for secret in ("15429", "fandango_id", "fandango_link", "dQw4w9WgXcQ", "youtube_id"):
+            assert secret not in text, (name, secret)
+
+
 def test_list_copies_projects_a_keyed_response_without_the_youtube_id(monkeypatch):
     private = {"title_id": 7, "title": "Paddington 2", "year": 2017, "kind": "digital", "format": "Digital HD",
                "service": "Movies Anywhere", "edition": None, "location_id": None, "location_path": None,
@@ -2104,6 +2122,45 @@ def test_play_sends_no_attendees(monkeypatch):
     assert "attendees" not in inspect.signature(mcp_server.play_on_tv).parameters
 
 
+# Fandango at Home is the primary way (spec 2026-11-27-fandango-play-design, decision 5): with no mode, a film with a
+# Fandango link plays there at once, whatever else it has. The Addams Family = 15429 is the real number.
+def _fandango_films():
+    from test_play_core import addams, seed_film
+    con = db()
+    return {"all": addams(con, youtube="aDdAmSfAm91", disc=True)["id"],
+            "fandango_youtube": seed_film(con, "Beetlejuice", 1988, "PG", copies=[
+                ("digital", "Digital HD", "Fandango at Home", "bJ7uIcE88xy", None, "61988")])["id"],
+            "fandango_disc": seed_film(con, "Edward Scissorhands", 1990, "PG-13", copies=[
+                ("physical", "Blu-ray", None, None, None),
+                ("digital", "Digital HD", "Fandango at Home", None, None, "71990")])["id"]}
+
+
+@pytest.mark.parametrize("which, number", [("all", "15429"), ("fandango_youtube", "61988"), ("fandango_disc", "71990")])
+def test_play_no_mode_plays_fandango_when_present(test_env, monkeypatch, ha_play, which, number):
+    films = _fandango_films()
+    client = _admin_rest_client(monkeypatch)
+    res = client.play_on_tv(films[which])
+    assert res["played"] is True and res["mode"] == "fandango" and res["disc"] is None
+    assert set(res) == {"played", "mode", "message", "disc", "watch_added"}
+    assert [(b["source"], b["content_id"]) for b in ha_play] == [("Fandango at Home", number)]
+    assert number not in json.dumps(res) and "fandango_id" not in json.dumps(res)
+    assert client.requested == [("GET", f"/admin/api/titles/{films[which]}"),
+                                ("POST", f"/admin/api/titles/{films[which]}/play")]
+
+
+def test_play_an_explicit_mode_still_plays_that_mode(test_env, monkeypatch, ha_play):
+    films = _fandango_films()
+    client = _admin_rest_client(monkeypatch)
+    assert client.play_on_tv(films["all"], mode="youtube")["mode"] == "youtube"
+    assert client.play_on_tv(films["all"], mode="disc")["mode"] == "disc"
+    assert client.play_on_tv(films["all"], mode="fandango")["mode"] == "fandango"
+    assert [b["source"] for b in ha_play] == ["YouTube", "AV Receiver", "Fandango at Home"]
+    with pytest.raises(mcp_server.MatineeError) as e:
+        client.play_on_tv(_play_films()["brooklyn"], mode="fandango")
+    assert str(e.value) == "Brooklyn has no Fandango at Home link." and e.value.status == 409
+    assert len(ha_play) == 3
+
+
 def test_play_tool_never_touches_the_webhook_setting():
     """The webhook stays in the app's environment: neither the tool's module nor the service's names it."""
     root = Path(mcp_server.__file__).parent
@@ -2114,7 +2171,7 @@ def test_play_tool_never_touches_the_webhook_setting():
 def test_play_schema():
     t = _tool("play_on_tv")
     props = (getattr(t, "inputSchema", None) or t.input_schema)["properties"]
-    assert set(props) == {"title_id", "mode"} and _schema_values(props["mode"]) == {"youtube", "disc"}
+    assert set(props) == {"title_id", "mode"} and _schema_values(props["mode"]) == {"fandango", "youtube", "disc"}
     assert (getattr(t, "inputSchema", None) or t.input_schema)["required"] == ["title_id"]
 
 

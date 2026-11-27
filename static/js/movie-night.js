@@ -240,7 +240,7 @@ import { playBarHtml, wirePlay } from "./play.js";
                 <div class="movie-night-reason">${esc(currentPick.reason || currentPick.recommendation_reason || "Curated pick")}</div>
               </div>
             </div>
-            ${isAdmin ? playBarHtml(currentPick) : ""}
+            ${isAdmin ? playBarHtml(currentPick, { oneTap: true }) : ""}
             </div>
           `;
           // The audience the pick was made for (anything but Everyone) is who the play logs as watching.

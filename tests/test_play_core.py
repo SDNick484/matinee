@@ -52,17 +52,18 @@ def bearer(key=API_KEY):
 
 
 def seed_film(con, title, year, certification=None, *, override=None, copies=()):
-    """A title with `copies`, each (kind, format, service, youtube_id, location_id), inserted in order with
-    increasing created_at. Returns {"id": title id, "copies": [copy ids]}."""
+    """A title with `copies`, each (kind, format, service, youtube_id, location_id[, fandango_id]), inserted in order
+    with increasing created_at. Returns {"id": title id, "copies": [copy ids]}."""
     tid = con.execute("""INSERT INTO titles (tmdb_id, title, sort_title, search_text, year, certification,
                          certification_override, fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?, '2026-01-01')""",
                       (next(_TMDB_IDS), title, title, title.lower(), year, certification,
                        override)).lastrowid
     ids = []
-    for n, (kind, fmt, service, yt, loc) in enumerate(copies):
+    for n, (kind, fmt, service, yt, loc, *fd) in enumerate(copies):
         ids.append(con.execute("INSERT INTO copies (title_id, kind, format, service, youtube_id, location_id, "
-                               "created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                               (tid, kind, fmt, service, yt, loc, f"2026-01-0{n + 1} 12:00:00")).lastrowid)
+                               "fandango_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                               (tid, kind, fmt, service, yt, loc, fd[0] if fd else None,
+                                f"2026-01-0{n + 1} 12:00:00")).lastrowid)
     con.commit()
     return {"id": tid, "copies": ids}
 
@@ -110,7 +111,7 @@ def test_ways_youtube_only(client):
     con = db()
     b = brooklyn(con)
     assert play.ways(con, b["id"]) == {
-        "youtube": {"copy_id": b["copies"][0], "label": "Digital HD (Movies Anywhere)"}, "disc": None}
+        "youtube": {"copy_id": b["copies"][0], "label": "Digital HD (Movies Anywhere)"}, "fandango": None, "disc": None}
 
 
 def test_ways_both(client):
@@ -126,7 +127,7 @@ def test_ways_both(client):
 def test_ways_digital_copy_with_no_id_is_not_a_way(client):
     con = db()
     t = seed_film(con, "Inception", 2010, "PG-13", copies=[("digital", "Digital HD", "Apple TV", None, None)])
-    assert play.ways(con, t["id"]) == {"youtube": None, "disc": None}
+    assert play.ways(con, t["id"]) == {"youtube": None, "fandango": None, "disc": None}
 
 
 def test_ways_bad_stored_id_is_not_a_way(client):
@@ -160,6 +161,83 @@ def test_ways_for_many_titles_is_one_query(client):
     assert many[b["id"]] == play.ways(con, b["id"])
     assert many[h["id"]] == play.ways(con, h["id"])
     assert sum("youtube_id" in s and "FROM copies" in s for s in statements) == 1  # the location map is its own
+
+
+# ----------------------------------------------------------------------------- Fandango at Home (2026-11-27 design §4)
+FD_ID = "15429"
+
+
+def addams(con, *, youtube=None, disc=False, shelf=None):
+    """The Addams Family (1991, PG-13): a Digital HD copy on Fandango at Home with id 15429, which may also carry a
+    YouTube id; with `disc`, a DVD added before it."""
+    copies = [("physical", "DVD", None, None, shelf)] if disc else []
+    copies.append(("digital", "Digital HD", "Fandango at Home", youtube, None, FD_ID))
+    return seed_film(con, "The Addams Family", 1991, "PG-13", copies=copies)
+
+
+def test_ways_fandango_only(client):
+    con = db()
+    a = addams(con)
+    assert play.ways(con, a["id"]) == {
+        "youtube": None, "fandango": {"copy_id": a["copies"][0], "label": "Digital HD (Fandango at Home)"},
+        "disc": None}
+    assert play.fandango_id_for(con, a["id"]) == FD_ID
+
+
+def test_ways_all_three_from_one_digital_copy(client):
+    con = db()
+    a = addams(con, youtube=YT_ID, disc=True)
+    w = play.ways(con, a["id"])
+    assert w["fandango"] == {"copy_id": a["copies"][1], "label": "Digital HD (Fandango at Home)"}
+    assert w["youtube"] == {"copy_id": a["copies"][1], "label": "Digital HD (Fandango at Home)"}   # the same copy
+    assert [d["label"] for d in w["disc"]] == ["DVD"]
+
+
+@pytest.mark.parametrize("ways", [("fandango",), ("youtube",), ("disc",), ("fandango", "youtube"),
+                                  ("fandango", "disc"), ("youtube", "disc"), ("fandango", "youtube", "disc")])
+def test_ways_each_combination(client, ways):
+    con = db()
+    copies = []
+    if "disc" in ways:
+        copies.append(("physical", "Blu-ray", None, None, None))
+    if "youtube" in ways:
+        copies.append(("digital", "Digital HD", "Movies Anywhere", YT_ID, None))
+    if "fandango" in ways:
+        copies.append(("digital", "Digital 4K", "Fandango at Home", None, None, FD_ID))
+    t = seed_film(con, "The Addams Family", 1991, "PG-13", copies=copies)
+    w = play.ways(con, t["id"])
+    assert {k for k, v in w.items() if v} == set(ways) and set(w) == {"youtube", "fandango", "disc"}
+
+
+def test_ways_bad_stored_fandango_id_is_not_a_way(client):
+    con = db()
+    t = seed_film(con, "The Addams Family", 1991, "PG-13",
+                  copies=[("digital", "Digital HD", "Fandango at Home", None, None, "1234567890123"),
+                          ("digital", "Digital HD", "Apple TV", None, None, "15429x")])
+    assert play.ways(con, t["id"])["fandango"] is None and play.fandango_id_for(con, t["id"]) is None
+
+
+def test_ways_first_good_fandango_id_by_created_at(client):
+    con = db()
+    t = seed_film(con, "The Addams Family", 1991, "PG-13",
+                  copies=[("digital", "Digital SD", "Apple TV", None, None, "bad"),
+                          ("digital", "Digital HD", "Fandango at Home", None, None, FD_ID),
+                          ("digital", "Digital 4K", "Fandango at Home", None, None, "88888")])
+    assert play.ways(con, t["id"])["fandango"]["copy_id"] == t["copies"][1]
+    assert play.fandango_id_for(con, t["id"]) == FD_ID
+
+
+def test_payload_fandango():
+    assert play.payload("fandango", "The Addams Family", FD_ID) == {
+        "event": "matinee_play", "mode": "stream", "source": "Fandango at Home", "title": "The Addams Family",
+        "content_id": "15429"}
+    assert play.FANDANGO_SOURCE == "Fandango at Home" and "fandango" in play.MODES
+
+
+@pytest.mark.parametrize("bad", [None, "", "1234567890123", "15429\n", "15 429", YT_ID, 15429])
+def test_payload_refuses_bad_fandango_id(bad):
+    with pytest.raises(ValueError):
+        play.payload("fandango", "The Addams Family", bad)
 
 
 # ----------------------------------------------------------------------------- the bodies Home Assistant gets

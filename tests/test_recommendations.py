@@ -341,7 +341,7 @@ def test_pick_carries_play_for_editors_only(client, monkeypatch):
     monkeypatch.setattr("app.HA_PLAY_WEBHOOK_URL", "http://192.168.1.100:8123/api/webhook/matinee-play-test-id")
     pick = client.get("/admin/api/recommendations" + q).get_json()["results"][0]
     assert pick["play"] == {"youtube": {"copy_id": brooklyn["copies"][0], "label": "Digital HD (Movies Anywhere)"},
-                            "disc": None}
+                            "fandango": None, "disc": None}
     # the public route never has the key, with the setting on
     for res in client.get("/api/recommendations" + q).get_json()["results"]:
         assert "play" not in res

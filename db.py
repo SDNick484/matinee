@@ -58,8 +58,10 @@ CREATE TABLE IF NOT EXISTS copies (
   code_status TEXT NOT NULL DEFAULT 'none' CHECK (code_status IN ('none', 'unredeemed', 'redeemed', 'expired')),
   purchased_on TEXT,
   price_cents INTEGER CHECK (price_cents IS NULL OR price_cents >= 0),
-  -- v13, last: a digital copy's YouTube video id (editor-only; the unique index is made by migrate())
-  youtube_id TEXT
+  -- v13: a digital copy's YouTube video id (editor-only; the unique index is made by migrate())
+  youtube_id TEXT,
+  -- v14, last: a digital copy's Fandango at Home id (editor-only; the unique index is made by migrate())
+  fandango_id TEXT
 );
 CREATE INDEX IF NOT EXISTS copies_title ON copies(title_id);
 CREATE TABLE IF NOT EXISTS upc_cache (
@@ -103,7 +105,7 @@ CREATE TABLE IF NOT EXISTS omdb_ratings (
 );
 CREATE INDEX IF NOT EXISTS omdb_ratings_fetched ON omdb_ratings(fetched_at);
 """
-SCHEMA_VERSION = "13"
+SCHEMA_VERSION = "14"
 
 # v10 copy details. The limits mirror the CHECKs on `copies`; the app validates first and answers 400 with a sentence.
 CODE_STATUSES = ("none", "unredeemed", "redeemed", "expired")   # a physical copy's digital code; digital copies stay "none"
@@ -366,6 +368,15 @@ def migrate(con):
     if copy_cols:
         con.execute("CREATE UNIQUE INDEX IF NOT EXISTS copies_youtube_id ON copies(youtube_id) "
                     "WHERE youtube_id IS NOT NULL")
+
+    # v14: a Fandango at Home id on a copy, after the YouTube id, last (spec 2026-11-27-fandango-play-design §3). It is
+    # independent of the YouTube id: one copy may hold both. One id belongs to one copy.
+    copy_cols = {r[1] for r in con.execute("PRAGMA table_info(copies)")}
+    if copy_cols and "fandango_id" not in copy_cols:
+        con.execute("ALTER TABLE copies ADD COLUMN fandango_id TEXT")
+    if copy_cols:
+        con.execute("CREATE UNIQUE INDEX IF NOT EXISTS copies_fandango_id ON copies(fandango_id) "
+                    "WHERE fandango_id IS NOT NULL")
 
 
 def init_db():

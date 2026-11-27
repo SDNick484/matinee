@@ -123,8 +123,9 @@ def test_schema_tables_indexes_and_cascade():
 
 
 # ------------------------------------------------------------------- 2.2 copy rules
-# what copy_values adds for a copy with no edition, no code, no purchase date, no price and no YouTube link
-NO_DETAILS = {"edition": None, "code_status": "none", "purchased_on": None, "price_cents": None, "youtube_id": None}
+# what copy_values adds for a copy with no edition, no code, no purchase date, no price and no YouTube or Fandango link
+NO_DETAILS = {"edition": None, "code_status": "none", "purchased_on": None, "price_cents": None, "youtube_id": None,
+              "fandango_id": None}
 
 
 def test_copy_values():

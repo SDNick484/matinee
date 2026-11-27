@@ -3,7 +3,8 @@
 If you already own films on YouTube, you can paste each link into the digital copy by hand (open the film, edit the
 digital copy, paste the address into **YouTube link**), or load a whole list in one request. A row is linked only when
 it matches exactly one digital copy; every other row comes back with a reason, and nothing is guessed. The list is
-personal: keep it out of any repository, and out of anywhere you share.
+personal: keep it out of any repository, and out of anywhere you share. A list of Fandango at Home films loads the
+same way: see [docs/fandango-links.md](fandango-links.md).
 
 ## The file
 

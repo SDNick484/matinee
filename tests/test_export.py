@@ -22,6 +22,7 @@ HEADER = ["title", "year", "tmdb_id", "imdb_id", "certification", "runtime", "ki
           "location_path", "user_rating", "watch_count", "last_watched", "added_on"]
 DETAILS = ["edition", "code_status", "purchased_on", "price"]   # appended in schema v10; nothing before them moved
 YOUTUBE = ["youtube_link"]                                      # appended in schema v13
+FANDANGO = ["fandango_link"]                                    # appended in schema v14
 
 
 
@@ -71,12 +72,12 @@ def test_dark_knight_gives_one_row_per_copy(client, dark_knight):
     res = client.get("/admin/api/export.csv", headers=bearer(API_KEY))
     assert res.status_code == 200
     rows = rows_of(res)
-    assert rows[0] == HEADER + DETAILS + YOUTUBE
+    assert rows[0] == HEADER + DETAILS + YOUTUBE + FANDANGO
     assert rows[1:] == [
         ["The Dark Knight", "2008", "155", "tt0468569", "PG-13", "152", "physical", "4K UHD", "",
-         "Family Room › Media Cabinet › Shelf 1", "9.5", "1", "2026-11-07", "2026-11-02", "", "none", "", "", ""],
+         "Family Room › Media Cabinet › Shelf 1", "9.5", "1", "2026-11-07", "2026-11-02", "", "none", "", "", "", ""],
         ["The Dark Knight", "2008", "155", "tt0468569", "PG-13", "152", "digital", "Digital HD",
-         "Movies Anywhere", "", "9.5", "1", "2026-11-07", "2026-11-03", "", "none", "", "", ""],
+         "Movies Anywhere", "", "9.5", "1", "2026-11-07", "2026-11-03", "", "none", "", "", "", ""],
     ]
 
 
@@ -105,10 +106,10 @@ def test_dark_knight_steelbook_row_ends_with_its_details(client, dark_knight):
                  "price_cents=2499 WHERE title_id=? AND kind='physical'", (dark_knight,))
     db().commit()
     rows = rows_of(client.get("/admin/api/export.csv", headers=bearer(API_KEY)))
-    assert rows[1][-5:-1] == ["Steelbook", "unredeemed", "2026-10-31", "24.99"]
+    assert rows[1][-6:-2] == ["Steelbook", "unredeemed", "2026-10-31", "24.99"]
     assert rows[1][:14] == ["The Dark Knight", "2008", "155", "tt0468569", "PG-13", "152", "physical", "4K UHD", "",
                             "Family Room › Media Cabinet › Shelf 1", "9.5", "1", "2026-11-07", "2026-11-02"]
-    assert rows[2][-5:-1] == ["", "none", "", ""]   # the digital copy: no edition, no code, no price
+    assert rows[2][-6:-2] == ["", "none", "", ""]   # the digital copy: no edition, no code, no price
 
 
 @pytest.mark.parametrize("cents, text", [(0, "0.00"), (5, "0.05"), (100, "1.00"), (1499, "14.99"),
@@ -118,7 +119,7 @@ def test_price_is_dollars_with_two_decimals(client, cents, text):
     seed_title(con, 155)
     con.execute("UPDATE copies SET price_cents=?", (cents,))
     con.commit()
-    assert rows_of(client.get("/admin/api/export.csv", headers=bearer(API_KEY)))[1][-2] == text
+    assert rows_of(client.get("/admin/api/export.csv", headers=bearer(API_KEY)))[1][-3] == text
 
 
 def test_an_edition_that_looks_like_a_formula_is_quoted(client):
@@ -126,13 +127,13 @@ def test_an_edition_that_looks_like_a_formula_is_quoted(client):
     seed_title(con, 155)
     con.execute("UPDATE copies SET edition='=HYPERLINK(\"http://x\",\"y\")'")
     con.commit()
-    assert rows_of(client.get("/admin/api/export.csv", headers=bearer(API_KEY)))[1][-5] == \
+    assert rows_of(client.get("/admin/api/export.csv", headers=bearer(API_KEY)))[1][-6] == \
         "'=" + 'HYPERLINK("http://x","y")'
 
 
 def test_old_columns_keep_their_positions():
     assert matinee.EXPORT_COLUMNS[:14] == tuple(HEADER) and matinee.EXPORT_COLUMNS[14:18] == tuple(DETAILS) \
-        and matinee.EXPORT_COLUMNS[18:] == tuple(YOUTUBE)
+        and matinee.EXPORT_COLUMNS[18:19] == tuple(YOUTUBE) and matinee.EXPORT_COLUMNS[19:] == tuple(FANDANGO)
 
 
 # ------------------------------------------------------------------------------------- auth
@@ -237,14 +238,14 @@ def test_negative_number_cells_stay_numbers(client):
 def test_empty_collection_is_header_only(client):
     res = client.get("/admin/api/export.csv", headers=bearer(API_KEY))
     assert res.status_code == 200
-    assert rows_of(res) == [HEADER + DETAILS + YOUTUBE]
+    assert rows_of(res) == [HEADER + DETAILS + YOUTUBE + FANDANGO]
 
 
 def test_title_with_no_copies_is_absent(client, dark_knight):
     con = db()
     con.execute("DELETE FROM copies WHERE title_id=?", (dark_knight,))
     con.commit()
-    assert rows_of(client.get("/admin/api/export.csv", headers=bearer(API_KEY))) == [HEADER + DETAILS + YOUTUBE]
+    assert rows_of(client.get("/admin/api/export.csv", headers=bearer(API_KEY))) == [HEADER + DETAILS + YOUTUBE + FANDANGO]
 
 
 def test_certification_override_wins(client):
@@ -285,13 +286,13 @@ DARK_KNIGHT_TITLE_ROW = ["The Dark Knight", "2008", "155", "tt0468569", "PG-13",
 # What the export wrote before filters and shapes existed, for the three titles of `inventory` (checked in as bytes).
 UNFILTERED_BYTES = (
     b"\xef\xbb\xbftitle,year,tmdb_id,imdb_id,certification,runtime,kind,format,service,location_path,user_rating,"
-    b"watch_count,last_watched,added_on,edition,code_status,purchased_on,price,youtube_link\r\n"
-    b"Am\xc3\xa9lie,2001,194,tt0211915,R,122,digital,Digital HD,Apple TV,,,0,,2026-11-05,,none,,,\r\n"
+    b"watch_count,last_watched,added_on,edition,code_status,purchased_on,price,youtube_link,fandango_link\r\n"
+    b"Am\xc3\xa9lie,2001,194,tt0211915,R,122,digital,Digital HD,Apple TV,,,0,,2026-11-05,,none,,,,\r\n"
     b"The Dark Knight,2008,155,tt0468569,PG-13,152,physical,4K UHD,,Family Room \xe2\x80\xba Media Cabinet \xe2\x80\xba "
-    b"Shelf 1,9.5,1,2026-11-07,2026-11-02,Steelbook,unredeemed,2026-10-31,24.99,\r\n"
-    b"The Dark Knight,2008,155,tt0468569,PG-13,152,digital,Digital HD,Movies Anywhere,,9.5,1,2026-11-07,2026-11-03,,none,,,\r\n"
+    b"Shelf 1,9.5,1,2026-11-07,2026-11-02,Steelbook,unredeemed,2026-10-31,24.99,,\r\n"
+    b"The Dark Knight,2008,155,tt0468569,PG-13,152,digital,Digital HD,Movies Anywhere,,9.5,1,2026-11-07,2026-11-03,,none,,,,\r\n"
     b"Paddington 2,2017,346648,tt4468740,PG,103,physical,Blu-ray,,Family Room \xe2\x80\xba Media Cabinet \xe2\x80\xba "
-    b"Shelf 2,,0,,2026-11-04,,none,,,\r\n")
+    b"Shelf 2,,0,,2026-11-04,,none,,,,\r\n")
 
 
 @pytest.fixture
@@ -319,7 +320,7 @@ def test_default_export_is_byte_identical_to_before(client, inventory):
 
 def test_filtered_export_has_only_the_matching_copies(client, inventory):
     rows = rows_of(get_csv(client, "?service=Movies Anywhere"))
-    assert rows[0] == HEADER + DETAILS + YOUTUBE
+    assert rows[0] == HEADER + DETAILS + YOUTUBE + FANDANGO
     assert [(r[0], r[7], r[8]) for r in rows[1:]] == [("The Dark Knight", "Digital HD", "Movies Anywhere")]
     rows = rows_of(get_csv(client, "?location=Family Room › Media Cabinet"))
     assert [(r[0], r[7]) for r in rows[1:]] == [("The Dark Knight", "4K UHD"), ("Paddington 2", "Blu-ray")]
@@ -328,7 +329,7 @@ def test_filtered_export_has_only_the_matching_copies(client, inventory):
 
 
 def test_filtered_export_to_nothing_is_header_only(client, inventory):
-    assert rows_of(get_csv(client, "?format=VHS")) == [HEADER + DETAILS + YOUTUBE]
+    assert rows_of(get_csv(client, "?format=VHS")) == [HEADER + DETAILS + YOUTUBE + FANDANGO]
 
 
 def test_title_shape_puts_the_dark_knight_on_one_row(client, inventory):
@@ -414,8 +415,8 @@ def test_copy_shape_ends_with_youtube_link(client, dark_knight):
     db().execute("UPDATE copies SET youtube_id='dQw4w9WgXcQ' WHERE title_id=? AND kind='digital'", (dark_knight,))
     db().commit()
     rows = rows_of(client.get("/admin/api/export.csv", headers=bearer(API_KEY)))
-    assert rows[0] == HEADER + DETAILS + YOUTUBE and rows[0][-1] == "youtube_link"
-    assert [r[-1] for r in rows[1:]] == ["", "https://www.youtube.com/watch?v=dQw4w9WgXcQ"]   # the disc has none
+    assert rows[0] == HEADER + DETAILS + YOUTUBE + FANDANGO and rows[0][-2] == "youtube_link"
+    assert [r[-2] for r in rows[1:]] == ["", "https://www.youtube.com/watch?v=dQw4w9WgXcQ"]   # the disc has none
     assert all(len(r) == len(rows[0]) for r in rows)
 
 
@@ -423,14 +424,14 @@ def test_dash_leading_id_is_intact(client, dark_knight):
     db().execute("UPDATE copies SET youtube_id='-eYxeRJCYMY' WHERE title_id=? AND kind='digital'", (dark_knight,))
     db().commit()
     res = client.get("/admin/api/export.csv", headers=bearer(API_KEY))
-    assert rows_of(res)[2][-1] == "https://www.youtube.com/watch?v=-eYxeRJCYMY"
+    assert rows_of(res)[2][-2] == "https://www.youtube.com/watch?v=-eYxeRJCYMY"
     assert b"'https" not in res.data and b"'-eYx" not in res.data       # no guard character anywhere
 
 
 def test_a_malformed_stored_id_exports_as_blank(client, dark_knight):
     db().execute("UPDATE copies SET youtube_id='nope' WHERE title_id=? AND kind='digital'", (dark_knight,))
     db().commit()
-    assert rows_of(client.get("/admin/api/export.csv", headers=bearer(API_KEY)))[2][-1] == ""
+    assert rows_of(client.get("/admin/api/export.csv", headers=bearer(API_KEY)))[2][-2] == ""
 
 
 def test_title_shape_unchanged(client, dark_knight):
@@ -446,5 +447,5 @@ def test_read_key_exports_the_link_like_the_other_editor_columns(client, dark_kn
     db().execute("UPDATE copies SET youtube_id='dQw4w9WgXcQ' WHERE title_id=? AND kind='digital'", (dark_knight,))
     db().commit()
     res = client.get("/admin/api/export.csv", headers=bearer(READ_KEY))
-    assert res.status_code == 200 and rows_of(res)[2][-1].endswith("dQw4w9WgXcQ")
+    assert res.status_code == 200 and rows_of(res)[2][-2].endswith("dQw4w9WgXcQ")
     assert client.get("/admin/api/export.csv").status_code == 401        # signed out: nothing

@@ -65,6 +65,8 @@ from lists import set_membership, clear_watch_soon  # noqa: F401
 from watched_days import parse_month, month_view  # noqa: F401
 from youtube import YOUTUBE_ID_RE, youtube_id_ok, parse_youtube_link  # noqa: F401
 from youtube import LoadConflict, load_links, plan_links, read_library  # noqa: F401
+from youtube import FANDANGO, YOUTUBE, LinkKind  # noqa: F401
+from fandango import FANDANGO_ID_RE, fandango_id_ok, parse_fandango_link, fandango_details_url  # noqa: F401
 from export import not_loaded_csv  # noqa: F401
 from settings import HA_PLAY_WEBHOOK_URL  # noqa: F401
 import play  # Play on the Family Room TV: new code, not moved out of here, so the route uses play.<name>
@@ -75,7 +77,7 @@ import play  # Play on the Family Room TV: new code, not moved out of here, so t
 # so `app.X`, `from app import X` and `import app as matinee` work as before. A write to app.X (monkeypatch in the
 # tests, `matinee.TMDB_READ_TOKEN = ...` in ops/import_titles.py) also rebinds X in each split module that holds
 # it, so moved code reads the new value as it did when it lived here. Patch app.X, not the split module.
-_SPLIT_MODULES = ("settings", "common", "db", "clients", "images", "people", "browse", "export", "wishlist", "lists", "watched_days", "youtube", "play")
+_SPLIT_MODULES = ("settings", "common", "db", "clients", "images", "people", "browse", "export", "wishlist", "lists", "watched_days", "youtube", "fandango", "play")
 
 
 class _AppModule(types.ModuleType):
@@ -572,6 +574,33 @@ def copy_youtube_id(data, kind, stored=False):
     return found
 
 
+FANDANGO_LINK_ERROR = "That isn't a Fandango at Home link. Paste the address of the film's Fandango at Home page."
+
+
+def copy_fandango_id(data, kind, stored=False):
+    """The id for `fandango_link` in a request, exactly as copy_youtube_id reads `youtube_link`: None clears it. A link
+    needs a digital copy; `stored` says the link was already on the copy (an edit that turns it physical)."""
+    try:
+        found = parse_fandango_link(data.get("fandango_link"))
+    except ValueError:
+        abort(make_err(400, FANDANGO_LINK_ERROR))
+    if found and kind == "physical":
+        abort(make_err(400, "This copy has a Fandango at Home link. Clear it before making the copy physical." if stored
+                       else "A Fandango at Home link belongs on a digital copy. A physical copy can't have one."))
+    return found
+
+
+def check_fandango_free(con, fandango_id, copy_id=None):
+    """409 naming the film when another copy already has this Fandango at Home id (the unique index would refuse it)."""
+    if not fandango_id:
+        return
+    row = con.execute("SELECT t.title, t.year FROM copies c JOIN titles t ON t.id = c.title_id "
+                      "WHERE c.fandango_id = ? AND c.id IS NOT ?", (fandango_id, copy_id)).fetchone()
+    if row:
+        name = f"{row['title']} ({row['year']})" if row["year"] else row["title"]
+        abort(make_err(409, f"That Fandango at Home link is already on {name}."))
+
+
 def check_youtube_free(con, youtube_id, copy_id=None):
     """409 naming the film when another copy already has this id (the unique index would refuse it anyway)."""
     if not youtube_id:
@@ -583,9 +612,10 @@ def check_youtube_free(con, youtube_id, copy_id=None):
         abort(make_err(409, f"That YouTube link is already on {name}."))
 
 
-def copy_values(data, youtube_stored=False):
-    """Validate {kind, format, service, location_id, edition, code_status, purchased_on, price_cents, youtube_link}
-    -> clean values (youtube_link becomes youtube_id), or abort 400 with a message for the form."""
+def copy_values(data, youtube_stored=False, fandango_stored=False):
+    """Validate {kind, format, service, location_id, edition, code_status, purchased_on, price_cents, youtube_link,
+    fandango_link} -> clean values (the links become youtube_id and fandango_id), or abort 400 with a message for the
+    form."""
     kind = (clean(data.get("kind")) or "").lower()
     if kind not in FORMATS:
         abort(make_err(400, "Is it a physical copy or a digital one?"))
@@ -625,7 +655,8 @@ def copy_values(data, youtube_stored=False):
             "edition": copy_edition(data.get("edition")), "code_status": code_status,
             "purchased_on": copy_purchased_on(data.get("purchased_on")),
             "price_cents": copy_price_cents(data.get("price_cents")),
-            "youtube_id": copy_youtube_id(data, kind, youtube_stored)}
+            "youtube_id": copy_youtube_id(data, kind, youtube_stored),
+            "fandango_id": copy_fandango_id(data, kind, fandango_stored)}
 
 
 def tmdb_id_arg(v):
@@ -998,12 +1029,13 @@ def add_copy():
     vals = copy_values(data)
     con = db()
     check_youtube_free(con, vals["youtube_id"])       # before ensure_title, so a refusal creates nothing
+    check_fandango_free(con, vals["fandango_id"])
     title_id = ensure_title(con, data)
     cid = con.execute("INSERT INTO copies(title_id, kind, format, service, location_id, edition, code_status, "
-                      "purchased_on, price_cents, youtube_id, added_by) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                      "purchased_on, price_cents, youtube_id, fandango_id, added_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                       (title_id, vals["kind"], vals["format"], vals["service"], vals["location_id"], vals["edition"],
                        vals["code_status"], vals["purchased_on"], vals["price_cents"], vals["youtube_id"],
-                       who())).lastrowid
+                       vals["fandango_id"], who())).lastrowid
     # a copy that satisfies the title's want ends it, in the same transaction (wish_items stay as history)
     wanted = get_want(con, title_id)
     cleared = bool(wanted) and want_satisfied_by(wanted["wanted_format"], vals["format"])
@@ -1033,15 +1065,22 @@ def edit_copy(copy_id):
         "kind", "format", "service", "location_id", "edition", "code_status", "purchased_on", "price_cents")}
     keep = "youtube_link" not in data               # absent keeps what is stored, even a value this app wouldn't write
     merged["youtube_link"] = data["youtube_link"] if not keep else (cur["youtube_id"] if youtube_id_ok(cur["youtube_id"]) else None)
-    vals = copy_values(merged, youtube_stored=keep)
+    keep_fandango = "fandango_link" not in data     # the same for the Fandango at Home link, independently
+    merged["fandango_link"] = (data["fandango_link"] if not keep_fandango
+                               else (cur["fandango_id"] if fandango_id_ok(cur["fandango_id"]) else None))
+    vals = copy_values(merged, youtube_stored=keep, fandango_stored=keep_fandango)
     if keep:
         vals["youtube_id"] = cur["youtube_id"]
+    if keep_fandango:
+        vals["fandango_id"] = cur["fandango_id"]
     con = db()
     check_youtube_free(con, vals["youtube_id"], copy_id)
+    check_fandango_free(con, vals["fandango_id"], copy_id)
     con.execute("UPDATE copies SET kind=?, format=?, service=?, location_id=?, edition=?, code_status=?, "
-                "purchased_on=?, price_cents=?, youtube_id=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                "purchased_on=?, price_cents=?, youtube_id=?, fandango_id=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
                 (vals["kind"], vals["format"], vals["service"], vals["location_id"], vals["edition"],
-                 vals["code_status"], vals["purchased_on"], vals["price_cents"], vals["youtube_id"], copy_id))
+                 vals["code_status"], vals["purchased_on"], vals["price_cents"], vals["youtube_id"],
+                 vals["fandango_id"], copy_id))
     con.commit()
     return jsonify(title_detail(cur["title_id"], True))
 
@@ -1066,6 +1105,20 @@ def load_youtube_links():
     {title, year, video_id, play_link}. A row that matches exactly one digital copy, by cleaned title and the same
     year, gets its id; every other row comes back with a reason. ?dry_run=1 changes nothing, ?format=csv answers the
     not-loaded rows as a spreadsheet. Editors only (the read key gets 403): ids are editor-only data."""
+    return load_link_list(YOUTUBE, "youtube-links-not-loaded.csv")
+
+
+@app.post("/admin/api/fandango-links")
+@editor_required
+def load_fandango_links():
+    """Load a list of Fandango at Home films (spec 2026-11-27-fandango-play-design §3a): the YouTube load with
+    {title, year, fandango_id, play_link} rows, the same rules, options and answer. It writes only fandango_id: a
+    copy's YouTube id neither stops nor is touched by it. Editors only (the read key gets 403)."""
+    return load_link_list(FANDANGO, "fandango-links-not-loaded.csv")
+
+
+def load_link_list(kind: LinkKind, csv_name: str):
+    """The body of both list loads, for one kind of id."""
     fmt = request.args.get("format") or "json"
     if fmt not in ("json", "csv"):
         return make_err(400, f'Unknown format "{fmt}". Use json or csv.')
@@ -1073,19 +1126,19 @@ def load_youtube_links():
     if (request.content_length or 0) > LOAD_LIST_MAX_BYTES:
         return make_err(413, "That list is too large to load in one go.")
     try:
-        rows = read_library(request.get_data(), request.content_type or "")
+        rows = read_library(request.get_data(), request.content_type or "", kind)
     except ValueError as e:
         return make_err(400, str(e))
     try:
-        plan = plan_links(db(), rows) if dry_run else load_links(db(), rows)
+        plan = plan_links(db(), rows, kind) if dry_run else load_links(db(), rows, kind)
     except LoadConflict:
         return make_err(409, "Something changed while the list was loading. Nothing was loaded: run it again.")
     if not dry_run:
-        app.logger.info("YouTube list loaded by %s: %d linked, %d already linked, %d not loaded",
-                        who(), len(plan["link"]), plan["already_linked"], len(plan["not_loaded"]))
+        app.logger.info("%s list loaded by %s: %d linked, %d already linked, %d not loaded",
+                        kind.name, who(), len(plan["link"]), plan["already_linked"], len(plan["not_loaded"]))
     if fmt == "csv":
-        return app.response_class(not_loaded_csv(plan["not_loaded"]), mimetype="text/csv", headers={
-            "Content-Disposition": 'attachment; filename="youtube-links-not-loaded.csv"', "Cache-Control": "no-store"})
+        return app.response_class(not_loaded_csv(plan["not_loaded"], kind), mimetype="text/csv", headers={
+            "Content-Disposition": f'attachment; filename="{csv_name}"', "Cache-Control": "no-store"})
     return jsonify(linked=len(plan["link"]), already_linked=plan["already_linked"],
                    not_loaded=plan["not_loaded"], dry_run=dry_run)
 
@@ -1352,7 +1405,8 @@ def add_watch(title_id):
 @editor_required
 def play_title(title_id):
     """Start a title on the Family Room TV through Home Assistant, then log today's watch (spec 2026-11-26
-    play-on-tv §6.3-6.4). Body {"mode": "youtube" | "disc", "attendees"?: [person ids or names]}. Nothing is written
+    play-on-tv §6.3-6.4; Fandango at Home, 2026-11-27 design §4). Body {"mode": "fandango" | "youtube" | "disc",
+    "attendees"?: [person ids or names]}. Nothing is written
     unless Home Assistant takes the request, and the webhook URL never reaches the answer or the log."""
     if not play.enabled():
         abort(make_err(503, "Play on TV isn't set up."))
@@ -1362,16 +1416,19 @@ def play_title(title_id):
         abort(make_err(404, "No such title"))
     data = request.get_json(silent=True)
     if not isinstance(data, dict) or data.get("mode") not in play.MODES:
-        abort(make_err(400, "mode must be youtube or disc."))
+        abort(make_err(400, "mode must be fandango, youtube or disc."))
     mode, name = data["mode"], row["title"]
     attendees = resolve_people(con, data["attendees"]) if "attendees" in data else None  # 400 before anything is sent
     ways = play.ways(con, title_id)
     if mode == "disc" and not ways["disc"]:
         abort(make_err(409, f"We don't own {name} on disc."))
+    content_id = (play.youtube_id_for(con, title_id) if mode == "youtube"
+                  else play.fandango_id_for(con, title_id) if mode == "fandango" else None)
     try:
-        body = play.payload(mode, name, play.youtube_id_for(con, title_id) if mode == "youtube" else None)
+        body = play.payload(mode, name, content_id)
     except ValueError:  # no copy with a well-formed id (a stale page, or one written straight into the table)
-        abort(make_err(409, f"{name} has no YouTube link."))
+        abort(make_err(409, f"{name} has no YouTube link." if mode == "youtube"
+                       else f"{name} has no Fandango at Home link."))
     try:
         play.post_play(body, app.logger)  # waits up to play.TIMEOUT seconds; no lock is held meanwhile
     except play.PlayFailed:

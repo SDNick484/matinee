@@ -13,13 +13,15 @@ from db import FORMATS
 from people import list_people
 from settings import HA_PLAY_WEBHOOK_URL, UA
 from youtube import youtube_id_ok
+from fandango import fandango_id_ok
 
 TIMEOUT = 5                      # seconds: the editor waits for Home Assistant to take the request
 TV_NAME = "Family Room TV"
 YOUTUBE_SOURCE = "YouTube"       # the TV input the shared script launches the YouTube app on
+FANDANGO_SOURCE = "Fandango at Home"  # the script launches the Fandango at Home app (webOS id `vudu`) for this source
 DISC_SOURCE = "AV Receiver"
 EVENT = "matinee_play"
-MODES = ("youtube", "disc")
+MODES = ("youtube", "fandango", "disc")
 EVERYONE_CERTS = ("G", "PG", "PG-13")  # Play logs every active person for these; the adults for anything else
 _PHYSICAL_ORDER = {f: i for i, f in enumerate(FORMATS["physical"])}
 
@@ -44,13 +46,18 @@ def _label(row):
     return f"{row['format']} ({row['service']})" if row["service"] else row["format"]
 
 
+def _no_way():
+    return {"youtube": None, "fandango": None, "disc": None}
+
+
 def ways_for(con, title_ids=None, paths=None) -> dict:
     """{title_id: ways} for the given titles (every title when None), in one query whatever the number of titles.
-    A title with no way to play maps to {"youtube": None, "disc": None}. See ways()."""
+    A title with no way to play maps to {"youtube": None, "fandango": None, "disc": None}. See ways()."""
     wanted = None if title_ids is None else set(title_ids)
-    out = {tid: {"youtube": None, "disc": None} for tid in (wanted or ())}
-    rows = con.execute("SELECT id, title_id, kind, format, service, location_id, youtube_id FROM copies "
-                       "WHERE kind = 'physical' OR (kind = 'digital' AND youtube_id IS NOT NULL) "
+    out = {tid: _no_way() for tid in (wanted or ())}
+    rows = con.execute("SELECT id, title_id, kind, format, service, location_id, youtube_id, fandango_id FROM copies "
+                       "WHERE kind = 'physical' OR (kind = 'digital' AND "
+                       "(youtube_id IS NOT NULL OR fandango_id IS NOT NULL)) "
                        "ORDER BY created_at, id").fetchall()
     rows = [r for r in rows if wanted is None or r["title_id"] in wanted]
     if any(r["kind"] == "physical" and r["location_id"] for r in rows) and paths is None:
@@ -59,10 +66,12 @@ def ways_for(con, title_ids=None, paths=None) -> dict:
     # best format first; the sort is stable, so copies of one format keep their created_at, id order
     rows.sort(key=lambda r: r["kind"] == "physical" and _PHYSICAL_ORDER.get(r["format"], len(_PHYSICAL_ORDER)))
     for r in rows:
-        w = out.setdefault(r["title_id"], {"youtube": None, "disc": None})
+        w = out.setdefault(r["title_id"], _no_way())
         if r["kind"] == "digital":
             if w["youtube"] is None and youtube_id_ok(r["youtube_id"]):
                 w["youtube"] = {"copy_id": r["id"], "label": _label(r)}
+            if w["fandango"] is None and fandango_id_ok(r["fandango_id"]):
+                w["fandango"] = {"copy_id": r["id"], "label": _label(r)}
         else:
             path = paths.get(r["location_id"])
             w["disc"] = (w["disc"] or []) + [{"copy_id": r["id"], "label": _label(r), "location_path": path,
@@ -72,9 +81,11 @@ def ways_for(con, title_ids=None, paths=None) -> dict:
 
 def ways(con, title_id, paths=None) -> dict:
     """How a title can play, from the database only:
-    {"youtube": {"copy_id", "label"} | None, "disc": [{"copy_id", "label", "location_path", "line"}, ...] | None}.
+    {"youtube": {"copy_id", "label"} | None, "fandango": {"copy_id", "label"} | None,
+     "disc": [{"copy_id", "label", "location_path", "line"}, ...] | None}.
     YouTube is the first digital copy (by created_at, id) whose youtube_id passes the id rule; a digital copy with
-    no id, or one that is not well formed, is not a way. Disc is every physical copy, best format first in
+    no id, or one that is not well formed, is not a way. Fandango at Home is the same for fandango_id; one copy can
+    be both. Which way a one-tap press takes (Fandango first) is the page's and the MCP tool's rule, not this one's. Disc is every physical copy, best format first in
     FORMATS["physical"] order; `line` is "4K UHD · Family Room › Media Cabinet › Shelf 2" (the format alone when
     the copy has no shelf)."""
     return ways_for(con, [title_id], paths)[title_id]
@@ -89,16 +100,29 @@ def youtube_id_for(con, title_id):
     return None
 
 
-def payload(mode, title, youtube_id=None) -> dict:
-    """The body Home Assistant gets (spec §6.3). Raises ValueError for an unknown mode, or for `youtube` with an id
-    that fails the id rule: such an id is never sent."""
+def fandango_id_for(con, title_id):
+    """The id ways() would play on Fandango at Home, or None."""
+    for r in con.execute("SELECT fandango_id FROM copies WHERE title_id = ? AND kind = 'digital' "
+                         "AND fandango_id IS NOT NULL ORDER BY created_at, id", (title_id,)):
+        if fandango_id_ok(r["fandango_id"]):
+            return r["fandango_id"]
+    return None
+
+
+def payload(mode, title, content_id=None) -> dict:
+    """The body Home Assistant gets (spec §6.3; Fandango at Home, 2026-11-27 design §4). Raises ValueError for an
+    unknown mode, or for `youtube` or `fandango` with an id that fails that kind's id rule: such an id is never sent."""
     if mode == "youtube":
-        if not youtube_id_ok(youtube_id):
+        if not youtube_id_ok(content_id):
             raise ValueError("not a well-formed YouTube id")
-        return {"event": EVENT, "mode": "stream", "source": YOUTUBE_SOURCE, "title": title, "content_id": youtube_id}
+        return {"event": EVENT, "mode": "stream", "source": YOUTUBE_SOURCE, "title": title, "content_id": content_id}
+    if mode == "fandango":
+        if not fandango_id_ok(content_id):
+            raise ValueError("not a well-formed Fandango at Home id")
+        return {"event": EVENT, "mode": "stream", "source": FANDANGO_SOURCE, "title": title, "content_id": content_id}
     if mode == "disc":
         return {"event": EVENT, "mode": "disc", "source": DISC_SOURCE, "title": title}
-    raise ValueError("mode must be youtube or disc")
+    raise ValueError("mode must be youtube, fandango or disc")
 
 
 def _host(url):

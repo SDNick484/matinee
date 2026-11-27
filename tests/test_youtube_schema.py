@@ -30,18 +30,18 @@ def dump(con):
 
 
 def v12_database(path):
-    """A database as v12 left it: today's schema without the YouTube column and its index, holding the Dark Knight
-    with a disc and a digital copy."""
+    """A database as v12 left it: today's schema without the YouTube and Fandango columns and their indexes, holding
+    the Dark Knight with a disc and a digital copy."""
     seed = sqlite3.connect(path)
     seed.executescript(matinee.SCHEMA)
     matinee.migrate(seed)
-    # Rebuild the (still empty) copies table from its own DDL minus the v13 lines. ALTER TABLE ... DROP COLUMN would
-    # be shorter, but SQLite before 3.38 trips over the comment it leaves at the end of the definition.
+    # Rebuild the (still empty) copies table from its own DDL minus the v13 and v14 lines. ALTER TABLE ... DROP COLUMN
+    # would be shorter, but SQLite before 3.38 trips over the comment it leaves at the end of the definition.
     ddl = seed.execute("SELECT sql FROM sqlite_master WHERE name = 'copies'").fetchone()[0]
-    v12_ddl, cut = re.subn(r",\s*(--[^\n]*\n\s*)?youtube_id TEXT\s*\)$", "\n)", ddl)
+    v12_ddl, cut = re.subn(r",\s*(--[^\n]*\n\s*)?youtube_id TEXT,.*\)$", "\n)", ddl, flags=re.S)
     assert cut == 1, ddl
     indexes = [r[0] for r in seed.execute("SELECT sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'copies' "
-                                          "AND sql IS NOT NULL AND name != 'copies_youtube_id'")]
+                                          "AND sql IS NOT NULL AND name NOT IN ('copies_youtube_id', 'copies_fandango_id')")]
     seed.execute("DROP TABLE copies")
     seed.execute(v12_ddl)
     for sql in indexes:
@@ -59,9 +59,9 @@ def v12_database(path):
 
 
 def test_new_database_has_youtube_id(fresh):
-    assert [r[1] for r in table_info(fresh)][-1] == "youtube_id"
-    assert fresh.execute("SELECT v FROM meta WHERE k='schema'").fetchone()[0] == "13"
-    assert matinee.SCHEMA_VERSION == "13"
+    assert [r[1] for r in table_info(fresh)][-2] == "youtube_id"      # v14 adds fandango_id after it
+    assert fresh.execute("SELECT v FROM meta WHERE k='schema'").fetchone()[0] == "14"
+    assert matinee.SCHEMA_VERSION == "14"
 
 
 @pytest.mark.parametrize("version", [1, 12])
@@ -75,7 +75,7 @@ def test_migrates_from_v1_and_v12(tmp_path, monkeypatch, fresh, version):
     matinee.init_db()
     matinee.init_db()                                   # a restart on the migrated file
     con = matinee.connect()
-    assert con.execute("SELECT v FROM meta WHERE k='schema'").fetchone()[0] == "13"
+    assert con.execute("SELECT v FROM meta WHERE k='schema'").fetchone()[0] == "14"
     assert table_info(con) == table_info(fresh)         # same columns, same order, as a new database
     copies = con.execute("SELECT id, title_id, kind, format, youtube_id FROM copies ORDER BY id").fetchall()
     assert [tuple(c) for c in copies] == [(1, 1, "physical", "4K UHD", None), (2, 1, "digital", "Digital HD", None)]

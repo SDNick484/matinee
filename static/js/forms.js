@@ -91,58 +91,82 @@ import { openWantModal } from "./wishlist.js";
     }
     formState.code_status = "none";
     renderCodeGrid(p, formState);
-    const link = document.getElementById(`${p}youtube`);
-    if (link) link.value = "";   // one link belongs to one copy
-    setYoutubeError(p, "");
+    for (const f of COPY_LINKS) {   // one link belongs to one copy
+      const link = document.getElementById(`${p}${f.key}`);
+      if (link) link.value = "";
+      setLinkError(p, f.key, "");
+    }
   }
 
-  // ================================================================= YouTube link (digital copies only)
-  // One field in the main part of the form, shown while the kind is Digital. The server owns the rule (it parses
-  // any YouTube address or a bare id and answers 400 or 409 with a sentence); the field only shows the stored
-  // address in full and puts that sentence next to itself.
-  function youtubeFieldHTML(p, v) {
-    const full = v.youtube_id ? `https://www.youtube.com/watch?v=${v.youtube_id}` : "";
-    return `
-      <div class="form-group" id="${p}youtube-group" style="${v.kind === "digital" ? "" : "display:none"}">
-        <label class="form-label" for="${p}youtube">YouTube link</label>
-        <input type="text" id="${p}youtube" class="form-input" inputmode="url" autocomplete="off" autocapitalize="off"
-               spellcheck="false" placeholder="Paste the film's YouTube address" value="${esc(full)}">
-        <div class="form-field-error" id="${p}youtube-error" role="alert" hidden></div>
+  // ================================================================= Play links (digital copies only)
+  // Two fields in the main part of the form, shown while the kind is Digital, in this order: the Fandango at Home
+  // link (the primary way to play), then the YouTube link (spec 2026-11-27-fandango-play-design §5). The server owns
+  // the rules (it parses any address of that kind or a bare id and answers 400 or 409 with a sentence that names the
+  // service); each field only shows its stored id as a full address and puts its own sentence next to itself.
+  const COPY_LINKS = [
+    { key: "fandango", label: "Fandango at Home link", placeholder: "Paste the film's Fandango at Home address",
+      idKey: "fandango_id", send: "fandango_link", names: /Fandango at Home/,
+      full: (id) => `https://athome.fandango.com/content/browse/details/title/${id}` },
+    { key: "youtube", label: "YouTube link", placeholder: "Paste the film's YouTube address",
+      idKey: "youtube_id", send: "youtube_link", names: /YouTube/,
+      full: (id) => `https://www.youtube.com/watch?v=${id}` },
+  ];
+
+  function linkFieldsHTML(p, v) {
+    return COPY_LINKS.map((f) => {
+      const full = v[f.idKey] ? f.full(v[f.idKey]) : "";
+      return `
+      <div class="form-group" id="${p}${f.key}-group" style="${v.kind === "digital" ? "" : "display:none"}">
+        <label class="form-label" for="${p}${f.key}">${f.label}</label>
+        <input type="text" id="${p}${f.key}" class="form-input" inputmode="url" autocomplete="off" autocapitalize="off"
+               spellcheck="false" placeholder="${esc(f.placeholder)}" value="${esc(full)}">
+        <div class="form-field-error" id="${p}${f.key}-error" role="alert" hidden></div>
       </div>`;
+    }).join("");
   }
 
-  function showYoutubeGroup(p, kind) {
-    const group = document.getElementById(`${p}youtube-group`);
-    if (group) group.style.display = kind === "digital" ? "" : "none";
+  function showLinkGroups(p, kind) {
+    for (const f of COPY_LINKS) {
+      const group = document.getElementById(`${p}${f.key}-group`);
+      if (group) group.style.display = kind === "digital" ? "" : "none";
+    }
   }
 
-  // The request field: the pasted text (empty clears it) for a digital copy, nothing for a physical one.
-  function readYoutubeLink(p, kind) {
+  // The request fields: each pasted text (empty clears it) for a digital copy, nothing for a physical one. With
+  // `copy` (an edit), a link whose id the copy arrived without is left out, so it is saved without being touched.
+  function readCopyLinks(p, kind, copy = null) {
     if (kind !== "digital") return {};
-    return { youtube_link: (document.getElementById(`${p}youtube`)?.value || "").trim() };
+    const out = {};
+    for (const f of COPY_LINKS) {
+      if (copy && !(f.idKey in copy)) continue;
+      out[f.send] = (document.getElementById(`${p}${f.key}`)?.value || "").trim();
+    }
+    return out;
   }
 
-  function setYoutubeError(p, message) {
-    const box = document.getElementById(`${p}youtube-error`);
+  function setLinkError(p, key, message) {
+    const box = document.getElementById(`${p}${key}-error`);
     if (!box) return;
     box.textContent = message || "";
     box.hidden = !message;
-    if (message) document.getElementById(`${p}youtube`)?.focus();
+    if (message) document.getElementById(`${p}${key}`)?.focus();
   }
 
-  // True when `err` was about the link: shown beside the field, so the caller shows no toast.
-  function showYoutubeError(p, err) {
-    const group = document.getElementById(`${p}youtube-group`);
+  // True when `err` was about one of the links: shown beside that field, so the caller shows no toast.
+  function showLinkError(p, err) {
+    if (err?.status !== 400 && err?.status !== 409) return false;
+    const field = COPY_LINKS.find((f) => f.names.test(err.message || ""));
+    const group = field && document.getElementById(`${p}${field.key}-group`);
     if (!group || group.style.display === "none") return false;   // hidden (a physical copy): a toast says it
-    if ((err?.status === 400 || err?.status === 409) && /YouTube/.test(err.message || "")) {
-      setYoutubeError(p, err.message);
-      return true;
-    }
-    return false;
+    for (const f of COPY_LINKS) setLinkError(p, f.key, "");
+    setLinkError(p, field.key, err.message);
+    return true;
   }
 
-  function watchYoutubeField(p) {
-    document.getElementById(`${p}youtube`)?.addEventListener("input", () => setYoutubeError(p, ""));
+  function watchLinkFields(p) {
+    for (const f of COPY_LINKS) {
+      document.getElementById(`${p}${f.key}`)?.addEventListener("input", () => setLinkError(p, f.key, ""));
+    }
   }
 
   // ================================================================= Copy Form Modal (8.2)
@@ -216,7 +240,7 @@ import { openWantModal } from "./wishlist.js";
               </select>
             </div>
 
-            ${youtubeFieldHTML("add-", { kind: initialKind })}
+            ${linkFieldsHTML("add-", { kind: initialKind })}
 
             ${moreFieldsHTML("add-", { kind: initialKind })}
 
@@ -325,7 +349,7 @@ import { openWantModal } from "./wishlist.js";
           locGroup.style.display = formState.kind === "physical" ? "flex" : "none";
         }
         showCodeGroup("add-", formState.kind);
-        showYoutubeGroup("add-", formState.kind);
+        showLinkGroups("add-", formState.kind);
         updateFormatGrid();
         updateServiceGrid();
         checkDuplicateWarning();
@@ -335,7 +359,7 @@ import { openWantModal } from "./wishlist.js";
     updateFormatGrid();
     updateServiceGrid();
     renderCodeGrid("add-", formState);
-    watchYoutubeField("add-");
+    watchLinkFields("add-");
 
     // "Want to buy…" sits beside Save Copy for a movie Matinee doesn't have yet: it creates the title with no copies
     // plus a want. A movie that is already here (even as an earlier Want to buy) uses the title page's Want….
@@ -394,7 +418,7 @@ import { openWantModal } from "./wishlist.js";
         service: formState.kind === "digital" ? formState.service : null,
         location_id: formState.kind === "physical" ? locVal : null,
         ...more,
-        ...readYoutubeLink("add-", formState.kind),
+        ...readCopyLinks("add-", formState.kind),
       };
 
       const saveBtn = document.getElementById("btn-save-copy");
@@ -447,7 +471,7 @@ import { openWantModal } from "./wishlist.js";
           }
         }
       } catch (err) {
-        if (!showYoutubeError("add-", err)) toast(err.message || "Failed to save copy");
+        if (!showLinkError("add-", err)) toast(err.message || "Failed to save copy");
         // Form state survives on error
         if (saveBtn) saveBtn.disabled = false;
         if (addAnotherBtn) addAnotherBtn.disabled = false;
@@ -515,7 +539,7 @@ import { openWantModal } from "./wishlist.js";
               </select>
             </div>
 
-            ${youtubeFieldHTML("edit-", copy)}
+            ${linkFieldsHTML("edit-", copy)}
 
             ${moreFieldsHTML("edit-", copy)}
 
@@ -601,7 +625,7 @@ import { openWantModal } from "./wishlist.js";
           locGroup.style.display = formState.kind === "physical" ? "flex" : "none";
         }
         showCodeGroup("edit-", formState.kind);
-        showYoutubeGroup("edit-", formState.kind);
+        showLinkGroups("edit-", formState.kind);
         updateFormatGrid();
         updateServiceGrid();
       });
@@ -610,7 +634,7 @@ import { openWantModal } from "./wishlist.js";
     updateFormatGrid();
     updateServiceGrid();
     renderCodeGrid("edit-", formState);
-    watchYoutubeField("edit-");
+    watchLinkFields("edit-");
 
     document.getElementById("btn-modal-close")?.addEventListener("click", closeModal);
     document.getElementById("btn-modal-cancel")?.addEventListener("click", closeModal);
@@ -632,8 +656,8 @@ import { openWantModal } from "./wishlist.js";
         delete more.purchased_on;
         delete more.price_cents;
       }
-      // Like the three details above: a copy that arrived without its id is saved without touching it.
-      const youtube = "youtube_id" in copy ? readYoutubeLink("edit-", formState.kind) : {};
+      // Like the three details above: a copy that arrived without an id is saved without touching it.
+      const links = readCopyLinks("edit-", formState.kind, copy);
       try {
         await api(`/admin/api/copies/${copy.id}`, {
           method: "PUT",
@@ -643,7 +667,7 @@ import { openWantModal } from "./wishlist.js";
             service: formState.kind === "digital" ? formState.service : null,
             location_id: formState.kind === "physical" ? locVal : null,
             ...more,
-            ...youtube,
+            ...links,
           },
         });
         toast("Copy updated");
@@ -651,7 +675,7 @@ import { openWantModal } from "./wishlist.js";
         const view = document.getElementById("view");
         if (view) renderDetail(view, title.id);
       } catch (err) {
-        if (!showYoutubeError("edit-", err)) toast(err.message || "Failed to update copy");
+        if (!showLinkError("edit-", err)) toast(err.message || "Failed to update copy");
       }
     });
   }
