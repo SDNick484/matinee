@@ -317,8 +317,32 @@ def test_public_recommendations_unchanged(client, family):
     for path in ("/api/recommendations", "/admin/api/recommendations"):
         body = client.get(path + "?mode=never_watched&limit=50").get_json()
         assert set(body) == PUBLIC_BODY_KEYS
-        assert body["results"] and set(body["results"][0]) == PUBLIC_RESULT_KEYS
+        assert body["results"]
+        # an editor's pick is the public pick plus `play` (Play on TV, null while the setting is empty)
+        assert set(body["results"][0]) - {"play"} == PUBLIC_RESULT_KEYS
+        assert ("play" in body["results"][0]) == path.startswith("/admin")
         text = client.get(path + "?mode=never_watched&limit=50").get_data(as_text=True)
         for name in family["people"]:
             assert name not in text
         assert "audience" not in body and "seen_by" not in text
+
+
+# --- play on TV (spec 2026-11-26-play-on-tv-design §6.5): an editor's pick carries `play` ---------------------------
+def test_pick_carries_play_for_editors_only(client, monkeypatch):
+    from test_play_core import YT_ID, seed_film
+    monkeypatch.setattr("app.HA_PLAY_WEBHOOK_URL", "")
+    con = db()
+    brooklyn = seed_film(con, "Brooklyn", 2015, "PG-13",
+                         copies=[("digital", "Digital HD", "Movies Anywhere", YT_ID, None)])
+    q = "?mode=never_watched&limit=5"
+    # the setting is empty: an editor's pick has the key, null
+    pick = client.get("/admin/api/recommendations" + q).get_json()["results"][0]
+    assert pick["id"] == brooklyn["id"] and pick["play"] is None
+    monkeypatch.setattr("app.HA_PLAY_WEBHOOK_URL", "http://192.168.1.100:8123/api/webhook/matinee-play-test-id")
+    pick = client.get("/admin/api/recommendations" + q).get_json()["results"][0]
+    assert pick["play"] == {"youtube": {"copy_id": brooklyn["copies"][0], "label": "Digital HD (Movies Anywhere)"},
+                            "disc": None}
+    # the public route never has the key, with the setting on
+    for res in client.get("/api/recommendations" + q).get_json()["results"]:
+        assert "play" not in res
+    assert "dQw4w9WgXcQ" not in client.get("/api/recommendations" + q).get_data(as_text=True)
