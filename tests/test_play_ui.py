@@ -565,3 +565,104 @@ def test_movie_night_no_sideways_scroll(server, browser, stub):
         assert page.evaluate("(d) => d.scrollWidth <= d.clientWidth", dialog.element_handle())
         _no_hscroll(page, width)
         page.close()
+
+
+# ------------------------------------------------------------------- Fandango at Home first (2026-11-27 design §5)
+ADDAMS_FD = "15429"
+ADDAMS_YT = "aDdAmSfAm91"
+ADDAMS_BODY = {"event": "matinee_play", "mode": "stream", "source": "Fandango at Home", "title": "The Addams Family",
+               "content_id": ADDAMS_FD}
+ADDAMS_STARTING = "Starting The Addams Family on Family Room TV. Added to watch history."
+
+
+def _seed_addams():
+    """_seed's films, and The Addams Family (1991, PG-13) with all three ways: a DVD on the shelf, and one Digital HD
+    copy on Fandango at Home holding both its Fandango id (15429) and a YouTube id."""
+    import app as core
+
+    ids = _seed()
+    con = core.connect()
+    shelf = con.execute("SELECT id FROM locations WHERE name = 'Shelf 2'").fetchone()[0]
+    ids["addams"] = seed_film(con, "The Addams Family", 1991, "PG-13", copies=[
+        ("physical", "DVD", None, None, shelf),
+        ("digital", "Digital HD", "Fandango at Home", ADDAMS_YT, None, ADDAMS_FD)])["id"]
+    con.close()
+    return ids
+
+
+def test_fandango_one_tap_plays_without_a_chooser(server, browser, stub):
+    ids = _seed_addams()
+    page, errors = _grid(browser, server)
+    _play_btn(page, ids["addams"]).click()
+    expect(_toast(page)).to_have_text(ADDAMS_STARTING)
+    expect(page.locator(".play-sheet")).to_have_count(0)
+    assert stub.posts == [ADDAMS_BODY]
+    _settle(page)
+    _play_btn(page, ids["heat"]).click()                        # YouTube and a disc, no Fandango: still the chooser
+    sheet = page.locator(".play-sheet")
+    expect(sheet).to_be_visible()
+    expect(sheet.locator("[data-way]")).to_have_count(2)
+    expect(sheet.get_by_role("button", name="Play on Fandango at Home")).to_have_count(0)
+    sheet.get_by_role("button", name="Cancel").click()
+    expect(sheet).to_have_count(0)
+    assert stub.posts == [ADDAMS_BODY]
+    assert errors == []
+
+
+def test_detail_shows_every_way_fandango_first(server, browser, stub):
+    ids = _seed_addams()
+    page, errors = _detail(browser, server, ids["addams"])
+    bar = page.locator(".detail-view .play-bar")
+    expect(bar.locator("button")).to_have_count(3)
+    assert [b.inner_text().strip() for b in bar.locator("button").all()] == [
+        "Play on Fandango at Home", "Play on YouTube", "Start the disc"]
+    expect(bar).to_contain_text(f"DVD · {SHELF}")
+    bar.get_by_role("button", name="Play on YouTube").click()     # the fallback is here
+    expect(_toast(page)).to_have_text(ADDAMS_STARTING)
+    assert stub.posts == [{"event": "matinee_play", "mode": "stream", "source": "YouTube",
+                           "title": "The Addams Family", "content_id": ADDAMS_YT}]
+    _settle(page)
+    bar = page.locator(".detail-view .play-bar")                  # redrawn from the answer
+    bar.get_by_role("button", name="Play on Fandango at Home").click()
+    _until(page, lambda: len(stub.posts) == 2, "the Fandango post")
+    assert stub.posts[1] == ADDAMS_BODY
+    _settle(page)
+    expect(page.locator(".copy-row").filter(has_text="Fandango at Home link")).to_have_count(1)
+    assert len(_watch_rows(ids["addams"])) == 1                   # one watch a day, whichever way
+    assert errors == []
+
+
+def test_movie_night_offers_fandango_alone(server, browser, stub):
+    import app as core
+
+    ids = _seed_addams()
+    con = core.connect()                                       # The Addams Family is the only film Movie Night can pick
+    for key in ("brooklyn", "heat", "elf"):
+        con.execute("INSERT INTO watches (title_id, watched_date) VALUES (?, '2025-01-01')", (ids[key],))
+    con.commit()
+    con.close()
+    page, plays, errors = _movie_night(browser, server)
+    expect(page.locator(".movie-night-title")).to_have_text("The Addams Family")
+    bar = page.locator("#movie-night-content .play-bar")
+    expect(bar.locator("button")).to_have_count(1)
+    expect(bar.get_by_role("button", name="Play on Fandango at Home")).to_be_visible()
+    bar.get_by_role("button", name="Play on Fandango at Home").click()
+    expect(_toast(page)).to_have_text(ADDAMS_STARTING)
+    assert plays == [{"mode": "fandango"}] and stub.posts == [ADDAMS_BODY]
+    assert errors == []
+
+
+@pytest.mark.parametrize("width", [412, 360])
+def test_three_ways_no_sideways_scroll(server, browser, stub, width):
+    ids = _seed_addams()
+    page, _errors = _detail(browser, server, ids["addams"], width)
+    expect(page.locator(".play-bar button")).to_have_count(3)
+    for b in page.locator(".play-bar button").all():
+        assert b.bounding_box()["height"] >= 44
+        box = b.bounding_box()
+        assert box["x"] >= 0 and box["x"] + box["width"] <= width
+    _no_hscroll(page, width)
+    page.close()
+    page, _errors = _grid(browser, server, width)
+    expect(_play_btn(page, ids["addams"])).to_have_count(1)
+    _no_hscroll(page, width)

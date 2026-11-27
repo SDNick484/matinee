@@ -14,6 +14,7 @@ import threading
 import pytest
 
 sync_api = pytest.importorskip("playwright.sync_api")
+expect = sync_api.expect
 
 ID = "dQw4w9WgXcQ"
 FULL = f"https://www.youtube.com/watch?v={ID}"
@@ -263,4 +264,121 @@ def test_second_visit(server, browser, dark_knight):
     save_edit(page)
     assert [m for m, _ in writes] == ["PUT"]                         # one request per save
     assert stored(cid) == ID
+    assert errors == []
+
+
+# ------------------------------------------------- the Fandango at Home field (spec 2026-11-27-fandango-play-design §5)
+# The Addams Family's page is https://athome.fandango.com/content/browse/details/The-Addams-Family/15429; the form
+# shows a stored id back as .../details/title/15429. Here the number sits on The Dark Knight's digital copy.
+FD_ID = "15429"
+FD_PAGE = f"https://athome.fandango.com/content/browse/details/The-Addams-Family/{FD_ID}"
+FD_FULL = f"https://athome.fandango.com/content/browse/details/title/{FD_ID}"
+FD_BAD = "That isn't a Fandango at Home link. Paste the address of the film's Fandango at Home page."
+
+
+def stored_both(cid):
+    from app import db
+    row = db().execute("SELECT fandango_id, youtube_id FROM copies WHERE id=?", (cid,)).fetchone()
+    return row["fandango_id"], row["youtube_id"]
+
+
+def test_two_fields_fandango_first_for_digital_only(server, browser, dark_knight):
+    page, errors, _ = open_page(browser, f"{server}/admin#/t/{dark_knight}")
+    edit(page, copy_id(dark_knight, "digital"))
+    fandango, youtube = page.get_by_label("Fandango at Home link"), page.get_by_label("YouTube link")
+    expect(fandango).to_be_visible()
+    expect(youtube).to_be_visible()
+    assert fandango.get_attribute("placeholder") == "Paste the film's Fandango at Home address"
+    assert fandango.bounding_box()["y"] < youtube.bounding_box()["y"]        # Fandango at Home first
+    page.click("#btn-modal-cancel")
+    edit(page, copy_id(dark_knight, "physical"))
+    expect(page.locator("#edit-fandango")).to_be_hidden()
+    page.click("#btn-modal-cancel")
+    page.click("#btn-add-copy")
+    page.wait_for_selector("#copy-form")
+    expect(page.locator("#add-fandango")).to_be_hidden()
+    page.click('#kind-toggle [data-kind="digital"]')
+    expect(page.locator("#add-fandango")).to_be_visible()
+    assert errors == []
+
+
+def test_paste_both_saves_and_shows_both_back(server, browser, dark_knight):
+    cid = copy_id(dark_knight, "digital")
+    page, errors, writes = open_page(browser, f"{server}/admin#/t/{dark_knight}")
+    edit(page, cid)
+    expect(page.locator("#edit-fandango")).to_have_value("")
+    page.fill("#edit-fandango", f"  {FD_PAGE}?cmp=share  ")
+    page.fill("#edit-youtube", f"https://youtu.be/{ID}")
+    save_edit(page)
+    assert stored_both(cid) == (FD_ID, ID)
+    row = page.locator(f'.copy-row[data-copy-id="{cid}"]')
+    expect(row).to_contain_text("Fandango at Home link")
+    expect(row).to_contain_text("YouTube link")
+    edit(page, cid)
+    expect(page.locator("#edit-fandango")).to_have_value(FD_FULL)
+    expect(page.locator("#edit-youtube")).to_have_value(FULL)
+    page.fill("#edit-fandango", "")                                    # clearing one keeps the other
+    save_edit(page)
+    assert stored_both(cid) == (None, ID)
+    assert '"fandango_link":""' in writes[-1][1].replace(" ", "")
+    assert errors == []
+
+
+def test_add_a_digital_copy_with_a_fandango_link(server, browser, dark_knight):
+    page, errors, writes = open_page(browser, f"{server}/admin#/t/{dark_knight}")
+    page.click("#btn-add-copy")
+    page.wait_for_selector("#copy-form")
+    page.click('#kind-toggle [data-kind="digital"]')
+    page.click('#service-select-grid [data-srv="Fandango at Home"]')
+    page.fill("#add-fandango", FD_ID)                                  # a bare number is the id
+    page.click("#btn-save-copy")
+    page.wait_for_selector("#copy-form", state="detached")
+    from app import db
+    assert db().execute("SELECT fandango_id, youtube_id FROM copies WHERE service='Fandango at Home'").fetchone()[:] \
+        == (FD_ID, None)
+    assert errors == []
+
+
+def test_fandango_errors_show_beside_their_own_field(server, browser, dark_knight):
+    from app import db
+    from conftest import seed_title
+    con = db()
+    inception = seed_title(con, 27205, copies=(), digital=("Digital HD",))
+    con.execute("UPDATE copies SET service='Apple TV', fandango_id=? WHERE title_id=?", (FD_ID, inception))
+    con.commit()
+    cid = copy_id(dark_knight, "digital")
+    page, errors, _ = open_page(browser, f"{server}/admin#/t/{dark_knight}")
+    edit(page, cid)
+    page.fill("#edit-fandango", "https://www.fandango.com/the-addams-family-1991/15429")
+    page.click("#btn-edit-save")
+    expect(page.locator("#edit-fandango-error")).to_have_text(FD_BAD)
+    expect(page.locator("#edit-youtube-error")).to_be_hidden()
+    expect(page.locator("#edit-copy-form")).to_be_visible()
+    page.fill("#edit-fandango", FD_PAGE)                                # typing again clears the sentence
+    expect(page.locator("#edit-fandango-error")).to_be_hidden()
+    page.click("#btn-edit-save")                                        # the number is on Inception already
+    expect(page.locator("#edit-fandango-error")).to_have_text("That Fandango at Home link is already on Inception (2010).")
+    page.fill("#edit-fandango", "")
+    page.fill("#edit-youtube", "https://vimeo.com/123456789")           # and a YouTube error goes beside YouTube
+    page.click("#btn-edit-save")
+    expect(page.locator("#edit-youtube-error")).to_have_text(BAD_LINK)
+    expect(page.locator("#edit-fandango-error")).to_be_hidden()
+    assert stored_both(cid) == (None, None)
+    assert errors == []
+
+
+@pytest.mark.parametrize("width", (412, 360))
+def test_both_fields_no_sideways_scroll(server, browser, dark_knight, width):
+    cid = copy_id(dark_knight, "digital")
+    from app import db
+    db().execute("UPDATE copies SET youtube_id=?, fandango_id=? WHERE id=?", (ID, FD_ID, cid))
+    db().commit()
+    page, errors, _ = open_page(browser, f"{server}/admin#/t/{dark_knight}", width)
+    wide = width >= 412
+    edit(page, cid)
+    no_sideways_scroll(page, wide)
+    page.fill("#edit-fandango", "https://athome.fandango.com/content/browse/details/" + "x" * 300 + "/1234567890123")
+    page.click("#btn-edit-save")
+    expect(page.locator("#edit-fandango-error")).to_be_visible()
+    no_sideways_scroll(page, wide)
     assert errors == []

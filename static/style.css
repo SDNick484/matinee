@@ -1289,6 +1289,7 @@ main#view {
 }
 .copy-row {
   display: flex;
+  flex-wrap: wrap;            /* a long label ("Digital HD (Fandango at Home)") puts Edit/Delete on their own line */
   align-items: center;
   justify-content: space-between;
   gap: var(--s3);
@@ -1317,6 +1318,7 @@ main#view {
   display: flex;
   align-items: center;
   gap: var(--s1);
+  margin-left: auto;
 }
 
 .admin-bar {

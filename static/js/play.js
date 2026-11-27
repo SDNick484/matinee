@@ -1,5 +1,8 @@
 // Matinee — play a title on the Family Room TV (spec 2026-11-26-play-on-tv-design §6.5): the grid's ▶, the buttons
 // on the details page and under the Movie Night pick, the chooser for a title with two ways, and the one request.
+// Fandango at Home is the primary way (spec 2026-11-27-fandango-play-design, decision 5): a one-tap place (the grid's
+// ▶, Movie Night) starts it at once when the title has a Fandango link, whatever else it has; the details page shows
+// every way, Fandango first, and is where the YouTube fallback is.
 // Editors only: a title carries `play` only for an editor while HA_PLAY_WEBHOOK_URL is set, and every function here
 // draws nothing for a title without a way.
 import { api, esc, toast } from "./core.js";
@@ -11,14 +14,24 @@ import { icon } from "./icons.js";
   let requestOut = false;                    // one request at a time across the page
   const wired = new WeakMap();         // root -> its click listener, so a re-render's wirePlay replaces the old one
 
-  // The ways a title can play, in the order the chooser lists them: "youtube", then "disc".
+  const WAY_LABELS = { fandango: "Play on Fandango at Home", youtube: "Play on YouTube", disc: "Start the disc" };
+
+  // The ways a title can play, in the order the details page lists them: "fandango", "youtube", then "disc".
   function playWays(title) {
     const p = title && title.play;
     if (!p) return [];
     const ways = [];
+    if (p.fandango) ways.push("fandango");
     if (p.youtube) ways.push("youtube");
     if (Array.isArray(p.disc) && p.disc.length) ways.push("disc");
     return ways;
+  }
+
+  // The ways a one-tap place offers: Fandango alone when the title has it, otherwise every way (YouTube and a disc
+  // open the chooser in the grid and show both buttons under the Movie Night pick, as before Fandango).
+  function oneTapWays(title) {
+    const ways = playWays(title);
+    return ways.includes("fandango") ? ["fandango"] : ways;
   }
 
   function discLines(title) {
@@ -36,15 +49,16 @@ import { icon } from "./icons.js";
     return `<button type="button" class="play-btn" data-play-title="${Number(title.id)}" aria-label="Play ${esc(title.title)} on the Family Room TV">${icon("play")}</button>`;
   }
 
-  // The buttons for the details page and Movie Night: one per way, each starting at once, and the disc lines.
-  function playBarHtml(title) {
-    const ways = playWays(title);
+  // The buttons for the details page (every way) and Movie Night (`oneTap`: Fandango alone when there is a link):
+  // one per way, each starting at once, and the disc lines when the disc is offered.
+  function playBarHtml(title, { oneTap = false } = {}) {
+    const ways = oneTap ? oneTapWays(title) : playWays(title);
     if (!ways.length) return "";
     const id = Number(title.id);
-    const btn = (mode, label) =>
-      `<button type="button" class="btn play-bar-btn" data-play-title="${id}" data-play-mode="${mode}">${icon("play")}<span>${label}</span></button>`;
+    const btn = (mode) =>
+      `<button type="button" class="btn play-bar-btn" data-play-title="${id}" data-play-mode="${mode}">${icon("play")}<span>${WAY_LABELS[mode]}</span></button>`;
     return `<div class="play-bar" role="group" aria-label="Play on the Family Room TV">
-      <div class="play-bar-buttons">${ways.includes("youtube") ? btn("youtube", "Play on YouTube") : ""}${ways.includes("disc") ? btn("disc", "Start the disc") : ""}</div>
+      <div class="play-bar-buttons">${ways.map(btn).join("")}</div>
       ${ways.includes("disc") ? linesHTML(discLines(title)) : ""}
     </div>`;
   }
@@ -117,9 +131,9 @@ import { icon } from "./icons.js";
     closeSheet();
   }
 
-  // The chooser for a title with two ways. Choosing one closes it and sends.
+  // The chooser for a title with YouTube and a disc and no Fandango link. Choosing one closes it and sends.
   function openPlaySheet(title, attendees, onDone) {
-    if (requestOut || playWays(title).length < 2) return;
+    if (requestOut || oneTapWays(title).length < 2) return;
     closeSheet();
     const overlay = document.createElement("div");
     overlay.className = "modal-overlay play-sheet-overlay";
@@ -149,8 +163,8 @@ import { icon } from "./icons.js";
   }
 
   // Delegated clicks for every [data-play-title] inside `root`. lookup(id) returns the title object. A button with a
-  // data-play-mode (the details page and Movie Night) sends that way; the grid's ▶ sends its only way, or opens the
-  // chooser when there are two. onDone(answer, title) runs after a start. The poster's own link must not also open
+  // data-play-mode (the details page and Movie Night) sends that way; the grid's ▶ sends Fandango when the title has
+  // it, else its only way, or opens the chooser for YouTube and a disc. onDone(answer, title) runs after a start. The poster's own link must not also open
   // the details page, so the click is always cancelled. Calling it again on one root replaces the earlier listener.
   function wirePlay(root, lookup, attendees, onDone) {
     if (!root) return;
@@ -165,7 +179,7 @@ import { icon } from "./icons.js";
       if (!title) return;
       let mode = el.dataset.playMode;
       if (!mode) {
-        const ways = playWays(title);
+        const ways = oneTapWays(title);
         if (ways.length > 1) {
           openPlaySheet(title, attendees, onDone);
           return;
