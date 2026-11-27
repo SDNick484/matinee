@@ -48,3 +48,7 @@ def parse_youtube_link(value):
         raise ValueError("no YouTube video id in it")
     return found
 
+
+def youtube_watch_url(youtube_id):
+    """The full address for an id (what the export carries), or None for no id or one that is not well formed."""
+    return f"https://www.youtube.com/watch?v={youtube_id}" if youtube_id_ok(youtube_id) else None
