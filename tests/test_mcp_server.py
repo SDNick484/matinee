@@ -453,18 +453,19 @@ def test_where_is_returns_title_id_db_and_rest(test_env, monkeypatch):
 
 ALL_TOOLS = {"search_collection", "get_movie", "where_is", "get_recommendations",
              "get_collection_stats", "list_people", "rate_movie", "log_watch", "search_tmdb", "add_movie",
-             "get_wishlist", "want_movie", "get_lists", "get_list", "set_list_membership", "list_copies"}
+             "get_wishlist", "want_movie", "get_lists", "get_list", "set_list_membership", "list_copies",
+             "watch_calendar"}
 
 
 def _names(server):
     return {t.name for t in asyncio.run(server.list_tools())}
 
 
-def test_build_server_writes_true_lists_sixteen_tools():
+def test_build_server_writes_true_lists_seventeen_tools():
     assert _names(mcp_server.build_server(writes=True)) == ALL_TOOLS
 
 
-def test_build_server_writes_false_lists_eleven_tools():
+def test_build_server_writes_false_lists_twelve_tools():
     assert _names(mcp_server.build_server(writes=False)) == ALL_TOOLS - set(mcp_server.WRITE_TOOLS)
 
 
@@ -670,6 +671,7 @@ EXPECTED_HINTS = {
     "get_list": (True, False, True, False),
     "set_list_membership": (False, True, True, False),
     "list_copies": (True, False, True, False),
+    "watch_calendar": (True, False, True, False),
 }
 
 
@@ -702,7 +704,7 @@ def test_annotation_kwargs_guarded_on_tool_signature():
     assert "annotations" in mcp_server._annotation_kwargs(WithAnnotations, "where_is")
 
 
-def test_annotation_table_covers_exactly_the_sixteen_tools():
+def test_annotation_table_covers_exactly_the_seventeen_tools():
     assert set(mcp_server.TOOL_HINTS) == set(EXPECTED_HINTS)
 
 
@@ -1078,7 +1080,7 @@ def test_log_watch_with_attendees_refuses_an_older_server(monkeypatch):
 
 def test_tool_lists_per_level():
     sizes = {level: _names(mcp_server.build_server(writes=level)) for level in ("none", "log", "all")}
-    assert (len(sizes["none"]), len(sizes["log"]), len(sizes["all"])) == (11, 14, 16)
+    assert (len(sizes["none"]), len(sizes["log"]), len(sizes["all"])) == (12, 15, 17)
     assert {"list_people", "get_wishlist", "get_lists", "get_list", "list_copies"} <= sizes["none"] and "want_movie" not in sizes["log"]
     assert sizes["log"] - sizes["none"] == {"rate_movie", "log_watch", "set_list_membership"}
     assert sizes["all"] - sizes["log"] == {"add_movie", "want_movie"}
@@ -1785,3 +1787,90 @@ def test_list_copies_tool_wrapper_and_instructions(inventory, monkeypatch):
         assert "list_copies" in text and "next_offset" in text and "null" in text
     desc = {t.name: t.description for t in asyncio.run(mcp_server.mcp.list_tools())}["list_copies"]
     assert "next_offset" in desc and "price" in desc
+
+
+# --------------------------------------------------------------- watch_calendar (calendar spec §3)
+def _calendar_env(test_env, monkeypatch):
+    """Elf watched 2026-11-14 and 2026-11-28 with a note, Jaws logged by bucket (stored 2025-11-19); today 2026-11-19."""
+    import datetime as dt
+    monkeypatch.setattr("app.pacific_today", lambda now=None: dt.date(2026, 11, 19))
+    monkeypatch.setattr("lists.pacific_today", lambda now=None: dt.date(2026, 11, 19))
+    con = db()
+    con.execute("""INSERT INTO titles (id, tmdb_id, title, sort_title, search_text, year, fetched_at)
+                   VALUES (2, 10719, 'Elf', 'Elf', 'elf', 2003, '2026-01-01'),
+                          (3, 578, 'Jaws', 'Jaws', 'jaws', 1975, '2026-01-01')""")
+    con.execute("INSERT INTO watches (title_id, watched_date, notes) VALUES (2, '2026-11-14', 'girls loved it'), "
+                "(2, '2026-11-28', NULL)")
+    con.execute("INSERT INTO watches (title_id, watched_date, date_bucket) VALUES (3, '2025-11-19', '1_2_years')")
+    con.commit()
+
+
+CALENDAR_NOV = {"month": "2026-11", "today": "2026-11-19", "days": {
+    "2026-11-14": [{"title_id": 2, "title": "Elf", "year": 2003}],
+    "2026-11-28": [{"title_id": 2, "title": "Elf", "year": 2003}]}}
+
+
+def _rest_calendar_client(public):
+    """A REST client whose requests go to the Flask app on the same database (public: no key)."""
+    client = mcp_server.MatineeClient(api_url="http://fake-host", api_key="" if public else "k", db_path="")
+    client.requested = []
+
+    def via_flask(method, path, data=None):
+        client.requested.append(path)
+        with app.test_client() as c:
+            res = c.get(path, headers={} if public else {"Authorization": "Bearer k"})
+        if res.status_code != 200:
+            raise mcp_server.MatineeError(f"Matinee API error ({res.status_code}): "
+                                          f"{(res.get_json() or {}).get('error', '')}", status=res.status_code)
+        return res.get_json()
+
+    client._api_request = via_flask
+    return client
+
+
+def test_watch_calendar_direct_sqlite(test_env, monkeypatch):
+    _calendar_env(test_env, monkeypatch)
+    client = mcp_server.MatineeClient(db_path=str(test_env))
+    assert client.watch_calendar("2026-11") == CALENDAR_NOV
+    assert client.watch_calendar() == CALENDAR_NOV            # no month: this month
+    assert client.watch_calendar("2025-11")["days"] == {}     # the bucket watch is never placed
+    assert "girls loved it" not in str(client.watch_calendar("2026-11"))
+
+
+def test_watch_calendar_rest_public_and_keyed(test_env, monkeypatch):
+    monkeypatch.setattr("app.MATINEE_API_KEY", "k")
+    _calendar_env(test_env, monkeypatch)
+    public, keyed = _rest_calendar_client(True), _rest_calendar_client(False)
+    assert public.watch_calendar("2026-11") == CALENDAR_NOV
+    assert keyed.watch_calendar("2026-11") == CALENDAR_NOV
+    assert public.requested == ["/api/calendar?month=2026-11"]
+    assert keyed.requested == ["/admin/api/calendar?month=2026-11"]
+    assert public.watch_calendar() == CALENDAR_NOV and public.requested[-1] == "/api/calendar"
+
+
+@pytest.mark.parametrize("bad", ["2026-13", "Nov", "", "2026-11-14"])
+def test_watch_calendar_refuses_a_bad_month_in_both_modes(test_env, monkeypatch, bad):
+    _calendar_env(test_env, monkeypatch)
+    for client in (mcp_server.MatineeClient(db_path=str(test_env)), _rest_calendar_client(True)):
+        with pytest.raises(mcp_server.MatineeError) as e:
+            client.watch_calendar(bad)
+        assert "month must look like 2026-11" in str(e.value)
+
+
+def test_watch_calendar_on_an_old_server(monkeypatch):
+    client = mcp_server.MatineeClient(api_url="http://fake-host", api_key="", db_path="")
+
+    def gone(m, p, d=None):
+        raise mcp_server.MatineeError("Matinee API error (404)", status=404)
+    monkeypatch.setattr(client, "_api_request", gone)
+    with pytest.raises(mcp_server.MatineeError) as e:
+        client.watch_calendar("2026-11")
+    assert str(e.value) == "This Matinee server is too old for watch_calendar. Update Matinee."
+
+
+def test_watch_calendar_tool_function_and_instructions(test_env, monkeypatch):
+    _calendar_env(test_env, monkeypatch)
+    monkeypatch.setattr(mcp_server, "_default_client", mcp_server.MatineeClient(db_path=str(test_env)))
+    assert mcp_server.watch_calendar("2026-11") == CALENDAR_NOV
+    for writes in (True, False):
+        assert "watch_calendar" in mcp_server.instructions_for(writes)

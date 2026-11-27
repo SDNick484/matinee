@@ -100,6 +100,7 @@ TOOL_HINTS: Dict[str, Tuple[bool, bool, bool, bool]] = {
     "get_wishlist": (True, False, True, False),  # editor-only data: the keyed path only
     "want_movie": (False, True, True, True),    # replaces the title's earlier want; may create the title from TMDB
     "set_list_membership": (False, True, True, False),  # on=false takes a title off a list; same call, same state
+    "watch_calendar": (True, False, True, False),
 }
 
 
@@ -151,6 +152,7 @@ MATINEE_DB_PATH = os.environ.get("MATINEE_DB_PATH", "").strip()
 TOO_OLD_FOR_PEOPLE = "This Matinee server is too old to pick for specific people. Update Matinee."
 TOO_OLD_FOR_LISTS = "This Matinee server is too old for lists. Update Matinee."
 _LIST_KEYS = ("id", "name", "kind", "season_start", "season_end", "in_season", "count")
+TOO_OLD_FOR_CALENDAR = "This Matinee server is too old for watch_calendar. Update Matinee."
 TOO_OLD_FOR_COPIES = "This Matinee server is too old for list_copies. Update Matinee."
 # list_copies: the values a filter accepts, copied from db.py (tests/test_mcp_server.py keeps them equal), and the
 # public keys of a row. The editor-only code_status, purchased_on and price_cents are never in either shape.
@@ -1053,6 +1055,35 @@ class MatineeClient:
         out["titles"] = [{k: m[k] for k in _MEMBER_KEYS if k in m} for m in res.get("titles", [])]
         return out
 
+    def watch_calendar(self, month: Optional[str] = None) -> Dict[str, Any]:
+        """The movies watched on each day of one month ("YYYY-MM", default this month), compactly: `days` maps each
+        date that has a watch to [{title_id, title, year}]. A watch logged by time bucket ("1-2 Years") has only an
+        estimated date and is never listed; notes and who watched are never returned."""
+        con = self._get_db()
+        if con is not None:
+            try:
+                import lists
+                import watched_days
+                today = lists.pacific_today()
+                try:
+                    year, mon = watched_days.parse_month(month, today)
+                except ValueError as e:
+                    raise MatineeError(str(e), status=400) from None
+                return {"month": f"{year:04d}-{mon:02d}", "today": today.isoformat(),
+                        "days": watched_days.month_view(con, year, mon)}
+            finally:
+                con.close()
+        path = f"{self._read_prefix}/calendar" + ("" if month is None else f"?month={urllib.parse.quote(month)}")
+        try:
+            res = self._api_request("GET", path)
+        except MatineeError as e:
+            if e.status == 404:
+                raise MatineeError(TOO_OLD_FOR_CALENDAR, status=404) from None
+            raise
+        keep = ("title_id", "title", "year")
+        return {"month": res.get("month"), "today": res.get("today"),
+                "days": {d: [{k: e.get(k) for k in keep} for e in entries] for d, entries in res.get("days", {}).items()}}
+
     def set_list_membership(self, list: Any, title_id: int, on: bool = True) -> Dict[str, Any]:
         """Put a title on a list (on=True) or take it off (on=False). Both are idempotent. Writes go through the
         REST API, as every write does."""
@@ -1168,6 +1199,8 @@ Near a holiday, call get_lists and pass in_season=true when a list is in season;
 - "Everything I own on Movies Anywhere", "what is on Shelf 2", "list my 4K discs", "my whole collection as a CSV": \
 call list_copies(service=, location=, format=, kind=), not repeated search_collection or get_movie calls. \
 Keep calling with next_offset until it is null before saying the list is complete.
+- "What did we watch in November?", "when did we last watch Elf?", "which nights did we have a movie": call watch_calendar(month="2026-11"). \
+It lists only watches with an exact date; one logged as "1-2 Years ago" has no day and is not there.
 """
 # For build_server(writes=False): the remote read-only service has no log_watch or rate_movie to point at.
 READONLY_INSTRUCTIONS = SERVER_INSTRUCTIONS.replace(
@@ -1212,7 +1245,7 @@ WRITE_TOOLS = ("rate_movie", "log_watch", "add_movie", "want_movie", "set_list_m
 TOOL_TIERS: Dict[str, str] = {
     **{name: "read" for name in ("search_collection", "get_movie", "where_is", "get_recommendations",
                                  "get_collection_stats", "list_people", "get_lists", "get_list", "list_copies",
-                                 "search_tmdb", "get_wishlist")},
+                                 "search_tmdb", "get_wishlist", "watch_calendar")},
     **{name: "everyday" for name in WRITE_TOOLS},
 }
 # Which write tools each level registers. "log" is what the phone needs to log a movie night: it can record a
@@ -1332,6 +1365,14 @@ def get_lists() -> Dict[str, Any]:
     Christmas or Halloween, each with its season window (MM-DD, may wrap the year), whether it is in season today
     (America/Los_Angeles) and how many titles it holds. Use a list's name with get_list or get_recommendations."""
     return _default_client.get_lists()
+
+
+def watch_calendar(month: Optional[str] = None) -> Dict[str, Any]:
+    """What the family watched, day by day, for one month: month is "YYYY-MM" (omit it for this month). Returns
+    {"month", "today", "days": {"2026-11-14": [{"title_id", "title", "year"}]}}; days with no watch are absent.
+    Only watches with an exact date are listed (one logged as "1-2 Years ago" has no real day). Notes and who
+    watched are not included."""
+    return _default_client.watch_calendar(month)
 
 
 def get_list(list: str) -> Dict[str, Any]:
@@ -1495,9 +1536,9 @@ def prompt_log_movie_night(movie_title: str = "") -> str:
 
 
 def build_server(*, writes=True):
-    """Build a MCP server. `writes` is True (all sixteen tools), False (the eleven read tools) or a level from
-    WRITE_LEVELS: "none", "log" (adds rate_movie, log_watch and set_list_membership: fourteen tools) or "all" (adds
-    add_movie and want_movie: sixteen).
+    """Build a MCP server. `writes` is True (all seventeen tools), False (the twelve read tools) or a level from
+    WRITE_LEVELS: "none", "log" (adds rate_movie, log_watch and set_list_membership: fifteen tools) or "all" (adds
+    add_movie and want_movie: seventeen).
     Anything else raises ValueError.
 
     Tool functions are module-level and read _default_client at call time.
@@ -1515,7 +1556,7 @@ def build_server(*, writes=True):
         server.tool(**_annotation_kwargs(FastMCP, fn.__name__))(tool_fn)
 
     for fn in (search_collection, get_movie, where_is, get_recommendations, get_collection_stats, list_people,
-               get_lists, get_list, list_copies, search_tmdb, get_wishlist):
+               get_lists, get_list, list_copies, search_tmdb, get_wishlist, watch_calendar):
         register(fn)
     for fn in (rate_movie, log_watch, add_movie, want_movie, set_list_membership):
         if fn.__name__ in WRITE_LEVELS[level]:

@@ -3103,3 +3103,151 @@ main#view {
 @media (min-width: 520px) {
   .lists-add-grid { grid-template-columns: 2fr 1fr 1fr; }
 }
+
+/* ---------------------------------------------------------------- Calendar (spec 2026-11-19-calendar-settings §3) */
+.cal-view {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: var(--s2) 0 var(--s7);   /* main#view already pads the sides */
+}
+.cal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s2);
+  margin-bottom: var(--s3);
+}
+.cal-title {
+  flex: 1;
+  text-align: center;
+  font-size: var(--fs-lg);
+  font-weight: 800;
+}
+.cal-arrow {
+  flex: none;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
+  font-size: 2rem;
+  line-height: 1;
+}
+/* Seven equal columns: at 360 px, 328 px of content leaves each about 45 px, over the 44 px tap minimum. */
+.cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 2px;
+}
+.cal-wd {
+  padding-bottom: var(--s1);
+  text-align: center;
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  color: var(--ink-2);
+}
+.cal-day {
+  position: relative;
+  min-width: 0;
+  aspect-ratio: 2 / 3;
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: var(--card);
+  color: var(--ink);
+  font: inherit;
+}
+button.cal-day {
+  cursor: pointer;
+  touch-action: manipulation;
+}
+button.cal-day:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+.cal-empty {
+  opacity: .7;
+}
+.cal-poster {
+  position: absolute;
+  inset: 0;
+  display: block;
+}
+.cal-day .poster-ph,
+.cal-row-poster .poster-ph {
+  overflow: hidden;
+  padding: 2px;
+  border: 0;
+  border-radius: 0;
+  font-size: var(--fs-xs);
+  line-height: 1.1;
+  overflow-wrap: anywhere;
+}
+/* Day numbers and badges sit on a solid chip so they keep 4.5:1 over any poster. */
+.cal-num, .cal-more {
+  position: absolute;
+  min-width: 1.5em;
+  padding: 0 3px;
+  border-radius: 4px;
+  background: var(--raised);
+  color: var(--ink);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  line-height: 1.4;
+  text-align: center;
+}
+.cal-num {
+  top: 2px;
+  left: 2px;
+}
+.cal-more {
+  right: 2px;
+  bottom: 2px;
+}
+.cal-today::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 2px solid var(--accent-text);
+  border-radius: inherit;
+  pointer-events: none;
+}
+.cal-status {
+  margin-top: var(--s4);
+  text-align: center;
+  color: var(--ink-2);
+}
+.cal-status:empty {
+  display: none;
+}
+.cal-rows {
+  display: flex;
+  flex-direction: column;
+}
+.cal-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  min-height: 44px;
+  padding: var(--s2) 0;
+  border-bottom: 1px solid var(--line);
+  color: var(--ink);
+  text-decoration: none;
+}
+.cal-row:focus-visible {
+  outline: 2px solid var(--accent-text);
+  outline-offset: 2px;
+}
+.cal-row-poster {
+  position: relative;
+  flex: none;
+  width: 48px;
+  aspect-ratio: 2 / 3;
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--raised);
+}
+.cal-row-title {
+  min-width: 0;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}

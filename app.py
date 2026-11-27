@@ -62,6 +62,7 @@ from export import (EXPORT_COLUMNS, FORMULA_LEAD, TITLE_EXPORT_COLUMNS, Inventor
 from lists import ListError, WATCH_SOON, has_lists, pacific_today, list_out, all_lists, get_list_row  # noqa: F401
 from lists import find_list, title_lists, list_members, create_list, update_list, delete_list  # noqa: F401
 from lists import set_membership, clear_watch_soon  # noqa: F401
+from watched_days import parse_month, month_view  # noqa: F401
 
 
 # ===================================================================== split modules
@@ -69,7 +70,7 @@ from lists import set_membership, clear_watch_soon  # noqa: F401
 # so `app.X`, `from app import X` and `import app as matinee` work as before. A write to app.X (monkeypatch in the
 # tests, `matinee.TMDB_READ_TOKEN = ...` in ops/import_titles.py) also rebinds X in each split module that holds
 # it, so moved code reads the new value as it did when it lived here. Patch app.X, not the split module.
-_SPLIT_MODULES = ("settings", "common", "db", "clients", "images", "people", "browse", "export", "wishlist", "lists")
+_SPLIT_MODULES = ("settings", "common", "db", "clients", "images", "people", "browse", "export", "wishlist", "lists", "watched_days")
 
 
 class _AppModule(types.ModuleType):
@@ -435,6 +436,17 @@ def list_page(list_id, private):
     return jsonify(**list_out(row, pacific_today()), titles=titles)
 
 
+def calendar_page(private):
+    """The Calendar's month (watched_days.py). Titles and dates only, so both routes answer the same."""
+    today = pacific_today()
+    try:
+        year, month = parse_month(request.args.get("month"), today)
+    except ValueError as e:
+        return make_err(400, str(e))
+    return jsonify(month=f"{year:04d}-{month:02d}", today=today.isoformat(),
+                   days=month_view(db(), year, month, image_url))
+
+
 for prefix, private in (("/api", False), ("/admin/api", True)):
     def _wrap(fn, private=private):
         def f(*a, **kw):
@@ -451,6 +463,7 @@ for prefix, private in (("/api", False), ("/admin/api", True)):
     app.add_url_rule(f"{prefix}/copies", f"copies_{private}", _wrap(copies_index))
     app.add_url_rule(f"{prefix}/lists", f"lists_{private}", _wrap(lists_index))
     app.add_url_rule(f"{prefix}/lists/<int:list_id>", f"list_{private}", _wrap(list_page))
+    app.add_url_rule(f"{prefix}/calendar", f"calendar_{private}", _wrap(calendar_page))
 
 
 
