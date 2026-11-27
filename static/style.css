@@ -3032,7 +3032,10 @@ main#view {
   text-overflow: ellipsis;
 }
 .list-chip.is-season { border-color: var(--amber); color: var(--amber); }
-.list-edit-btn { min-height: 36px; }
+/* Lists button in the rating row (spec 2026-11-19-calendar-settings §5): a regular 44 px button after Clear;
+   the controls wrap, so the button drops below the slider when the row is full. */
+.rating-controls { flex-wrap: wrap; }
+.btn-title-lists { min-height: 44px; white-space: nowrap; touch-action: manipulation; }
 .list-chip:focus-visible,
 .list-toggle:focus-visible,
 .list-title-row:focus-visible {
