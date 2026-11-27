@@ -139,7 +139,9 @@ def test_tapping_a_day_lists_its_movies_with_working_links(seeded, browser, widt
     sheet = page.locator("#calendar-sheet")
     assert sheet.locator("#calendar-sheet-title").inner_text().strip().endswith("Saturday, November 14, 2026")
     rows = sheet.locator(".cal-row")
-    assert [rows.nth(i).inner_text().strip() for i in range(rows.count())] == ["The 40-Year-Old Virgin (2005)", "Elf (2003)"]
+    # The title span, not the whole row: a poster that fails to load is replaced by a placeholder carrying the title.
+    titles = sheet.locator(".cal-row .cal-row-title")
+    assert [titles.nth(i).inner_text().strip() for i in range(titles.count())] == ["The 40-Year-Old Virgin (2005)", "Elf (2003)"]
     assert rows.nth(0).get_attribute("href") == f"#/t/{ids['The 40-Year-Old Virgin']}"
     assert rows.nth(1).get_attribute("href") == f"#/t/{ids['Elf']}"
     assert all(rows.nth(i).bounding_box()["height"] >= 44 for i in range(2))
@@ -222,7 +224,7 @@ def test_a_failed_fetch_says_so(seeded, browser):
     page, errors = _open(browser, seeded[0], "#/")
     page.route("**/api/calendar*", lambda r: r.fulfill(status=500, content_type="application/json", body='{"error": "boom"}'))
     page.click("#btn-header-calendar")
-    page.wait_for_function("document.getElementById('calendar-status').textContent === 'boom'")
+    page.wait_for_function("document.getElementById('calendar-status')?.textContent === 'boom'")
     assert page.locator("#calendar-grid .cal-day").count() == 0 and errors == []
 
 
