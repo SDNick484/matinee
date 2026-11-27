@@ -88,7 +88,7 @@ def test_mcp_write_tools_dispatch_http(monkeypatch):
 
     # Test log_watch with notes
     client.log_watch(title_id=1, watched_date="2026-11-01", notes="Great flick")
-    assert calls[-1] == ("POST", "/admin/api/titles/1/watches", {"watched_date": "2026-11-01", "notes": "Great flick"})
+    assert calls[-1] == ("POST", "/admin/api/titles/1/watches", {"watched_date": "2026-11-01", "notes": "Great flick", "source": "mcp"})
 
     # Test search_tmdb
     res = client.search_tmdb(query="Matrix")
@@ -1172,7 +1172,7 @@ def test_log_watch_sends_date_bucket_only_when_given(monkeypatch):
     client.log_watch(42, watched_date="2026-11-10")
     assert "date_bucket" not in sent[-1]
     client.log_watch(42, date_bucket="over_10_years")
-    assert sent[-1] == {"watched_date": None, "date_bucket": "over_10_years"}
+    assert sent[-1] == {"watched_date": None, "date_bucket": "over_10_years", "source": "mcp"}
     monkeypatch.setattr(mcp_server._default_client, "_api_request", lambda m, p, d=None: sent.append(d) or {"ok": True})
     mcp_server.log_watch(title_id=42, date_bucket="over_10_years")
     assert sent[-1]["date_bucket"] == "over_10_years"
@@ -1874,3 +1874,31 @@ def test_watch_calendar_tool_function_and_instructions(test_env, monkeypatch):
     assert mcp_server.watch_calendar("2026-11") == CALENDAR_NOV
     for writes in (True, False):
         assert "watch_calendar" in mcp_server.instructions_for(writes)
+
+
+# ------------------------------------------------------------------ the rated default through Claude (issue 50)
+
+
+@pytest.mark.parametrize("tmdb_id, who", [(155, ["Nick", "Lauren", "Midge", "Alice", "Paige"]),   # PG-13: everyone
+                                          (194, ["Nick", "Lauren"])])                             # R: adults
+def test_log_watch_rated_default(test_env, monkeypatch, tmdb_id, who):
+    """Through log_watch PG-13 records everyone and R records the adults; naming the kids on an R movie wins."""
+    from conftest import seed_title
+    _seed_family(test_env)
+    tid = seed_title(db(), tmdb_id)
+    client = _admin_rest_client(monkeypatch)
+    res = client.log_watch(tid, watched_date="2026-11-10")
+    assert [p["name"] for p in client.list_people() if p["id"] in res["watch"]["attendees"]] == who
+    res = client.log_watch(tid, watched_date="2026-11-10", attendees=["Nick", "Midge"])
+    assert len(res["watch"]["attendees"]) == 2
+
+
+def test_log_watch_sends_the_mcp_source_and_the_instructions_say_what_it_records(monkeypatch):
+    client = mcp_server.MatineeClient(api_url="http://fake-host", api_key="k", db_path="")
+    sent = []
+    monkeypatch.setattr(client, "_api_request", lambda m, p, d=None: sent.append(d) or {"ok": True})
+    client.log_watch(42, watched_date="2026-11-10", attendees=["Midge"])
+    assert sent[-1]["source"] == "mcp"
+    for text in (mcp_server.SERVER_INSTRUCTIONS, mcp_server.log_watch.__doc__):
+        assert "R or NC-17" in text and "PG-13" in text
+    assert "R or NC-17" not in mcp_server.instructions_for("none")

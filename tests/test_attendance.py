@@ -28,8 +28,12 @@ def client(tmp_path, monkeypatch):
 
 @pytest.fixture
 def tk(client):
-    """The Dark Knight with no watches."""
-    return seed_title(db(), 155)
+    """The Dark Knight with no watches, its certification overridden to PG so a log without attendees records
+    everyone (the rated default is tested in test_people.py)."""
+    tid = seed_title(db(), 155)
+    db().execute("UPDATE titles SET certification_override = 'PG' WHERE id = ?", (tid,))
+    db().commit()
+    return tid
 
 
 @pytest.fixture

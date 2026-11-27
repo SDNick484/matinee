@@ -12,6 +12,7 @@ PERSON_KINDS = ("adult", "kid")
 PERSON_COLORS = ("green", "blue", "red", "pink", "purple")  # --p-user1 .. --p-user5 in the CSS
 MAX_ACTIVE_PEOPLE = 8
 RESERVED_PERSON_NAMES = ("everyone", "adults", "kids")  # words the audience grammar uses
+ADULT_CERTS = ("R", "PG-13", "NC-17")  # a log with no attendees records only the adults for these (G, PG, NR: everyone)
 
 
 def person_out(row):
@@ -89,14 +90,20 @@ def resolve_people(con, items):
     return ids
 
 
-def default_attendees(con, watched_date, date_bucket):
-    """Who a log without `attendees` records: every active person, or only the active adults for a watch more than
-    ten years old: the "10+ Years" bucket (ruling R21) or a date before today minus ten years (decision D2). That is
-    recommend.attendance_of, the rule an old unrecorded watch is read with. With nobody to record (no people, or no
-    active adult for an old watch) it is no rows, so the watch reads as assumed, as before people existed."""
+def default_attendees(con, watched_date, date_bucket, certification=None, via_mcp=False):
+    """Who a log without `attendees` records: every active person, or only the active adults when the watch is
+    more than ten years old (the "10+ Years" bucket, ruling R21, or a date before today minus ten years, decision D2:
+    recommend.attendance_of, the rule an old unrecorded watch is read with) or when the title's effective
+    `certification` (override, else TMDB) is in ADULT_CERTS. A log through Claude (`via_mcp`) treats PG-13 as
+    everyone. A rating-only default with no active adult falls back to every active person; an old watch with
+    nobody to record is no rows, so it reads as assumed, as before people existed."""
     active = list_people(con, active_only=True)
     old = attendance_of({"watched_date": watched_date, "date_bucket": date_bucket}, False) == "assumed_adults"
-    return [p["id"] for p in active if not old or p["kind"] == "adult"]
+    rated = certification in ADULT_CERTS and not (via_mcp and certification == "PG-13")
+    adults = [p["id"] for p in active if p["kind"] == "adult"]
+    if old or (rated and adults):
+        return adults
+    return [p["id"] for p in active]
 
 
 def set_attendees(con, watch_id, person_ids):
