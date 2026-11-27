@@ -3,6 +3,7 @@
 Scenario: The Dark Knight (TMDB 155) has a 4K UHD disc and a Digital HD copy on Movies Anywhere; the digital copy
 gets a YouTube id once the owner pastes a link (the ids here are made up).
 """
+import re
 import sqlite3
 
 import pytest
@@ -34,8 +35,17 @@ def v12_database(path):
     seed = sqlite3.connect(path)
     seed.executescript(matinee.SCHEMA)
     matinee.migrate(seed)
-    seed.execute("DROP INDEX copies_youtube_id")
-    seed.execute("ALTER TABLE copies DROP COLUMN youtube_id")
+    # Rebuild the (still empty) copies table from its own DDL minus the v13 lines. ALTER TABLE ... DROP COLUMN would
+    # be shorter, but SQLite before 3.38 trips over the comment it leaves at the end of the definition.
+    ddl = seed.execute("SELECT sql FROM sqlite_master WHERE name = 'copies'").fetchone()[0]
+    v12_ddl, cut = re.subn(r",\s*(--[^\n]*\n\s*)?youtube_id TEXT\s*\)$", "\n)", ddl)
+    assert cut == 1, ddl
+    indexes = [r[0] for r in seed.execute("SELECT sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'copies' "
+                                          "AND sql IS NOT NULL AND name != 'copies_youtube_id'")]
+    seed.execute("DROP TABLE copies")
+    seed.execute(v12_ddl)
+    for sql in indexes:
+        seed.execute(sql)
     seed.execute("INSERT OR REPLACE INTO meta VALUES ('schema', '12')")
     seed.execute("""INSERT INTO titles (id, tmdb_id, imdb_id, title, sort_title, search_text, year, fetched_at)
                     VALUES (1, 155, 'tt0468569', 'The Dark Knight', 'dark knight', 'the dark knight', 2008,
