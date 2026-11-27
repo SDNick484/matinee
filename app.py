@@ -1405,7 +1405,8 @@ def add_watch(title_id):
 @editor_required
 def play_title(title_id):
     """Start a title on the Family Room TV through Home Assistant, then log today's watch (spec 2026-11-26
-    play-on-tv §6.3-6.4). Body {"mode": "youtube" | "disc", "attendees"?: [person ids or names]}. Nothing is written
+    play-on-tv §6.3-6.4; Fandango at Home, 2026-11-27 design §4). Body {"mode": "fandango" | "youtube" | "disc",
+    "attendees"?: [person ids or names]}. Nothing is written
     unless Home Assistant takes the request, and the webhook URL never reaches the answer or the log."""
     if not play.enabled():
         abort(make_err(503, "Play on TV isn't set up."))
@@ -1415,16 +1416,19 @@ def play_title(title_id):
         abort(make_err(404, "No such title"))
     data = request.get_json(silent=True)
     if not isinstance(data, dict) or data.get("mode") not in play.MODES:
-        abort(make_err(400, "mode must be youtube or disc."))
+        abort(make_err(400, "mode must be fandango, youtube or disc."))
     mode, name = data["mode"], row["title"]
     attendees = resolve_people(con, data["attendees"]) if "attendees" in data else None  # 400 before anything is sent
     ways = play.ways(con, title_id)
     if mode == "disc" and not ways["disc"]:
         abort(make_err(409, f"We don't own {name} on disc."))
+    content_id = (play.youtube_id_for(con, title_id) if mode == "youtube"
+                  else play.fandango_id_for(con, title_id) if mode == "fandango" else None)
     try:
-        body = play.payload(mode, name, play.youtube_id_for(con, title_id) if mode == "youtube" else None)
+        body = play.payload(mode, name, content_id)
     except ValueError:  # no copy with a well-formed id (a stale page, or one written straight into the table)
-        abort(make_err(409, f"{name} has no YouTube link."))
+        abort(make_err(409, f"{name} has no YouTube link." if mode == "youtube"
+                       else f"{name} has no Fandango at Home link."))
     try:
         play.post_play(body, app.logger)  # waits up to play.TIMEOUT seconds; no lock is held meanwhile
     except play.PlayFailed:
