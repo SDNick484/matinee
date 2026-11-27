@@ -7,6 +7,7 @@ import csv
 import io
 import json
 import re
+import sqlite3
 import unicodedata
 import urllib.parse
 
@@ -276,3 +277,30 @@ def plan_links(con, rows) -> dict:
             continue
         link.append((copy["id"], vid))
     return {"link": link, "already_linked": already, "not_loaded": refused}
+
+
+class LoadConflict(Exception):
+    """The database refused a write while loading (an id taken since the plan was made); nothing was written."""
+
+
+def load_links(con, rows) -> dict:
+    """plan_links, then write every planned link in one transaction: all of them or none. The transaction starts
+    before the plan is read, so what is planned is what is written. An id is only ever written to a copy that has
+    none. Raises LoadConflict, with nothing written, when the database refuses a write. Commits."""
+    con.commit()                                    # nothing of the caller's is pending; BEGIN needs a clean slate
+    con.execute("BEGIN IMMEDIATE")
+    try:
+        plan = plan_links(con, rows)
+        for copy_id, video_id in plan["link"]:
+            done = con.execute("UPDATE copies SET youtube_id = ?, updated_at = CURRENT_TIMESTAMP "
+                               "WHERE id = ? AND youtube_id IS NULL", (video_id, copy_id))
+            if done.rowcount != 1:
+                raise LoadConflict("a copy changed while the list was loading")
+        con.commit()
+    except sqlite3.IntegrityError as e:
+        con.rollback()
+        raise LoadConflict("a YouTube id was taken while the list was loading") from e
+    except BaseException:
+        con.rollback()
+        raise
+    return plan
