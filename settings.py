@@ -58,6 +58,9 @@ OMDB_API_KEY = os.environ.get("OMDB_API_KEY", "").strip()
 # is its only credential, so it is never logged (the host only), never returned by a route, never put in a payload.
 HA_WEBHOOK_URL = os.environ.get("HA_WEBHOOK_URL", "").strip()
 HA_WEBHOOK_TIMEOUT = 3  # seconds per socket operation; the request runs on a daemon thread
+# Home Assistant webhook that starts a film on the Family Room TV (play.py); empty = Play is off. A SECRET like
+# HA_WEBHOOK_URL: never logged (the host only), never returned by a route, never put in a payload.
+HA_PLAY_WEBHOOK_URL = os.environ.get("HA_PLAY_WEBHOOK_URL", "").strip()
 TMDB_READ_TOKEN = os.environ.get("TMDB_READ_TOKEN", "").strip()
 TMDB_API = "https://api.themoviedb.org/3"
 TMDB_IMG = "https://image.tmdb.org/t/p"

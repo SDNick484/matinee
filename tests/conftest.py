@@ -5,6 +5,9 @@ from pathlib import Path
 # Ensure DATA_DIR is isolated to a clean temp directory during pytest collection
 if "DATA_DIR" not in os.environ or not os.environ["DATA_DIR"]:
     os.environ["DATA_DIR"] = tempfile.mkdtemp(prefix="matinee-test-conftest-")
+# Play on TV stays off unless a test turns it on (monkeypatch app.HA_PLAY_WEBHOOK_URL): set before app is imported,
+# so neither the developer's environment nor /etc/conf.d/matinee or .env (which fill only unset keys) can turn it on.
+os.environ["HA_PLAY_WEBHOOK_URL"] = ""
 
 
 FIXTURES_TMDB = Path(__file__).parent / "fixtures" / "tmdb"

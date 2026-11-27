@@ -176,3 +176,217 @@ remove the `conditions:` block to react to every film. Other fields work the sam
 - **`… failed: TimeoutError`**: Home Assistant did not answer within 3 seconds. The watch was still saved.
 - **It works at lunch but not on movie night.** The Matinee host's time zone is probably UTC: see the note on "today" in section 3a.
 - Logging a film for an earlier day, with a bucket, or with no date never fires (section 3a).
+
+## 7. Play on the Family Room TV
+
+The other direction, and separate from the movie log above: with `HA_PLAY_WEBHOOK_URL` set, an editor can ask Home
+Assistant to start an owned film on the Family Room TV, on YouTube for a digital copy with a YouTube link, or with the
+disc activity for a disc. Matinee posts to its own webhook (not the movie-log one), waits up to 5 seconds for the
+answer, and only when Home Assistant takes the request (any 2xx) adds the film to watch history for today (one watch
+per film per day; see below). With the setting empty, the default, nothing about Play shows and the play route
+answers 503.
+
+### What Home Assistant receives
+
+`POST`, `Content-Type: application/json`, one request per press. A YouTube copy:
+
+```json
+{"event": "matinee_play", "mode": "stream", "source": "YouTube", "title": "Brooklyn", "content_id": "dQw4w9WgXcQ"}
+```
+
+A disc:
+
+```json
+{"event": "matinee_play", "mode": "disc", "source": "AV Receiver", "title": "Heat"}
+```
+
+`content_id` is the copy's YouTube video id: exactly 11 letters, digits, `_` or `-`, checked again just before it is
+sent, so nothing else ever reaches Home Assistant. A disc payload has no `content_id` key. Nothing editor-only is sent:
+no notes, no people, no copy ids, and never the webhook URL.
+
+If Home Assistant can't be reached, takes longer than 5 seconds or answers outside 200-299, the editor gets "Couldn't
+reach the TV. Brooklyn wasn't started.", nothing is written, and `/var/log/matinee.log` gets one line naming the
+host and the kind of failure (`Play on TV: Home Assistant (host 192.168.1.100) failed: TimeoutError`, or `answered
+HTTP 404`), never the URL.
+
+**The watch.** A press that Home Assistant takes logs a watch dated today in America/Los_Angeles (the household's
+day, whatever the host's clock says), with no notes, takes the film off Watch Soon and sends the movie-log event of
+section 4 when `HA_WEBHOOK_URL` is set, exactly as **+ Watched Today** does. When the film already has a watch dated
+today (from an earlier press or logged by hand), the TV still starts and nothing is added. Who watched: everyone for
+G, PG and PG-13; the adults for R, NC-17, NR or no rating (the editor's rating override counts); or the people the
+request names.
+
+### Set it up
+
+Two things in Home Assistant, a script that does the work and an automation that receives the webhook. If It's a
+Wonderful App already plays on this TV, the script exists (`script.wonderful_play_on_tv`): don't change it, just add
+the automation. The entity names below are placeholders: `media_player.family_room_tv` (the TV, from the LG webOS TV
+integration), `switch.watch_tv` and `switch.watch_a_bluray` (the remote's activities as switches).
+
+1. **The script** (**Settings → Automations & Scenes → Scripts → Add script → Edit in YAML**). Save it as "Play on the
+   Family Room TV" and make sure its entity id is `script.wonderful_play_on_tv` (**Settings → Devices & services →
+   Entities**). What the automation needs from it: three fields, `mode` (`stream` or `disc`), `source` (the TV input
+   name) and `content_id` (optional). For a stream it starts Watch TV if it is off, waits up to 60 seconds for the TV
+   to be on, then, when `source` is `YouTube` and `content_id` is 1 to 64 letters, digits, `_` or `-`, launches the
+   YouTube app on that video; otherwise it selects the input. For a disc it starts Watch a Bluray, which is trusted to
+   put the TV on `AV Receiver`. The script checks `content_id` itself. `mode: restart` lets a second press replace
+   the first.
+
+   ```yaml
+   alias: "Play on the Family Room TV"
+   mode: restart
+   fields:
+     mode:
+       description: "stream to open an app, disc to start the Blu-ray"
+       required: true
+       selector:
+         select:
+           options:
+             - stream
+             - disc
+     source:
+       description: "The TV input to select, e.g. YouTube or AV Receiver"
+       required: true
+       selector:
+         text:
+     content_id:
+       description: "Optional: the title to start in the app, e.g. a YouTube video id. Empty just opens the app"
+       selector:
+         text:
+   sequence:
+     - choose:
+         - conditions:
+             - condition: template
+               value_template: "{{ mode == 'stream' }}"
+           sequence:
+             - variables:
+                 activity_started: "{{ not is_state('switch.watch_tv', 'on') }}"
+             - if:
+                 - condition: template
+                   value_template: "{{ activity_started }}"
+               then:
+                 - action: switch.turn_on
+                   target:
+                     entity_id: switch.watch_tv
+             - wait_template: >-
+                 {{ states('media_player.family_room_tv') not in ['off', 'unavailable', 'unknown'] }}
+               timeout: 60
+               continue_on_timeout: false
+             - if:
+                 - condition: template
+                   value_template: "{{ activity_started }}"
+               then:
+                 - delay:
+                     seconds: 5
+             - choose:
+                 - conditions:
+                     - condition: template
+                       value_template: "{{ content_id is not none and (content_id | default('')) | string is match('^[0-9]{1,12}$') and source == 'Netflix' }}"
+                   sequence:
+                     - action: webostv.command
+                       target:
+                         entity_id: media_player.family_room_tv
+                       data:
+                         command: system.launcher/launch
+                         payload:
+                           id: netflix
+                           contentId: "m=https://www.netflix.com/watch/{{ content_id }}&source_type=4"
+                 - conditions:
+                     - condition: template
+                       value_template: "{{ content_id is not none and (content_id | default('')) | string is match('^[A-Za-z0-9_-]{1,64}$') and source == 'YouTube' }}"
+                   sequence:
+                     - action: webostv.command
+                       target:
+                         entity_id: media_player.family_room_tv
+                       data:
+                         command: system.launcher/launch
+                         payload:
+                           id: youtube.leanback.v4
+                           contentId: "v={{ content_id }}"
+               default:
+                 - action: media_player.select_source
+                   target:
+                     entity_id: media_player.family_room_tv
+                   data:
+                     source: "{{ source }}"
+         - conditions:
+             - condition: template
+               value_template: "{{ mode == 'disc' }}"
+           sequence:
+             - if:
+                 - condition: not
+                   conditions:
+                     - condition: state
+                       entity_id: switch.watch_a_bluray
+                       state: "on"
+               then:
+                 - action: switch.turn_on
+                   target:
+                     entity_id: switch.watch_a_bluray
+   ```
+
+   The Netflix branch is for It's a Wonderful App; Matinee only sends `YouTube` with a `content_id`, and
+   `AV Receiver` without one.
+
+2. **The automation** (**Settings → Automations & scenes → Create automation → Edit in YAML**), with its own webhook
+   id. It checks the payload and starts the script with `script.turn_on`, which returns at once: calling the script as
+   an action would hold the webhook's answer for the script's whole run, and Matinee waits only 5 seconds.
+   `local_only: true` limits the webhook to your own network, so Matinee must reach Home Assistant by its LAN address
+   (not through Cloudflare). Replace `<a long random id>` with a long random string of your own (`openssl rand -hex
+   24` makes one); it is the only credential:
+
+   ```yaml
+   alias: "Matinee plays on the Family Room TV"
+   mode: queued
+   triggers:
+     - trigger: webhook
+       webhook_id: "<a long random id>"
+       allowed_methods:
+         - POST
+       local_only: true
+   conditions:
+     - condition: template
+       value_template: >-
+         {{ trigger.json is defined
+            and trigger.json.event == 'matinee_play'
+            and trigger.json.mode in ['stream', 'disc']
+            and (trigger.json.source | default('')) | length > 0
+            and (trigger.json.content_id is not defined
+                 or (trigger.json.content_id is string
+                     and trigger.json.content_id is match('^[A-Za-z0-9_-]{1,64}$'))) }}
+   actions:
+     - action: script.turn_on
+       target:
+         entity_id: script.wonderful_play_on_tv
+       data:
+         variables:
+           mode: "{{ trigger.json.mode }}"
+           source: "{{ trigger.json.source }}"
+           content_id: "{{ trigger.json.content_id | default('') }}"
+   ```
+
+3. **Tell Matinee where it is.** The URL is a secret like `HA_WEBHOOK_URL`: it goes in `/etc/conf.d/matinee` on the
+   Matinee host only, never in a repo, and Matinee never logs, returns or sends it. It is given to the Flask service
+   only, never to `matinee-mcp`.
+
+   ```sh
+   vim /etc/conf.d/matinee        # HA_PLAY_WEBHOOK_URL=http://192.168.1.100:8123/api/webhook/<a long random id>
+   rc-service matinee restart
+   ```
+
+### Try it
+
+From a machine on the LAN. **This really starts the TV**, so do it when that's welcome. The id below is made up: use
+the YouTube id of a film you own there, or send the disc payload instead.
+
+```sh
+curl -s -i -X POST 'http://192.168.1.100:8123/api/webhook/<a long random id>' \
+  -H 'Content-Type: application/json' \
+  -d '{"event": "matinee_play", "mode": "stream", "source": "YouTube", "title": "Brooklyn", "content_id": "dQw4w9WgXcQ"}'
+```
+
+Home Assistant answers an empty `200`. **A `200` doesn't prove the webhook id is right**: Home Assistant answers `200`
+to an id it doesn't know too, and Matinee can't tell the difference (it doesn't listen for the TV). So after the first
+play, open **Settings → Automations → Matinee plays on the Family Room TV → Traces**: a trace means the id matched; no
+trace means fix the id in the automation or in `HA_PLAY_WEBHOOK_URL`. The script's own **Traces** show which branch
+ran and whether the 60 second wait timed out. A `content_id` with anything else in it is stopped by the condition.

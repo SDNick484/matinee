@@ -66,6 +66,8 @@ from watched_days import parse_month, month_view  # noqa: F401
 from youtube import YOUTUBE_ID_RE, youtube_id_ok, parse_youtube_link  # noqa: F401
 from youtube import LoadConflict, load_links, plan_links, read_library  # noqa: F401
 from export import not_loaded_csv  # noqa: F401
+from settings import HA_PLAY_WEBHOOK_URL  # noqa: F401
+import play  # Play on the Family Room TV: new code, not moved out of here, so the route uses play.<name>
 
 
 # ===================================================================== split modules
@@ -73,7 +75,7 @@ from export import not_loaded_csv  # noqa: F401
 # so `app.X`, `from app import X` and `import app as matinee` work as before. A write to app.X (monkeypatch in the
 # tests, `matinee.TMDB_READ_TOKEN = ...` in ops/import_titles.py) also rebinds X in each split module that holds
 # it, so moved code reads the new value as it did when it lived here. Patch app.X, not the split module.
-_SPLIT_MODULES = ("settings", "common", "db", "clients", "images", "people", "browse", "export", "wishlist", "lists", "watched_days", "youtube")
+_SPLIT_MODULES = ("settings", "common", "db", "clients", "images", "people", "browse", "export", "wishlist", "lists", "watched_days", "youtube", "play")
 
 
 class _AppModule(types.ModuleType):
@@ -1270,6 +1272,16 @@ def fire_watch_event(con, title_id, watched_date):
         app.logger.warning("Home Assistant webhook (host %s) not sent: %s", _ha_host(url), type(e).__name__)
 
 
+def insert_watch(con, title_id, watched_date, notes, date_bucket, attendees, clear_soon):
+    """Insert a watch with its attendance and, when `clear_soon`, take the title off Watch Soon. Shared by the watch
+    route and Play. Returns (watch id, the lists it left); the caller commits or rolls back."""
+    cur = con.execute("INSERT INTO watches(title_id, watched_date, notes, date_bucket) VALUES (?, ?, ?, ?)",
+                      (title_id, watched_date, notes, date_bucket))
+    removed_from = clear_watch_soon(con, title_id) if clear_soon else []
+    set_attendees(con, cur.lastrowid, attendees)
+    return cur.lastrowid, removed_from
+
+
 @app.post("/admin/api/titles/<int:title_id>/watches")
 @editor_required
 def add_watch(title_id):
@@ -1320,12 +1332,10 @@ def add_watch(title_id):
         attendees = default_attendees(con, watched_date, date_bucket, row["certification_override"] or row["certification"],
                                       via_mcp=data.get("source") == "mcp")
     try:
-        cur = con.execute("INSERT INTO watches(title_id, watched_date, notes, date_bucket) VALUES (?, ?, ?, ?)",
-                          (title_id, watched_date, notes, date_bucket))
         # A watch with a real date takes the title off Watch Soon in the same transaction (spec 2026-11-12-lists
         # decision 10). A bucket or no date is back-filled history, and seasonal and custom lists never change.
-        removed_from = clear_watch_soon(con, title_id) if explicit_date and not date_bucket else []
-        set_attendees(con, cur.lastrowid, attendees)
+        watch_id, removed_from = insert_watch(con, title_id, watched_date, notes, date_bucket, attendees,
+                                              clear_soon=explicit_date and not date_bucket)
         con.commit()
     except Exception:
         con.rollback()
@@ -1335,7 +1345,58 @@ def add_watch(title_id):
     # Only the + Watched Today button sends live: true (json true, not a string); Log Date and MCP never do.
     if data.get("live") is True and explicit_date and not date_bucket and watched_date == dt.date.today().isoformat():
         fire_watch_event(con, title_id, watched_date)
-    return jsonify(ok=True, watch=watch_response(con, cur.lastrowid, title_id), removed_from=removed_from)
+    return jsonify(ok=True, watch=watch_response(con, watch_id, title_id), removed_from=removed_from)
+
+
+@app.post("/admin/api/titles/<int:title_id>/play")
+@editor_required
+def play_title(title_id):
+    """Start a title on the Family Room TV through Home Assistant, then log today's watch (spec 2026-11-26
+    play-on-tv §6.3-6.4). Body {"mode": "youtube" | "disc", "attendees"?: [person ids or names]}. Nothing is written
+    unless Home Assistant takes the request, and the webhook URL never reaches the answer or the log."""
+    if not play.enabled():
+        abort(make_err(503, "Play on TV isn't set up."))
+    con = db()
+    row = con.execute("SELECT id, title FROM titles WHERE id=?", (title_id,)).fetchone()
+    if not row:
+        abort(make_err(404, "No such title"))
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or data.get("mode") not in play.MODES:
+        abort(make_err(400, "mode must be youtube or disc."))
+    mode, name = data["mode"], row["title"]
+    attendees = resolve_people(con, data["attendees"]) if "attendees" in data else None  # 400 before anything is sent
+    ways = play.ways(con, title_id)
+    if mode == "disc" and not ways["disc"]:
+        abort(make_err(409, f"We don't own {name} on disc."))
+    try:
+        body = play.payload(mode, name, play.youtube_id_for(con, title_id) if mode == "youtube" else None)
+    except ValueError:  # no copy with a well-formed id (a stale page, or one written straight into the table)
+        abort(make_err(409, f"{name} has no YouTube link."))
+    try:
+        play.post_play(body, app.logger)  # waits up to play.TIMEOUT seconds; no lock is held meanwhile
+    except play.PlayFailed:
+        abort(make_err(502, f"Couldn't reach the TV. {name} wasn't started."))
+    # Home Assistant took it: log the watch, one per film per day. BEGIN IMMEDIATE takes the write lock before
+    # looking, so two presses at once can't both find no watch and both add one.
+    today = pacific_today().isoformat()
+    if con.in_transaction:
+        con.commit()
+    con.execute("BEGIN IMMEDIATE")
+    try:
+        watch_added = not con.execute("SELECT 1 FROM watches WHERE title_id=? AND watched_date=?",
+                                      (title_id, today)).fetchone()
+        if watch_added:
+            insert_watch(con, title_id, today, None, None,
+                         play.attendees_for(con, title_id) if attendees is None else attendees, clear_soon=True)
+        con.commit()
+    except Exception:
+        con.rollback()
+        raise
+    if watch_added:  # the movie-log event, as + Watched Today sends it, dated by the household's day
+        fire_watch_event(con, title_id, today)
+    message = f"Starting {name} on {play.TV_NAME}." + (" Added to watch history." if watch_added else "")
+    return jsonify(ok=True, mode=mode, title=name, message=message, disc=ways["disc"] if mode == "disc" else None,
+                   watch_added=watch_added, detail=title_detail(title_id, True))
 
 
 @app.put("/admin/api/titles/<int:title_id>/watches/<int:watch_id>/attendees")

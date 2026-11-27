@@ -4,7 +4,7 @@ detail), location paths, the poster-grid query and cards, facets, stats and reco
 Split out of app.py."""
 import datetime as dt
 
-from flask import abort, jsonify, request
+from flask import abort, g, has_app_context, jsonify, request
 
 from recommend import (FORMAT_ORDER, SEEN_CTE, ParamError, has_people, parse_params, recommend, resolve_audience,
                        sorted_formats, title_seen_by, watch_attendance)
@@ -14,6 +14,7 @@ from db import FORMATS, SERVICES, db
 from images import image_name, image_url, poster_file_of
 from wishlist import get_want, wishes_for_title
 from lists import pacific_today, title_lists
+import play
 
 
 # ======================================================================= serializers
@@ -132,6 +133,14 @@ def copy_out(r, private, loc_map=None):
     return d
 
 
+def play_shown(private):
+    """Whether an answer's `play` is filled in: only for an editor who can press it (the read key can't) while the
+    play setting is on. Public answers carry no `play` key at all; the others carry None when this is False."""
+    if not (private and play.enabled()):
+        return False
+    return not (has_app_context() and getattr(g, "editor", None) == "read-key")
+
+
 def watch_out(r, private):
     d = dict(r)
     if not private:
@@ -178,6 +187,7 @@ def title_detail(title_id, private):
         d["seen_by"] = title_seen_by(con, title_id)
         d["want"] = get_want(con, title_id)           # editors only, like attendance: never in a public response
         d["wishes"] = wishes_for_title(con, title_id)
+        d["play"] = play.ways(con, title_id, loc_map) if play_shown(True) else None  # editors only, §6.2
     else:
         d["watches"] = [watch_out(w, False) for w in watches]
     d["last_watched"] = watches[0]["watched_date"] if watches else None
@@ -434,6 +444,10 @@ def list_titles(private):
     rows = db().execute(
         f"""{cte}{CARD_SELECT} WHERE {' AND '.join(where)} ORDER BY {SORTS[sort]}""", args).fetchall()
     titles = [_card(r) for r in rows]
+    if private:  # editors only, §6.2: one query for every row, not one per title
+        ways = play.ways_for(db(), [t["id"] for t in titles]) if play_shown(True) else {}
+        for t in titles:
+            t["play"] = ways.get(t["id"])
     return jsonify(titles=titles, count=len(titles), sort=sort)
 
 

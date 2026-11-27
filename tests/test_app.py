@@ -1150,6 +1150,8 @@ def test_title_cards_order_and_copies():
                                    "location_path": None}]
     rows = {r["id"]: r for r in c.get("/admin/api/titles").get_json()["titles"]}
     for card in cards:
+        # an editors' grid row is the card plus `play` (Play on TV, null while HA_PLAY_WEBHOOK_URL is empty)
+        assert rows[card["id"]].pop("play") is None
         assert {k: v for k, v in card.items() if k != "copies"} == rows[card["id"]]
     assert matinee.title_cards(con, []) == []
     con.close()
