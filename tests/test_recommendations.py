@@ -244,7 +244,7 @@ def test_titles_unseen_by_with_no_people_is_400(client):
     seed_title(db(), 155)
     res = client.get("/admin/api/titles?unseen_by=kids")
     assert res.status_code == 400
-    assert res.get_json() == {"error": "No people are set up yet. Add them under People in the admin view."}
+    assert res.get_json() == {"error": "No people are set up yet. Add them under People in Settings."}
 
 
 def test_titles_attendance_unknown(client, family):
