@@ -190,6 +190,12 @@ Take the collection out as a spreadsheet: one row per owned copy, so *The Dark K
 
 ---
 
+## Load a list of owned YouTube films
+
+If you own films on YouTube, one editor-only request links them to your digital copies: `POST /admin/api/youtube-links` with a JSON array or a CSV of `title, year, video_id, play_link` (add `?dry_run=1` to change nothing, `?format=csv` to get the rows that did not load as a spreadsheet). A row links only when it matches exactly one digital copy by title and the same year and that copy has no id yet; everything else comes back with a reason, and an id already on a copy is never replaced. For example: `curl -sS -X POST -H "Authorization: Bearer $MATINEE_API_KEY" -H 'Content-Type: text/csv' --data-binary @my-youtube-films.csv 'https://movies.example.com/admin/api/youtube-links?dry_run=1&format=csv' -o not-loaded.csv`. [docs/youtube-links.md](docs/youtube-links.md) shows the file, the dry run and the real load, and what to do about each reason. Your list is personal: keep it out of any repository.
+
+---
+
 ## Model Context Protocol (MCP) & Headless API
 
 Matinee includes an official Python **Model Context Protocol (MCP)** server (`mcp_server.py`) and headless API token authentication for AI assistants like Claude Desktop and Antigravity:
