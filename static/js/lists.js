@@ -22,24 +22,29 @@ import { closeModal } from "./forms.js";
   }
 
   // ================================================================= Title page
-  // One chip per list the title is on (anyone can tap one to see the list), plus the editor's Lists button.
+  // One chip per list the title is on (anyone can tap one to see the list). No lists, no row.
   function listChipsHTML(title) {
     const lists = Array.isArray(title.lists) ? title.lists : [];
-    if (!lists.length && !isAdmin) return "";
+    if (!lists.length) return "";
     const chips = lists
       .map((l) => `<button type="button" class="chip list-chip${l.in_season ? " is-season" : ""}" data-list-id="${Number(l.id)}" aria-haspopup="dialog" aria-label="${esc(l.name)} list${l.in_season ? ", in season" : ""}">${icon("list")}${esc(l.name)}</button>`)
       .join("");
-    const edit = isAdmin
-      ? `<button type="button" class="btn btn-sm btn-ghost list-edit-btn" id="btn-title-lists" aria-haspopup="dialog">${icon("list")} Lists</button>`
-      : "";
-    return `<div class="list-chips" id="list-chips" role="group" aria-label="Lists">${chips}${edit}</div>`;
+    return `<div class="list-chips" id="list-chips" role="group" aria-label="Lists">${chips}</div>`;
   }
 
-  // onChange runs after the membership sheet closes having saved something (the title page re-renders).
-  function bindListChips(container, title, onChange) {
+  // The editor's Lists button, rendered by detail.js in the rating row (spec 2026-11-19-calendar-settings §5).
+  function listsButtonHTML() {
+    return `<button type="button" class="btn btn-sm btn-title-lists" id="btn-title-lists" aria-haspopup="dialog">${icon("list")} Lists</button>`;
+  }
+
+  function bindListChips(container) {
     container.querySelectorAll(".list-chip").forEach((b) => {
       b.addEventListener("click", () => openListSheet(Number(b.dataset.listId)));
     });
+  }
+
+  // onChange runs after the membership sheet closes having saved something (the title page re-renders).
+  function bindListsButton(container, title, onChange) {
     container.querySelector("#btn-title-lists")?.addEventListener("click", () => openMembershipSheet(title, onChange));
   }
 
@@ -302,4 +307,4 @@ import { closeModal } from "./forms.js";
     await renderManager();
   }
 
-export { bindListChips, listChipsHTML, openListsManagerModal };
+export { bindListChips, bindListsButton, listChipsHTML, listsButtonHTML, openListsManagerModal };

@@ -148,3 +148,45 @@ def test_lists_manager_in_the_admin_header(server, browser):
             assert button.bounding_box()["height"] >= 44, button.inner_text()
     _no_hscroll(page, 412)
     assert errors == []
+
+
+def test_lists_button_is_a_regular_button_at_the_end_of_the_rating_row(server, browser):
+    ids = _seed()
+    page, errors = _page(browser, f"{server}/admin#/t/{ids['paddington']}")
+    button = page.locator("#rating-widget .rating-controls #btn-title-lists")
+    assert button.count() == 1
+    classes = button.get_attribute("class").split()
+    assert "btn" in classes and "btn-sm" in classes and "btn-ghost" not in classes
+    assert button.inner_text().strip() == "Lists"
+    assert button.bounding_box()["height"] >= 44
+    # after the rating controls: it comes last in its row, after the Clear button
+    assert page.evaluate("() => { const c = document.querySelector('#rating-widget .rating-controls');"
+                         " return c.lastElementChild.id === 'btn-title-lists'; }")
+    assert errors == []
+
+
+def test_lists_button_opens_the_sheet_and_watch_soon_shows_as_a_chip(server, browser):
+    ids = _seed()
+    page, errors = _page(browser, f"{server}/admin#/t/{ids['paddington']}")
+    assert page.locator("#list-chips").count() == 0                    # on no list yet: no chip row
+    page.click("#btn-title-lists")
+    dialog = page.locator(".list-membership-dialog")
+    dialog.wait_for()
+    dialog.locator('.list-toggle[data-list-id="%d"]' % ids["soon"]).click()
+    page.wait_for_selector('.list-toggle[data-list-id="%d"][aria-pressed="true"]' % ids["soon"])
+    page.click("#btn-modal-cancel")
+    page.wait_for_selector("#list-chips .list-chip")                   # the title page re-rendered
+    assert page.locator("#list-chips .list-chip").inner_text().strip() == "Watch Soon"
+    assert page.locator("#rating-widget #btn-title-lists").count() == 1
+    assert errors == []
+
+
+def test_rating_row_with_the_lists_button_does_not_scroll_at_360_or_412(server, browser):
+    ids = _seed(LONG)
+    for width in (412, 360):
+        page, errors = _page(browser, f"{server}/admin#/t/{ids['elf']}", width)
+        box = page.locator("#rating-widget #btn-title-lists").bounding_box()
+        assert box["x"] >= 0 and box["x"] + box["width"] <= width, box
+        _no_hscroll(page, width)
+        assert errors == []
+        page.close()
