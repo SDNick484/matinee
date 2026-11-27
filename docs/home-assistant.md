@@ -180,15 +180,22 @@ remove the `conditions:` block to react to every film. Other fields work the sam
 ## 7. Play on the Family Room TV
 
 The other direction, and separate from the movie log above: with `HA_PLAY_WEBHOOK_URL` set, an editor can ask Home
-Assistant to start an owned film on the Family Room TV, on YouTube for a digital copy with a YouTube link, or with the
-disc activity for a disc. Matinee posts to its own webhook (not the movie-log one), waits up to 5 seconds for the
+Assistant to start an owned film on the Family Room TV: on Fandango at Home for a digital copy with a Fandango at Home
+link (the primary way), on YouTube for a digital copy with a YouTube link, or with the disc activity for a disc. Matinee posts to its own webhook (not the movie-log one), waits up to 5 seconds for the
 answer, and only when Home Assistant takes the request (any 2xx) adds the film to watch history for today (one watch
 per film per day; see below). With the setting empty, the default, nothing about Play shows and the play route
 answers 503.
 
 ### What Home Assistant receives
 
-`POST`, `Content-Type: application/json`, one request per press. A YouTube copy:
+`POST`, `Content-Type: application/json`, one request per press. A Fandango at Home copy (the number at the end of
+the film's `athome.fandango.com/content/browse/details/<name>/<number>` page):
+
+```json
+{"event": "matinee_play", "mode": "stream", "source": "Fandango at Home", "title": "The Addams Family", "content_id": "15429"}
+```
+
+A YouTube copy:
 
 ```json
 {"event": "matinee_play", "mode": "stream", "source": "YouTube", "title": "Brooklyn", "content_id": "dQw4w9WgXcQ"}
@@ -200,8 +207,8 @@ A disc:
 {"event": "matinee_play", "mode": "disc", "source": "AV Receiver", "title": "Heat"}
 ```
 
-`content_id` is the copy's YouTube video id: exactly 11 letters, digits, `_` or `-`, checked again just before it is
-sent, so nothing else ever reaches Home Assistant. A disc payload has no `content_id` key. Nothing editor-only is sent:
+`content_id` is the copy's Fandango at Home id (1 to 12 digits) or YouTube video id (exactly 11 letters, digits, `_`
+or `-`), checked again just before it is sent, so nothing else ever reaches Home Assistant. A disc payload has no `content_id` key. Nothing editor-only is sent:
 no notes, no people, no copy ids, and never the webhook URL.
 
 If Home Assistant can't be reached, takes longer than 5 seconds or answers outside 200-299, the editor gets "Couldn't
@@ -219,8 +226,11 @@ request names.
 ### Set it up
 
 Two things in Home Assistant, a script that does the work and an automation that receives the webhook. If It's a
-Wonderful App already plays on this TV, the script exists (`script.wonderful_play_on_tv`): don't change it, just add
-the automation. The entity names below are placeholders: `media_player.family_room_tv` (the TV, from the LG webOS TV
+Wonderful App already plays on this TV, the script exists (`script.wonderful_play_on_tv`): add the automation, and add
+the one Fandango at Home branch below to the script's inner `choose` (after the YouTube one); what the script does for
+Netflix, YouTube and discs is unchanged. Without the branch a Fandango at Home press falls through to selecting the
+"Fandango at Home" input, which opens the app without the film: harmless, so the branch can go in before or after
+Matinee is updated. The entity names below are placeholders: `media_player.family_room_tv` (the TV, from the LG webOS TV
 integration), `switch.watch_tv` and `switch.watch_a_bluray` (the remote's activities as switches).
 
 1. **The script** (**Settings → Automations & Scenes → Scripts → Add script → Edit in YAML**). Save it as "Play on the
@@ -228,7 +238,8 @@ integration), `switch.watch_tv` and `switch.watch_a_bluray` (the remote's activi
    Entities**). What the automation needs from it: three fields, `mode` (`stream` or `disc`), `source` (the TV input
    name) and `content_id` (optional). For a stream it starts Watch TV if it is off, waits up to 60 seconds for the TV
    to be on, then, when `source` is `YouTube` and `content_id` is 1 to 64 letters, digits, `_` or `-`, launches the
-   YouTube app on that video; otherwise it selects the input. For a disc it starts Watch a Bluray, which is trusted to
+   YouTube app on that video; when `source` is `Fandango at Home` and `content_id` is 1 to 12 digits, launches the
+   Fandango at Home app (webOS id `vudu`) on that film, which starts playing it; otherwise it selects the input. For a disc it starts Watch a Bluray, which is trusted to
    put the TV on `AV Receiver`. The script checks `content_id` itself. `mode: restart` lets a second press replace
    the first.
 
@@ -303,6 +314,18 @@ integration), `switch.watch_tv` and `switch.watch_a_bluray` (the remote's activi
                          payload:
                            id: youtube.leanback.v4
                            contentId: "v={{ content_id }}"
+                 - conditions:
+                     - condition: template
+                       value_template: "{{ content_id is not none and (content_id | default('')) | string is match('^[0-9]{1,12}$') and source == 'Fandango at Home' }}"
+                   sequence:
+                     - action: webostv.command
+                       target:
+                         entity_id: media_player.family_room_tv
+                       data:
+                         command: system.launcher/launch
+                         payload:
+                           id: vudu
+                           contentId: "{{ content_id }}"
                default:
                  - action: media_player.select_source
                    target:
@@ -325,11 +348,13 @@ integration), `switch.watch_tv` and `switch.watch_a_bluray` (the remote's activi
                      entity_id: switch.watch_a_bluray
    ```
 
-   The Netflix branch is for It's a Wonderful App; Matinee only sends `YouTube` with a `content_id`, and
-   `AV Receiver` without one.
+   The Netflix branch is for It's a Wonderful App; Matinee only sends `Fandango at Home` or `YouTube` with a
+   `content_id`, and `AV Receiver` without one. The Netflix and Fandango at Home branches both take digits, but each
+   only for its own `source`, so the two cannot be confused.
 
 2. **The automation** (**Settings → Automations & scenes → Create automation → Edit in YAML**), with its own webhook
-   id. It checks the payload and starts the script with `script.turn_on`, which returns at once: calling the script as
+   id. It needs nothing new for Fandango at Home: its check already admits a `content_id` of digits and any non-empty
+   `source`. It checks the payload and starts the script with `script.turn_on`, which returns at once: calling the script as
    an action would hold the webhook's answer for the script's whole run, and Matinee waits only 5 seconds.
    `local_only: true` limits the webhook to your own network, so Matinee must reach Home Assistant by its LAN address
    (not through Cloudflare). Replace `<a long random id>` with a long random string of your own (`openssl rand -hex
@@ -377,7 +402,7 @@ integration), `switch.watch_tv` and `switch.watch_a_bluray` (the remote's activi
 ### Try it
 
 From a machine on the LAN. **This really starts the TV**, so do it when that's welcome. The id below is made up: use
-the YouTube id of a film you own there, or send the disc payload instead.
+the YouTube id of a film you own there, or send the Fandango at Home or disc payload instead.
 
 ```sh
 curl -s -i -X POST 'http://192.168.1.100:8123/api/webhook/<a long random id>' \
