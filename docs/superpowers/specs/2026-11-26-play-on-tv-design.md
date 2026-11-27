@@ -295,7 +295,7 @@ play from a cold TV and from a TV already on; a disc play; a play while the othe
 
 Nick's YouTube list against a digital-only export of Matinee, by cleaned title and year: 182 rows one-to-one; 3
 films listed twice (6 rows); 11 with the year off by one or a listing year; 1 edition ("Blade Runner: Final Cut");
-5 where Matinee seemed to hold a different film of the same name (Nick fixed four the same day; *Safe* is open); 4
+5 where Matinee seemed to hold a different film of the same name (Nick fixed four the same day; the fifth, *Safe*, is YouTube listing the 2012 film as 2018, so Matinee is right and the row comes back as "the year differs" for Nick to paste by hand); 4
 under another name ("Harry Potter and the Sorcerer's Stone" against "…Philosopher's Stone"); 14 with no digital
 copy. All 223 ids are 11 characters of the allowed set and none repeats. This is why the load never loosens the
 year and never picks between candidates.
