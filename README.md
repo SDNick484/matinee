@@ -224,6 +224,16 @@ The CSV export is unchanged.
 
 ---
 
+## Calendar
+
+**Calendar** in the top bar (and the footer) opens one month at a time, with the movie poster on each night the family watched something. Use the arrows to step between months, or open `#/calendar/2026-11` for a month directly. A day with several movies shows the first one logged and a "+N" badge; tap a day for the list, and tap a movie in it to open its page. Today has a ring. It is read-only: log a watch from the movie page as usual.
+
+- **Only real nights.** A watch is placed on its date only when it was logged with an exact date. A watch logged by time bucket ("1-2 Years", "10+ Years") or with no date is stored with an estimated date and never appears on the Calendar. Watching a movie again puts it on each of those days.
+- **Public.** `GET /api/calendar?month=2026-11` answers anonymous visitors while `PUBLIC_VIEW=1` (editors use `/admin/api/calendar`), because watch dates are already public. It carries titles, years and posters only: never notes, who watched or watch ids. A `month` that is not `YYYY-MM` is a 400.
+- **Assistants.** The MCP `watch_calendar(month)` tool answers "what did we watch in November?".
+
+---
+
 ## People and who watched
 
 Editors can keep a short list of people (for example Nick, Lauren, Midge, Alice and Paige) under **People** in the admin view. Each person is an adult or a kid, has one of five colors (green, blue, red, pink, purple), and at most 8 can be active at once. Every watch then records who was there: logging a watch defaults to everyone, except a watch more than ten years ago (the "10+ Years" bucket, or a date that far back), which defaults to the adults (the kids were too young; switch any of them back on before tapping **Log 10+ Years** or **Log Date**), and the title view shows a colored dot per attendee. Nothing changes until the first person is added.
