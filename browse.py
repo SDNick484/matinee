@@ -605,4 +605,8 @@ def recommendations(private=False):
         return make_err(400, str(e))
     for r in out["results"]:
         r["poster_url"] = image_url(r["poster_file"], r.pop("fetched_at"))
+    if private:  # editors only, §6.5: the pick carries the same `play` a title does (null while Play is off)
+        ways = play.ways_for(db(), [r["id"] for r in out["results"]]) if play_shown(True) else {}
+        for r in out["results"]:
+            r["play"] = ways.get(r["id"])
     return jsonify(**out)

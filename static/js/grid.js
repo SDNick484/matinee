@@ -2,6 +2,7 @@
 import { api, esc, exportHref, getChipClass, isAdmin, state, toast } from "./core.js";
 import { activePeople } from "./people.js";
 import { getChipIcon, icon } from "./icons.js";
+import { playButtonHtml, wirePlay } from "./play.js";
 
   // The editor-only filters: the people filters (spec 2026-11-11-per-person §6.4) and `code` (unredeemed digital codes,
   // spec 2026-11-11-copy-details §4). /api answers 400 for any of them.
@@ -155,6 +156,8 @@ import { getChipIcon, icon } from "./icons.js";
       renderFilterBar();
       renderExportBar();
       renderGridContent();
+      // The ▶ on a playable poster (editors only): one listener on the grid, which is drawn afresh on every visit.
+      if (isAdmin) wirePlay(document.getElementById("grid-container"), (id) => (state.grid.titles || []).find((t) => t.id === id));
 
       // Restore scroll position if returning from a detail view
       if (state.grid.scrollY > 0) {
@@ -789,6 +792,7 @@ import { getChipIcon, icon } from "./icons.js";
                   ${mediumBadge}
                   ${ratingBadge}
                   ${posterHtml}
+                  ${isAdmin ? playButtonHtml(t) : ""}
                 </div>
                 <div class="card-title">${esc(t.title)}</div>
                 <div class="card-year">${t.year || ""}</div>

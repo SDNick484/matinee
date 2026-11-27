@@ -28,6 +28,7 @@
     send: '<path d="M4 12 20.5 4 16 20.5l-4-6.5z"/><path d="m12 14 8.5-10"/>',
     download: '<path d="M12 4v11M7.5 10.5 12 15l4.5-4.5"/><path d="M4.5 19.5h15"/>',
     list: '<path d="M9 6.5h11M9 12h11M9 17.5h11"/><circle cx="4.5" cy="6.5" r="1.2" fill="currentColor" stroke="none"/><circle cx="4.5" cy="12" r="1.2" fill="currentColor" stroke="none"/><circle cx="4.5" cy="17.5" r="1.2" fill="currentColor" stroke="none"/>',
+    play: '<path d="M8 5.5v13l10.5-6.5z" fill="currentColor"/>',
     gear: '<circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="6"/><path d="M12 2.5v3.5M12 18v3.5M2.5 12H6M18 12h3.5M5.3 5.3l2.5 2.5M16.2 16.2l2.5 2.5M18.7 5.3l-2.5 2.5M7.8 16.2l-2.5 2.5"/>',
   };
 
