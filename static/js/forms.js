@@ -91,6 +91,58 @@ import { openWantModal } from "./wishlist.js";
     }
     formState.code_status = "none";
     renderCodeGrid(p, formState);
+    const link = document.getElementById(`${p}youtube`);
+    if (link) link.value = "";   // one link belongs to one copy
+    setYoutubeError(p, "");
+  }
+
+  // ================================================================= YouTube link (digital copies only)
+  // One field in the main part of the form, shown while the kind is Digital. The server owns the rule (it parses
+  // any YouTube address or a bare id and answers 400 or 409 with a sentence); the field only shows the stored
+  // address in full and puts that sentence next to itself.
+  function youtubeFieldHTML(p, v) {
+    const full = v.youtube_id ? `https://www.youtube.com/watch?v=${v.youtube_id}` : "";
+    return `
+      <div class="form-group" id="${p}youtube-group" style="${v.kind === "digital" ? "" : "display:none"}">
+        <label class="form-label" for="${p}youtube">YouTube link</label>
+        <input type="text" id="${p}youtube" class="form-input" inputmode="url" autocomplete="off" autocapitalize="off"
+               spellcheck="false" placeholder="Paste the film's YouTube address" value="${esc(full)}">
+        <div class="form-field-error" id="${p}youtube-error" role="alert" hidden></div>
+      </div>`;
+  }
+
+  function showYoutubeGroup(p, kind) {
+    const group = document.getElementById(`${p}youtube-group`);
+    if (group) group.style.display = kind === "digital" ? "" : "none";
+  }
+
+  // The request field: the pasted text (empty clears it) for a digital copy, nothing for a physical one.
+  function readYoutubeLink(p, kind) {
+    if (kind !== "digital") return {};
+    return { youtube_link: (document.getElementById(`${p}youtube`)?.value || "").trim() };
+  }
+
+  function setYoutubeError(p, message) {
+    const box = document.getElementById(`${p}youtube-error`);
+    if (!box) return;
+    box.textContent = message || "";
+    box.hidden = !message;
+    if (message) document.getElementById(`${p}youtube`)?.focus();
+  }
+
+  // True when `err` was about the link: shown beside the field, so the caller shows no toast.
+  function showYoutubeError(p, err) {
+    const group = document.getElementById(`${p}youtube-group`);
+    if (!group || group.style.display === "none") return false;   // hidden (a physical copy): a toast says it
+    if ((err?.status === 400 || err?.status === 409) && /YouTube/.test(err.message || "")) {
+      setYoutubeError(p, err.message);
+      return true;
+    }
+    return false;
+  }
+
+  function watchYoutubeField(p) {
+    document.getElementById(`${p}youtube`)?.addEventListener("input", () => setYoutubeError(p, ""));
   }
 
   // ================================================================= Copy Form Modal (8.2)
@@ -163,6 +215,8 @@ import { openWantModal } from "./wishlist.js";
                 ${locationsList.map((l) => `<option value="${l.id}">${esc(l.path)}</option>`).join("")}
               </select>
             </div>
+
+            ${youtubeFieldHTML("add-", { kind: initialKind })}
 
             ${moreFieldsHTML("add-", { kind: initialKind })}
 
@@ -271,6 +325,7 @@ import { openWantModal } from "./wishlist.js";
           locGroup.style.display = formState.kind === "physical" ? "flex" : "none";
         }
         showCodeGroup("add-", formState.kind);
+        showYoutubeGroup("add-", formState.kind);
         updateFormatGrid();
         updateServiceGrid();
         checkDuplicateWarning();
@@ -280,6 +335,7 @@ import { openWantModal } from "./wishlist.js";
     updateFormatGrid();
     updateServiceGrid();
     renderCodeGrid("add-", formState);
+    watchYoutubeField("add-");
 
     // "Want to buy…" sits beside Save Copy for a movie Matinee doesn't have yet: it creates the title with no copies
     // plus a want. A movie that is already here (even as an earlier Want to buy) uses the title page's Want….
@@ -338,6 +394,7 @@ import { openWantModal } from "./wishlist.js";
         service: formState.kind === "digital" ? formState.service : null,
         location_id: formState.kind === "physical" ? locVal : null,
         ...more,
+        ...readYoutubeLink("add-", formState.kind),
       };
 
       const saveBtn = document.getElementById("btn-save-copy");
@@ -390,7 +447,7 @@ import { openWantModal } from "./wishlist.js";
           }
         }
       } catch (err) {
-        toast(err.message || "Failed to save copy");
+        if (!showYoutubeError("add-", err)) toast(err.message || "Failed to save copy");
         // Form state survives on error
         if (saveBtn) saveBtn.disabled = false;
         if (addAnotherBtn) addAnotherBtn.disabled = false;
@@ -457,6 +514,8 @@ import { openWantModal } from "./wishlist.js";
                 ${locationsList.map((l) => `<option value="${l.id}" ${copy.location_id === l.id ? "selected" : ""}>${esc(l.path)}</option>`).join("")}
               </select>
             </div>
+
+            ${youtubeFieldHTML("edit-", copy)}
 
             ${moreFieldsHTML("edit-", copy)}
 
@@ -542,6 +601,7 @@ import { openWantModal } from "./wishlist.js";
           locGroup.style.display = formState.kind === "physical" ? "flex" : "none";
         }
         showCodeGroup("edit-", formState.kind);
+        showYoutubeGroup("edit-", formState.kind);
         updateFormatGrid();
         updateServiceGrid();
       });
@@ -550,6 +610,7 @@ import { openWantModal } from "./wishlist.js";
     updateFormatGrid();
     updateServiceGrid();
     renderCodeGrid("edit-", formState);
+    watchYoutubeField("edit-");
 
     document.getElementById("btn-modal-close")?.addEventListener("click", closeModal);
     document.getElementById("btn-modal-cancel")?.addEventListener("click", closeModal);
@@ -571,6 +632,8 @@ import { openWantModal } from "./wishlist.js";
         delete more.purchased_on;
         delete more.price_cents;
       }
+      // Like the three details above: a copy that arrived without its id is saved without touching it.
+      const youtube = "youtube_id" in copy ? readYoutubeLink("edit-", formState.kind) : {};
       try {
         await api(`/admin/api/copies/${copy.id}`, {
           method: "PUT",
@@ -580,6 +643,7 @@ import { openWantModal } from "./wishlist.js";
             service: formState.kind === "digital" ? formState.service : null,
             location_id: formState.kind === "physical" ? locVal : null,
             ...more,
+            ...youtube,
           },
         });
         toast("Copy updated");
@@ -587,7 +651,7 @@ import { openWantModal } from "./wishlist.js";
         const view = document.getElementById("view");
         if (view) renderDetail(view, title.id);
       } catch (err) {
-        toast(err.message || "Failed to update copy");
+        if (!showYoutubeError("edit-", err)) toast(err.message || "Failed to update copy");
       }
     });
   }

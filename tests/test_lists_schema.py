@@ -39,7 +39,7 @@ def fresh(tmp_path, monkeypatch):
 
 
 def test_schema_version_is_12():
-    assert matinee.SCHEMA_VERSION == "12"
+    assert int(matinee.SCHEMA_VERSION) >= 12     # lists arrived in v12; later versions keep them
 
 
 def test_a_new_database_has_watch_soon_once(fresh):
@@ -74,7 +74,7 @@ def test_old_databases_migrate_to_exactly_one_watch_soon(tmp_path, monkeypatch, 
     matinee.init_db()
     matinee.init_db()                                   # a restart on the migrated file
     con = matinee.connect()
-    assert con.execute("SELECT v FROM meta WHERE k='schema'").fetchone()[0] == "12"
+    assert con.execute("SELECT v FROM meta WHERE k='schema'").fetchone()[0] == matinee.SCHEMA_VERSION
     assert watch_soon_rows(con) == [("Watch Soon", "watch_soon", None, None, 0)]
     before = dump(con)
     matinee.migrate(con)                                # a second migrate() changes nothing

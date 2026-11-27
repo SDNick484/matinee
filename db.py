@@ -57,7 +57,9 @@ CREATE TABLE IF NOT EXISTS copies (
   edition TEXT CHECK (edition IS NULL OR length(edition) <= 60),
   code_status TEXT NOT NULL DEFAULT 'none' CHECK (code_status IN ('none', 'unredeemed', 'redeemed', 'expired')),
   purchased_on TEXT,
-  price_cents INTEGER CHECK (price_cents IS NULL OR price_cents >= 0)
+  price_cents INTEGER CHECK (price_cents IS NULL OR price_cents >= 0),
+  -- v13, last: a digital copy's YouTube video id (editor-only; the unique index is made by migrate())
+  youtube_id TEXT
 );
 CREATE INDEX IF NOT EXISTS copies_title ON copies(title_id);
 CREATE TABLE IF NOT EXISTS upc_cache (
@@ -101,7 +103,7 @@ CREATE TABLE IF NOT EXISTS omdb_ratings (
 );
 CREATE INDEX IF NOT EXISTS omdb_ratings_fetched ON omdb_ratings(fetched_at);
 """
-SCHEMA_VERSION = "12"
+SCHEMA_VERSION = "13"
 
 # v10 copy details. The limits mirror the CHECKs on `copies`; the app validates first and answers 400 with a sentence.
 CODE_STATUSES = ("none", "unredeemed", "redeemed", "expired")   # a physical copy's digital code; digital copies stay "none"
@@ -355,6 +357,15 @@ def migrate(con):
     # v12: lists. Watch Soon is created once on every database (the partial unique index makes a second one
     # impossible); it can be neither renamed nor deleted (lists.py and the /admin/api/lists routes refuse).
     con.executescript(LISTS_DDL)
+
+    # v13: a YouTube video id on a copy, last, so a migrated table and a new one have the same columns in the same
+    # order (after the v10 details, so the old copies rebuild above ends with it too). One id belongs to one copy.
+    copy_cols = {r[1] for r in con.execute("PRAGMA table_info(copies)")}
+    if copy_cols and "youtube_id" not in copy_cols:
+        con.execute("ALTER TABLE copies ADD COLUMN youtube_id TEXT")
+    if copy_cols:
+        con.execute("CREATE UNIQUE INDEX IF NOT EXISTS copies_youtube_id ON copies(youtube_id) "
+                    "WHERE youtube_id IS NOT NULL")
 
 
 def init_db():

@@ -1902,3 +1902,33 @@ def test_log_watch_sends_the_mcp_source_and_the_instructions_say_what_it_records
     for text in (mcp_server.SERVER_INSTRUCTIONS, mcp_server.log_watch.__doc__):
         assert "R or NC-17" in text and "PG-13" in text
     assert "R or NC-17" not in mcp_server.instructions_for("none")
+
+
+# --------------------------------------------------------------- the YouTube id (schema v13) is editor-only
+# A digital copy's YouTube id is not in any copy the MCP tools return, whichever way the server reads (spec
+# 2026-11-26-play-on-tv-design §7).
+
+@pytest.mark.parametrize("name", ["direct", "keyed", "public"])
+def test_copies_never_carry_youtube_id(inventory, monkeypatch, name):
+    con = db()
+    con.execute("UPDATE copies SET youtube_id='dQw4w9WgXcQ' WHERE title_id=? AND kind='digital'",
+                (inventory["dark_knight"],))
+    con.commit()
+    client = _all_clients(inventory, monkeypatch)[name]
+    outputs = [client.list_copies(shape=shape, output=output) for shape in ("copy", "title") for output in ("rows", "csv")]
+    movie = client.get_movie(inventory["dark_knight"])
+    assert movie["copies"]                           # the digital copy is there, without its id
+    outputs += [movie, client.where_is("The Dark Knight")]
+    for out in outputs:
+        text = str(out)
+        for secret in ("dQw4w9WgXcQ", "youtube_id", "youtube_link", "youtube"):
+            assert secret not in text, (name, secret)
+
+
+def test_list_copies_projects_a_keyed_response_without_the_youtube_id(monkeypatch):
+    private = {"title_id": 7, "title": "Paddington 2", "year": 2017, "kind": "digital", "format": "Digital HD",
+               "service": "Movies Anywhere", "edition": None, "location_id": None, "location_path": None,
+               "youtube_id": "dQw4w9WgXcQ"}
+    client = mcp_server.MatineeClient(api_url="http://fake-host", api_key="k", db_path="")
+    monkeypatch.setattr(client, "_api_request", lambda m, p, d=None: {"total": 1, "copies": [dict(private)]})
+    assert "dQw4w9WgXcQ" not in str(client.list_copies())
