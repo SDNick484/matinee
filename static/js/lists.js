@@ -1,6 +1,6 @@
 // Matinee — lists (spec 2026-11-12-lists-design §5): chips on the title page, the sheet a chip opens, the editor's
-// membership sheet, and the Lists manager in the admin header. Lists never appear on the grid or the dashboard.
-import { api, esc, isAdmin, state, toast } from "./core.js";
+// membership sheet, and the Lists manager (a section of the Settings page). Lists never appear on the grid or the dashboard.
+import { api, esc, isAdmin, toast } from "./core.js";
 import { icon } from "./icons.js";
 import { closeModal } from "./forms.js";
 
@@ -160,28 +160,10 @@ import { closeModal } from "./forms.js";
     });
   }
 
-  // ================================================================= Lists manager (admin header)
-  let managerChanged = false;
-
-  function managerOpen() {
-    return Boolean(document.querySelector("#modal-root .lists-dialog"));
-  }
-
-  function closeManager() {
-    const wasOpen = managerOpen();
-    closeModal();
-    if (wasOpen && managerChanged) {
-      managerChanged = false;
-      if (state.route?.path !== "/t/:id") return;   // only the title page shows lists
-      window.dispatchEvent(new HashChangeEvent("hashchange"));
-    }
-  }
-
+  // ================================================================= Lists manager (Settings page)
   // Escape: forms.js closes any modal on window; this runs first (document) so a saved change still re-renders.
   document.addEventListener("keydown", (e) => {
-    if (e.key !== "Escape") return;
-    if (membershipOpen()) closeMembership();
-    else if (managerOpen()) closeManager();
+    if (e.key === "Escape" && membershipOpen()) closeMembership();
   });
 
   function managerRowHTML(l, idx, total) {
@@ -203,8 +185,9 @@ import { closeModal } from "./forms.js";
   }
 
   function managerHTML(lists) {
-    const body = `
-      <div style="display:flex;flex-direction:column;gap:var(--s4)">
+    return `
+      <div class="settings-sub">Watch Soon, plus seasonal lists that come round each year (MM-DD, may wrap the year)</div>
+      <div class="settings-stack">
         <div class="people-list">${lists.map((l, i) => managerRowHTML(l, i, lists.length)).join("")}</div>
         <form id="add-list-form" class="people-add">
           <div style="font-weight:600;font-size:var(--fs-sm)">Add list</div>
@@ -215,52 +198,43 @@ import { closeModal } from "./forms.js";
           </div>
           <button type="submit" class="btn people-btn">＋ Add list</button>
         </form>
-        <div class="modal-actions"><button type="button" class="btn btn-ghost people-btn" id="btn-modal-cancel">Close</button></div>
       </div>`;
-    return sheetHTML("lists-dialog", "Lists", "Lists", "Watch Soon, plus seasonal lists that come round each year (MM-DD, may wrap the year)", body);
   }
 
-  async function renderManager() {
-    const modalRoot = document.getElementById("modal-root");
-    if (!modalRoot) return;
+  // Draws the manager into `root` and redraws it there after every write.
+  async function renderListsManager(root) {
     let lists = [];
     try {
       lists = (await api("/admin/api/lists")).lists || [];
     } catch (err) {
       toast(err.message || "Could not load lists");
     }
-    const prev = modalRoot.querySelector(".modal-dialog");
-    const scroll = prev ? prev.scrollTop : 0;
-    modalRoot.innerHTML = managerHTML(lists);
-    const dialog = modalRoot.querySelector(".modal-dialog");
-    if (dialog) dialog.scrollTop = scroll;
-    bindClose(closeManager);
+    root.innerHTML = managerHTML(lists);
 
     const change = async (fn, okMsg) => {
       try {
         await fn();
-        managerChanged = true;
         if (okMsg) toast(okMsg);
       } catch (err) {
         toast(err.message || "Could not save");
       }
-      await renderManager();
+      await renderListsManager(root);
     };
     const put = (id, body) => api(`/admin/api/lists/${id}`, { method: "PUT", body });
     const blankOrMd = (v) => v === "" || MD_RE.test(v);
 
-    document.getElementById("add-list-form")?.addEventListener("submit", (e) => {
+    root.querySelector("#add-list-form")?.addEventListener("submit", (e) => {
       e.preventDefault();
-      const name = document.getElementById("list-add-name").value.trim();
-      const start = document.getElementById("list-add-start").value.trim();
-      const end = document.getElementById("list-add-end").value.trim();
+      const name = root.querySelector("#list-add-name").value.trim();
+      const start = root.querySelector("#list-add-start").value.trim();
+      const end = root.querySelector("#list-add-end").value.trim();
       if (!name) return;
       const body = { name };
       if (start || end) Object.assign(body, { season_start: start, season_end: end });
       change(() => api("/admin/api/lists", { method: "POST", body }), name + " added");
     });
 
-    modalRoot.querySelectorAll(".lists-row").forEach((row) => {
+    root.querySelectorAll(".lists-row").forEach((row) => {
       const id = Number(row.dataset.id);
       const l = lists.find((x) => x.id === id);
       if (!l) return;
@@ -302,9 +276,4 @@ import { closeModal } from "./forms.js";
     });
   }
 
-  async function openListsManagerModal() {
-    managerChanged = false;
-    await renderManager();
-  }
-
-export { bindListChips, bindListsButton, listChipsHTML, listsButtonHTML, openListsManagerModal };
+export { bindListChips, bindListsButton, listChipsHTML, listsButtonHTML, renderListsManager };

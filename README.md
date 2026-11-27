@@ -208,7 +208,7 @@ See [docs/mcp-setup.md](docs/mcp-setup.md) for full configuration blocks and pro
 
 Every collection has one built-in list, **Watch Soon**: the movies the family wants to get to next. Editors can add their own lists too, usually seasonal ones with a window that comes round each year: Halloween `10-01` to `10-31`, Thanksgiving `11-20` to `11-30`, Christmas `11-25` to `01-01` (a window may wrap the year). Watch Soon can be neither renamed nor deleted, and two lists cannot share a name in any case.
 
-- **Title page.** A chip for each list the title is on, for everyone (tap one to see the whole list). Editors get a **Lists** button in the rating row there (after the rating controls) that opens a sheet of toggles, one per list. **Lists** in the admin header manages them: name, window, order, delete.
+- **Title page.** A chip for each list the title is on, for everyone (tap one to see the whole list). Editors get a **Lists** button in the rating row there (after the rating controls) that opens a sheet of toggles, one per list. **Lists** in **Settings** (the gear at the end of the editor header) manages them: name, window, order, delete.
 - **Nowhere else.** Lists are not on the grid, the stats or the Movie Night picker.
 - **Watching clears Watch Soon.** Logging a watch with a real date (**+ Watched Today**, **Log Date**, or MCP `log_watch`) takes the title off Watch Soon in the same save. A watch logged as a bucket (**10+ Years**, **Date Unknown**, ...) leaves it, and seasonal lists never change on a watch: *Elf* stays on Christmas.
 - **Recommendations.** `mode=watch_soon` picks owned titles on Watch Soon, unseen first, then the oldest added. With no `mode`, `/api/recommendations` (and the MCP `get_recommendations` tool) start with Watch Soon and fall back to Forgotten Gems when it has nothing; the answer's `mode` says which ran. `list=Christmas` restricts any mode to one list, and `in_season=true` to the lists in season today (the date in America/Los_Angeles).
@@ -234,9 +234,15 @@ The CSV export is unchanged.
 
 ---
 
+## Settings
+
+The gear at the end of the editor's top bar opens **Settings** (`#/settings`), one page with three sections: **People** (name, adult or kid, color, order, active), **Locations** (the shelves and rooms copies are filed under) and **Lists** (Watch Soon and the seasonal lists, with their windows). They do what the old **People**, **Locations** and **Lists** pop-ups did, and those buttons are gone from the bar. Settings is editor-only: a visitor who is not signed in sees the "Editor Sign-in Required" panel. A movie's own **Lists** button, in the rating row on its page, is unchanged.
+
+---
+
 ## People and who watched
 
-Editors can keep a short list of people (for example Nick, Lauren, Midge, Alice and Paige) under **People** in the admin view. Each person is an adult or a kid, has one of five colors (green, blue, red, pink, purple), and at most 8 can be active at once. Every watch then records who was there: logging a watch defaults to everyone, except a watch more than ten years ago (the "10+ Years" bucket, or a date that far back), which defaults to the adults (the kids were too young; switch any of them back on before tapping **Log 10+ Years** or **Log Date**), and the title view shows a colored dot per attendee. Nothing changes until the first person is added.
+Editors can keep a short list of people (for example Nick, Lauren, Midge, Alice and Paige) under **People** in **Settings** (the gear at the end of the editor header). Each person is an adult or a kid, has one of five colors (green, blue, red, pink, purple), and at most 8 can be active at once. Every watch then records who was there: logging a watch defaults to everyone, except a watch more than ten years ago (the "10+ Years" bucket, or a date that far back), which defaults to the adults (the kids were too young; switch any of them back on before tapping **Log 10+ Years** or **Log Date**), and the title view shows a colored dot per attendee. Nothing changes until the first person is added.
 
 **Editor-only.** People and attendance are never public. The public `/api` has no people route, shows watch dates only, and answers 400 `Sign in to pick for specific people.` to any request carrying `audience`, `unseen_by` or `attendance`. The read key may read them, as it can already read watch notes.
 

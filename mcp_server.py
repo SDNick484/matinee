@@ -220,7 +220,7 @@ def _copies_csv(rows: List[Dict[str, Any]], keys: Tuple[str, ...], header: bool)
 _MEMBER_KEYS = ("id", "title", "year", "formats", "owned", "added_at", "seen_by")
 # recommend.py's wording, written out here because the REST path does not import recommend.py
 # (tests/test_mcp_server.py::test_rest_people_messages_match_the_server keeps them equal).
-NO_PEOPLE = "No people are set up yet. Add them under People in the admin view."
+NO_PEOPLE = "No people are set up yet. Add them under People in Settings."
 _AUDIENCE_KEYWORDS = ("everyone", "adults", "kids")
 _ASCII_LOWER = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
 

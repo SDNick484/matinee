@@ -172,8 +172,8 @@ def src():
 
 
 def test_check_catches_a_dropped_import(src):
-    src["locations.js"] = src["locations.js"].replace("import { closeModal } from \"./forms.js\";\n", "")
-    assert ("locations.js", "closeModal", "forms.js") in missing_imports(src)
+    src["lists.js"] = src["lists.js"].replace("import { closeModal } from \"./forms.js\";\n", "")
+    assert ("lists.js", "closeModal", "forms.js") in missing_imports(src)
 
 
 def test_check_catches_a_dropped_export(src):

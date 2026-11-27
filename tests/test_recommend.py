@@ -402,7 +402,7 @@ def test_resolve_audience_no_people(con):
     assert recommend.has_people(con) is False
     with pytest.raises(recommend.ParamError) as e:
         recommend.resolve_audience(con, "kids")
-    assert str(e.value) == "No people are set up yet. Add them under People in the admin view."
+    assert str(e.value) == "No people are set up yet. Add them under People in Settings."
     with pytest.raises(recommend.ParamError):
         recommend.recommend(con, recommend.parse_params({"mode": "never_watched", "audience": "kids"}))
 
@@ -636,7 +636,7 @@ def test_no_people_table_is_no_people(tmp_path):
     assert recommend.has_people(c) is False
     with pytest.raises(recommend.ParamError) as e:
         recommend.resolve_audience(c, "kids")
-    assert str(e.value) == "No people are set up yet. Add them under People in the admin view."
+    assert str(e.value) == "No people are set up yet. Add them under People in Settings."
 
 
 @pytest.mark.parametrize("token", ["²", "99999999999999999999999"])
@@ -653,7 +653,7 @@ def test_everyone_with_everyone_inactive_is_no_people(con):
     con.commit()
     with pytest.raises(recommend.ParamError) as e:
         recommend.resolve_audience(con, "everyone")
-    assert str(e.value) == "No people are set up yet. Add them under People in the admin view."
+    assert str(e.value) == "No people are set up yet. Add them under People in Settings."
 
 
 def test_seen_by_includes_inactive_person_on_assumed_everyone_watch(con):

@@ -495,7 +495,7 @@ def test_grid_watched_popover_unchanged_without_people(server, browser):
     assert errors == []
 
 
-# --- final review fixes: people filters in the hash, pick-card dots, popover rows, People modal --------------
+# --- final review fixes: people filters in the hash, pick-card dots, popover rows, People in Settings --------------
 
 UNKNOWN_7 = "Unknown person: 7. People: Nick, Lauren, Midge, Alice, Paige."
 
@@ -629,52 +629,49 @@ def _open_title_with_people_api(browser, server, people):
     return page, title_gets, errors
 
 
-def test_people_modal_close_refreshes_the_view_only_after_a_change(server, browser):
+def test_people_added_in_settings_show_on_the_title_page(server, browser):
     people = []
     page, title_gets, errors = _open_title_with_people_api(browser, server, people)
     assert page.locator("#who-watched-row").count() == 0
 
-    # open and close with no change: the title is not fetched again
-    page.click("#btn-header-people")
-    page.wait_for_selector("#add-person-form")
-    close = page.locator("#modal-root .modal-actions .btn")
-    assert close.inner_text().strip() == "Close" and close.bounding_box()["height"] >= 44     # M10
-    n = len(title_gets)
-    close.click()
-    assert page.locator("#add-person-form").count() == 0 and len(title_gets) == n
-
-    # add Midge and close: the Who watched row appears without navigation
-    page.click("#btn-header-people")
-    page.wait_for_selector("#add-person-form")
+    # the gear opens Settings; with nobody set up the People section offers the add form
+    page.click("#btn-header-settings")
+    page.wait_for_selector("#settings-people-body #add-person-form")
+    assert page.evaluate("location.hash") == "#/settings"
+    assert page.locator("#btn-header-settings").get_attribute("aria-current") == "page"
+    add = page.locator("#add-person-form button[type=submit]")
+    assert add.bounding_box()["height"] >= 44
     page.fill("#person-add-name", "Midge")
     page.select_option("#person-add-kind", "kid")
-    page.click("#add-person-form button[type=submit]")
-    page.wait_for_selector('.people-row .people-name[aria-label="Name for Midge"]')
-    _mark_stale(page)
-    page.locator("#modal-root .modal-actions .btn").click()
-    page.wait_for_function("document.querySelector('.detail-view') && !document.querySelector('.detail-view[data-stale]')"
-                           " && document.querySelector('#who-watched-row .person-toggle')")
+    add.click()
+    page.wait_for_selector('#settings-people-body .people-row .people-name[aria-label="Name for Midge"]')
+
+    # back on the title, the Who watched row now has Midge (the title page is drawn fresh on every visit)
+    n = len(title_gets)
+    page.go_back()
+    page.wait_for_function("document.querySelector('#who-watched-row .person-toggle')")
     assert page.locator("#who-watched-row .person-toggle").count() == 1
     assert len(title_gets) == n + 1 and page.evaluate("location.hash") == "#/t/1"
     assert errors == []
 
 
-def test_people_modal_escape_after_a_change_refreshes_the_grid(server, browser):
+def test_a_change_in_settings_is_saved_and_the_section_redrawn(server, browser):
     page, _, titles, errors = _open_grid(browser, server, PEOPLE)
     _wait(page, lambda: titles, "first grid load")
-    page.wait_for_selector("#filter-bar .filter-btn")
-    page.route("**/admin/api/people/*", lambda r: _json(r, {"ok": True, "person": PEOPLE[4]}))
-    page.click("#btn-header-people")
-    page.wait_for_selector("#add-person-form")
-    n = len(titles)
-    page.evaluate("document.querySelector('#modal-root .people-dialog').dataset.stale = '1'")
+    puts = []
+
+    def on_put(route):
+        puts.append(route.request.post_data_json)
+        _json(route, {"ok": True, "person": PEOPLE[4]})
+
+    page.route("**/admin/api/people/*", on_put)
+    page.click("#btn-header-settings")
+    page.wait_for_selector("#settings-people-body .people-row")
+    page.evaluate("document.querySelector('#settings-people-body .people-list').dataset.stale = '1'")
     page.locator('.people-row[data-id="5"] [data-act="kind"][data-kind="adult"]').click()
-    page.wait_for_function("document.querySelector('#modal-root .people-dialog')"
-                           " && !document.querySelector('#modal-root .people-dialog[data-stale]')")   # saved, re-rendered
-    assert len(titles) == n                                      # nothing refreshes while the modal is open
-    page.keyboard.press("Escape")
-    _wait(page, lambda: len(titles) > n, "grid refresh after Escape")
-    assert page.locator("#add-person-form").count() == 0
+    page.wait_for_function("document.querySelector('#settings-people-body .people-list')"
+                           " && !document.querySelector('#settings-people-body .people-list[data-stale]')")
+    assert puts == [{"kind": "adult"}]
     assert errors == []
 
 
@@ -723,35 +720,6 @@ def test_buckets_still_log_on_one_tap_without_people(server, browser):
             break
         page.wait_for_timeout(20)
     assert posts == [{"date_bucket": "over_10_years"}]
-    assert errors == []
-
-
-# The Stats view paints a "Loading statistics" shell inside .stats-view and then replaces the whole view once
-# /admin/api/stats answers, so marking .stats-view could tag the shell and fail on a slow run (about 1 in 4 locally).
-# .stats-grid-overview only exists once the real view is drawn.
-@pytest.mark.parametrize("hash_,keeps", [("#/add", "#tmdb-search-input"), ("#/stats", ".stats-grid-overview"),
-                                         ("#/about", ".about-view")])
-def test_people_modal_close_leaves_views_without_people_alone(server, browser, hash_, keeps):
-    """Review F3: closing the People modal after a change re-ran handleRoute on every route, which reset the Add
-    form (a half-typed search, the scanner) and redrew Stats. Only the grid and the title view show people."""
-    people = []
-    page, title_gets, errors = _open_title_with_people_api(browser, server, people)
-    page.evaluate(f"location.hash = '{hash_}'")
-    page.wait_for_selector(keeps)
-    if hash_ == "#/add":
-        page.fill("#tmdb-search-input", "paddington")
-    page.evaluate(f"document.querySelector('{keeps}').dataset.kept = '1'")
-    page.click("#btn-header-people")
-    page.wait_for_selector("#add-person-form")
-    page.fill("#person-add-name", "Midge")
-    page.select_option("#person-add-kind", "kid")
-    page.click("#add-person-form button[type=submit]")
-    page.wait_for_selector('.people-row .people-name[aria-label="Name for Midge"]')
-    page.locator("#modal-root .modal-actions .btn").click()
-    page.wait_for_timeout(300)
-    assert page.locator(f"{keeps}[data-kept]").count() == 1, "the view was re-rendered"
-    if hash_ == "#/add":
-        assert page.input_value("#tmdb-search-input") == "paddington"
     assert errors == []
 
 

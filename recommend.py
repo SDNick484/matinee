@@ -114,7 +114,7 @@ SEEN_CTE = """seen(title_id, person_id, watched_date) AS (
 
 ATTENDANCE = ("recorded", "assumed_everyone", "assumed_adults")
 AUDIENCE_KEYWORDS = {"everyone": None, "adults": "adult", "kids": "kid"}
-_NO_PEOPLE = "No people are set up yet. Add them under People in the admin view."
+_NO_PEOPLE = "No people are set up yet. Add them under People in Settings."
 _MAX_ROWID = 2 ** 63 - 1  # SQLite's largest integer; a bigger id cannot be bound, so it is simply unknown
 
 

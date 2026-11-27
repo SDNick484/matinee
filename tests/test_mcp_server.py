@@ -1041,7 +1041,7 @@ def test_rest_unknown_person_is_refused_before_sending(monkeypatch):
     client, seen = _people_rest_client(monkeypatch, people=[])
     with pytest.raises(mcp_server.MatineeError) as e:
         client.get_recommendations(audience="Alice")
-    assert str(e.value) == "No people are set up yet. Add them under People in the admin view."
+    assert str(e.value) == "No people are set up yet. Add them under People in Settings."
     assert all(p.endswith("/people") for p in seen)
 
 

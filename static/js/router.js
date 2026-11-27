@@ -10,10 +10,9 @@ import { renderCalendar } from "./calendar.js";
 import { renderAbout, renderNotFound } from "./about.js";
 import { renderAsk } from "./ask.js";
 import { openMovieNightModal } from "./movie-night.js";
-import { openLocationsManagerModal } from "./locations.js";
-import { loadPeople, openPeopleModal } from "./people.js";
+import { loadPeople } from "./people.js";
 import { renderWanted } from "./wishlist.js";
-import { openListsManagerModal } from "./lists.js";
+import { renderSettings } from "./settings.js";
 
   // ================================================================= Router
   function parseHash(hashStr) {
@@ -55,6 +54,9 @@ import { openListsManagerModal } from "./lists.js";
     if (segments[0] === "wanted") {
       return { path: "/wanted", params: {}, query };
     }
+    if (segments[0] === "settings") {
+      return { path: "/settings", params: {}, query };
+    }
 
     return { path: "/404", params: {}, query };
   }
@@ -75,18 +77,9 @@ import { openListsManagerModal } from "./lists.js";
         <button type="button" class="btn btn-sm btn-ghost" id="btn-header-movie-night" title="Movie Night Picker">
           ${icon("dice")} Movie Night
         </button>
-        <button type="button" class="btn btn-sm btn-ghost" id="btn-header-locations" title="Manage Shelves &amp; Locations">
-          ${icon("pin")} Locations
-        </button>
-        <button type="button" class="btn btn-sm btn-ghost" id="btn-header-people" title="Manage People">
-          ${icon("people")} People
-        </button>
         <a href="#/wanted" class="btn btn-sm btn-ghost" id="btn-header-wanted" title="Movies we want to buy">
           Wanted
         </a>
-        <button type="button" class="btn btn-sm btn-ghost" id="btn-header-lists" title="Manage Lists">
-          ${icon("list")} Lists
-        </button>
         <a href="#/calendar" class="btn btn-sm btn-ghost" id="btn-header-calendar">
           ${icon("calendar")} Calendar
         </a>
@@ -97,6 +90,9 @@ import { openListsManagerModal } from "./lists.js";
         <a href="#/add" class="btn btn-sm" id="btn-header-add">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
           Add Movie
+        </a>
+        <a href="#/settings" class="btn btn-sm btn-ghost btn-icon" id="btn-header-settings" aria-label="Settings" title="Settings">
+          ${icon("gear")}
         </a>
       `;
     } else {
@@ -118,12 +114,9 @@ import { openListsManagerModal } from "./lists.js";
       `;
     }
     document.getElementById("btn-header-movie-night")?.addEventListener("click", () => openMovieNightModal());
-    document.getElementById("btn-header-locations")?.addEventListener("click", () => openLocationsManagerModal());
-    document.getElementById("btn-header-people")?.addEventListener("click", () => openPeopleModal());
-    document.getElementById("btn-header-lists")?.addEventListener("click", () => openListsManagerModal());
 
     // Header admin bar is a swipeable row on phones; mark and reveal the current page's button.
-    const activeId = { "/ask": "btn-header-ask", "/wanted": "btn-header-wanted", "/calendar": "btn-header-calendar", "/stats": "btn-header-stats", "/add": "btn-header-add" }[state.route?.path];
+    const activeId = { "/ask": "btn-header-ask", "/wanted": "btn-header-wanted", "/calendar": "btn-header-calendar", "/stats": "btn-header-stats", "/add": "btn-header-add", "/settings": "btn-header-settings" }[state.route?.path];
     const activeBtn = activeId ? document.getElementById(activeId) : null;
     if (activeBtn) activeBtn.setAttribute("aria-current", "page");
     bindScrollRow(nav, activeBtn);
@@ -248,6 +241,9 @@ import { openListsManagerModal } from "./lists.js";
     } else if (state.route.path === "/wanted") {
       if (prevRoute.path === "/") state.grid.scrollY = window.scrollY;
       await renderWanted(view);
+    } else if (state.route.path === "/settings") {
+      if (prevRoute.path === "/") state.grid.scrollY = window.scrollY;
+      await renderSettings(view);
     } else {
       renderNotFound(view);
     }

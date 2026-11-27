@@ -1,4 +1,4 @@
-"""Playwright smoke test for lists on the title page and in the admin header at phone width (spec
+"""Playwright smoke test for lists on the title page and in Settings at phone width (spec
 2026-11-12-lists-design §5).
 
 Same harness and skip guard as tests/test_people_ui.py (whose fixtures it reuses), but against the real app and
@@ -122,13 +122,15 @@ def test_membership_sheet_fits_one_screen_and_saves(server, browser):
     assert errors == []
 
 
-def test_lists_manager_in_the_admin_header(server, browser):
-    ids = _seed()
-    page, errors = _page(browser, f"{server}/admin#/t/{ids['elf']}")
-    page.click("#btn-header-lists")
-    dialog = page.locator(".lists-dialog")
-    dialog.wait_for()
-    rows = dialog.locator(".lists-row")
+def test_lists_manager_in_settings(server, browser):
+    _seed()
+    page = browser.new_page(viewport={"width": 412, "height": 915})
+    errors = []
+    page.on("pageerror", lambda e: errors.append(str(e)))
+    page.goto(f"{server}/admin#/settings")
+    section = page.locator("#settings-lists-body")
+    section.locator(".lists-row").first.wait_for()
+    rows = section.locator(".lists-row")
     assert rows.count() == 2
     soon = rows.nth(0)
     assert soon.locator(".lists-name").get_attribute("readonly") is not None
@@ -138,12 +140,12 @@ def test_lists_manager_in_the_admin_header(server, browser):
     page.fill("#list-add-start", "10-01")
     page.fill("#list-add-end", "10-31")
     page.click("#add-list-form button[type=submit]")
-    page.wait_for_function("document.querySelectorAll('.lists-dialog .lists-row').length === 3")
+    page.wait_for_function("document.querySelectorAll('#settings-lists-body .lists-row').length === 3")
     con = core.connect()
     row = con.execute("SELECT kind, season_start, season_end FROM lists WHERE name = 'Halloween'").fetchone()
     assert tuple(row) == ("seasonal", "10-01", "10-31")
     con.close()
-    for button in dialog.locator("button").all():
+    for button in section.locator("button").all():
         if button.is_visible():
             assert button.bounding_box()["height"] >= 44, button.inner_text()
     _no_hscroll(page, 412)
