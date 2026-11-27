@@ -63,6 +63,7 @@ from lists import ListError, WATCH_SOON, has_lists, pacific_today, list_out, all
 from lists import find_list, title_lists, list_members, create_list, update_list, delete_list  # noqa: F401
 from lists import set_membership, clear_watch_soon  # noqa: F401
 from watched_days import parse_month, month_view  # noqa: F401
+from youtube import YOUTUBE_ID_RE, youtube_id_ok  # noqa: F401
 
 
 # ===================================================================== split modules
@@ -70,7 +71,7 @@ from watched_days import parse_month, month_view  # noqa: F401
 # so `app.X`, `from app import X` and `import app as matinee` work as before. A write to app.X (monkeypatch in the
 # tests, `matinee.TMDB_READ_TOKEN = ...` in ops/import_titles.py) also rebinds X in each split module that holds
 # it, so moved code reads the new value as it did when it lived here. Patch app.X, not the split module.
-_SPLIT_MODULES = ("settings", "common", "db", "clients", "images", "people", "browse", "export", "wishlist", "lists", "watched_days")
+_SPLIT_MODULES = ("settings", "common", "db", "clients", "images", "people", "browse", "export", "wishlist", "lists", "watched_days", "youtube")
 
 
 class _AppModule(types.ModuleType):

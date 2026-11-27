@@ -127,7 +127,7 @@ def test_every_earlier_version_migrates_and_keeps_everything(tmp_path, monkeypat
     copies = con.execute("SELECT id, edition, code_status, purchased_on, price_cents FROM copies ORDER BY id").fetchall()
     assert [tuple(c) for c in copies] == [(1, None, "none", None, None), (2, None, "none", None, None)]
     assert table_info(con) == table_info(fresh)   # a migrated table is the table a new database gets
-    assert [r[1] for r in table_info(con)][-4:] == list(NEW_COLUMNS)
+    assert [r[1] for r in table_info(con)][-5:-1] == list(NEW_COLUMNS)   # v13 adds youtube_id after them
     assert_checks_hold(con)
     assert con.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
     assert con.execute("PRAGMA foreign_key_check").fetchall() == []
@@ -169,7 +169,7 @@ def test_a_database_that_already_has_some_of_the_columns_finishes_the_job(tmp_pa
 
 def test_a_fresh_database_has_the_columns_and_checks(fresh):
     con = fresh
-    assert [r[1] for r in table_info(con)][-4:] == list(NEW_COLUMNS)
+    assert [r[1] for r in table_info(con)][-5:-1] == list(NEW_COLUMNS)   # v13 adds youtube_id after them
     con.execute("INSERT INTO titles (id, tmdb_id, title, sort_title, search_text, fetched_at) "
                 "VALUES (1, 155, 'The Dark Knight', 'dark knight', 'the dark knight', '2026-01-01')")
     con.commit()
