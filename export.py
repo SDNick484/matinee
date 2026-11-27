@@ -5,7 +5,7 @@ import csv, datetime as dt, io
 
 from browse import get_descendant_location_ids, get_location_path_map
 from db import FORMATS, SERVICES
-from youtube import youtube_watch_url
+from youtube import YOUTUBE, youtube_watch_url
 from fandango import fandango_details_url
 
 
@@ -178,15 +178,15 @@ def export_csv(con, today=None, *, shape="copy", **filters):
     return b"\xef\xbb\xbf" + out.getvalue().encode("utf-8"), f"matinee-{day}{'' if shape == 'copy' else '-titles'}.csv"
 
 
-def not_loaded_csv(rows):
+def not_loaded_csv(rows, kind=YOUTUBE):
     """The not-loaded rows as a spreadsheet: title, year, youtube_link (the address that was given, else the id's),
-    reason, near. UTF-8 with a BOM and CRLF like the export; text that starts like a formula gets a leading quote,
+    reason, near; for a Fandango at Home list the link column is fandango_link. UTF-8 with a BOM and CRLF like the export; text that starts like a formula gets a leading quote,
     and an address starts with "https", so an id that begins with "-" stays whole."""
     out = io.StringIO(newline="")
     w = csv.writer(out)
-    w.writerow(("title", "year", "youtube_link", "reason", "near"))
+    w.writerow(("title", "year", kind.link_column, "reason", "near"))
     for r in rows:
-        link = r["play_link"] or youtube_watch_url(r["video_id"]) or r["video_id"]
+        link = r["play_link"] or kind.link_url(r[kind.id_field]) or r[kind.id_field]
         near = "; ".join(f"{n['title']} ({n['year']}) [{n['held']}]" if n["year"] else f"{n['title']} [{n['held']}]"
                          for n in r["near"])
         w.writerow([csv_cell(v) for v in (r["title"], r["year"], link, r["reason"], near)])

@@ -2,7 +2,10 @@
 
 Standard library only and route-free, like lists.py: the routes and their error answers are in app.py. A YouTube id
 is private to editors, like a copy's code status and price. The second half (spec §5) matches a list of owned
-YouTube films to digital copies; `plan_links` only reads, and the route in app.py writes what it plans."""
+YouTube films to digital copies; `plan_links` only reads, and the route in app.py writes what it plans. The same
+load takes a list of Fandango at Home ids (spec 2026-11-27-fandango-play-design §3a): every function of the second
+half takes a `kind`, YOUTUBE (the default) or FANDANGO, which names the id's list column, its copies column, its rule
+and its sentences."""
 import csv
 import io
 import json
@@ -10,6 +13,9 @@ import re
 import sqlite3
 import unicodedata
 import urllib.parse
+from typing import Callable, NamedTuple
+
+from fandango import fandango_details_url, fandango_id_ok, parse_fandango_link
 
 # The rule for an id, in one place (used when storing and again before anything is sent): exactly 11 characters.
 YOUTUBE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
@@ -104,7 +110,38 @@ def title_key(title) -> str:
     return " ".join(words)
 
 
-LIBRARY_FIELDS = ("title", "year", "video_id", "play_link")
+class LinkKind(NamedTuple):
+    """One kind of id a list can load: what its list column, its copies column, its rule and its sentences are."""
+    name: str                       # how a sentence names the service: "YouTube", "Fandango at Home"
+    id_field: str                   # the list's id column
+    column: str                     # the copies column the id is written to
+    id_ok: Callable                 # the id rule
+    parse_link: Callable            # the id in a play_link (raises ValueError when it is not this kind's address)
+    link_url: Callable              # the full address for an id, for the not-loaded CSV
+    link_column: str                # the not-loaded CSV's link column
+    bad_id: str                     # the sentence for an id that fails the rule
+    items: str                      # what two different ids point at: "videos", "films"
+
+    @property
+    def fields(self):
+        return ("title", "year", self.id_field, "play_link")
+
+
+def _fandango_address(value):
+    """A Fandango at Home address's id. A bare number is a valid paste in the copy form, but a list's play_link must
+    be the address the id was taken from, so it can be checked against the fandango_id."""
+    if fandango_id_ok((value or "").strip() if isinstance(value, str) else value):
+        raise ValueError("a bare number is not an address")
+    return parse_fandango_link(value)
+
+
+YOUTUBE = LinkKind("YouTube", "video_id", "youtube_id", youtube_id_ok, parse_youtube_link, youtube_watch_url,
+                   "youtube_link", "The video_id isn't a YouTube id (11 letters, digits, - or _).", "videos")
+FANDANGO = LinkKind("Fandango at Home", "fandango_id", "fandango_id", fandango_id_ok, _fandango_address,
+                    fandango_details_url, "fandango_link", "The fandango_id isn't a Fandango at Home id (1 to 12 digits).",
+                    "films")
+
+LIBRARY_FIELDS = YOUTUBE.fields
 MAX_LIBRARY_ROWS = 5000
 
 
@@ -117,41 +154,42 @@ def _text(value) -> str:
     return str(value).strip()
 
 
-def read_library(body: bytes, content_type: str) -> list:
-    """The rows of a list as exported: [{"title", "year", "video_id", "play_link"}], every value text. `body` is a
-    JSON array of objects or a CSV with those four columns (a UTF-8 byte-order mark and blank lines are fine; the
-    Content-Type says which, and a body that starts with `[` or `{` is JSON when it doesn't). A missing value is
+def read_library(body: bytes, content_type: str, kind: LinkKind = YOUTUBE) -> list:
+    """The rows of a list as exported: [{"title", "year", "video_id", "play_link"}] (the kind's id column in place of
+    video_id), every value text. `body` is a JSON array of objects or a CSV with those four columns (a UTF-8
+    byte-order mark and blank lines are fine; the Content-Type says which, and a body that starts with `[` or `{` is JSON when it doesn't). A missing value is
     blank, and plan_links turns it into a not-loaded row. Raises ValueError(sentence) for a body that is not such a
     list."""
+    fields = kind.fields
     try:
         text = (body or b"").decode("utf-8-sig")
     except UnicodeDecodeError:
         raise ValueError("The list must be UTF-8 text.") from None
     if not text.strip():
         raise ValueError("There is no list in the request: send a JSON array or a CSV with the columns "
-                         + ", ".join(LIBRARY_FIELDS) + ".")
-    kind = (content_type or "").split(";")[0].strip().lower()
-    as_json = "json" in kind or ("csv" not in kind and text.lstrip()[0] in "[{")
+                         + ", ".join(fields) + ".")
+    ctype = (content_type or "").split(";")[0].strip().lower()
+    as_json = "json" in ctype or ("csv" not in ctype and text.lstrip()[0] in "[{")
     if as_json:
         try:
             data = json.loads(text)
         except ValueError:
             raise ValueError("The list isn't valid JSON.") from None
         if not isinstance(data, list):
-            raise ValueError("The list must be a JSON array of films, each with " + ", ".join(LIBRARY_FIELDS) + ".")
+            raise ValueError("The list must be a JSON array of films, each with " + ", ".join(fields) + ".")
         if any(not isinstance(item, dict) for item in data):
-            raise ValueError("Every film in the list must be an object with " + ", ".join(LIBRARY_FIELDS) + ".")
-        rows = [{f: _text(item.get(f)) for f in LIBRARY_FIELDS} for item in data]
+            raise ValueError("Every film in the list must be an object with " + ", ".join(fields) + ".")
+        rows = [{f: _text(item.get(f)) for f in fields} for item in data]
     else:
         try:
             reader = csv.DictReader(io.StringIO(text, newline=""))
             header = [(h or "").strip().lower() for h in (reader.fieldnames or [])]
-            if any(f not in header for f in LIBRARY_FIELDS):
-                raise ValueError("The CSV needs the columns " + ", ".join(LIBRARY_FIELDS) + " in its first row.")
+            if any(f not in header for f in fields):
+                raise ValueError("The CSV needs the columns " + ", ".join(fields) + " in its first row.")
             reader.fieldnames = header
             rows = []
             for item in reader:
-                row = {f: _text(item.get(f)) for f in LIBRARY_FIELDS}
+                row = {f: _text(item.get(f)) for f in fields}
                 if any(row.values()):                     # a blank line (or ,,,) is not a film
                     rows.append(row)
         except csv.Error:
@@ -176,27 +214,31 @@ def _name(title) -> str:
     return f"{title['title']} ({title['year']})" if title["year"] else title["title"]
 
 
-def plan_links(con, rows) -> dict:
+def plan_links(con, rows, kind: LinkKind = YOUTUBE) -> dict:
     """Which rows of a list link by themselves, and why each of the others doesn't. Reads only. A row links when
-    (1) its video_id is well formed and is the `v=` of its play_link, (2) no other row has the same cleaned title and
+    (1) its video_id is well formed and is the `v=` of its play_link (for FANDANGO: its fandango_id is well formed
+    and is the number at the end of its play_link; the id and the column are the kind's throughout), (2) no other row has the same cleaned title and
     year, (3) exactly one title in Matinee has that cleaned title and year (never loosened), (4) that title has
     exactly one digital copy, with no id yet, and (5) the id is on no other copy. A copy that already has this id
     counts as already linked; an id that is on a copy is never replaced.
 
+    The two kinds are independent: a copy's id of the other kind is never looked at.
+
     -> {"link": [(copy_id, video_id)], "already_linked": n, "not_loaded": [{title, year, video_id, play_link,
     reason, near: [{title, year, held}]}]}"""
-    rows = [{f: _text(r.get(f)) for f in LIBRARY_FIELDS} for r in rows]
+    rows = [{f: _text(r.get(f)) for f in kind.fields} for r in rows]
+    col, id_field = kind.column, kind.id_field
     titles = [dict(r) for r in con.execute("SELECT id, title, year FROM titles")]
     by_key, copies_of = {}, {}
     for t in titles:
         by_key.setdefault(title_key(t["title"]), []).append(t)
-    for c in con.execute("SELECT id, title_id, kind, format, service, youtube_id FROM copies ORDER BY id"):
+    for c in con.execute(f"SELECT id, title_id, kind, format, service, {col} FROM copies ORDER BY id"):
         copies_of.setdefault(c["title_id"], []).append(dict(c))
     holder = {}                                  # id -> (copy, title) for every id on a copy
     for t in titles:
         for c in copies_of.get(t["id"], []):
-            if c["youtube_id"]:
-                holder[c["youtube_id"]] = (c, t)
+            if c[col]:
+                holder[c[col]] = (c, t)
 
     def near(candidates):
         return [{"title": t["title"], "year": t["year"], "held": _held(copies_of.get(t["id"], []))}
@@ -209,7 +251,7 @@ def plan_links(con, rows) -> dict:
             listed[key] = listed.get(key, 0) + 1
     ids_listed = {}
     for r in rows:
-        ids_listed.setdefault(r["video_id"], set()).add(title_key(r["title"]) + "|" + r["year"])
+        ids_listed.setdefault(r[id_field], set()).add(title_key(r["title"]) + "|" + r["year"])
 
     link, already, refused = [], 0, []
 
@@ -217,22 +259,22 @@ def plan_links(con, rows) -> dict:
         refused.append({**row, "reason": reason, "near": near(candidates)})
 
     for row, key in zip(rows, keys):
-        vid = row["video_id"]
-        if not youtube_id_ok(vid):                                               # rule 1
-            refuse(row, "The video_id isn't a YouTube id (11 letters, digits, - or _).")
+        vid = row[id_field]
+        if not kind.id_ok(vid):                                                  # rule 1
+            refuse(row, kind.bad_id)
             continue
         if not row["play_link"]:
-            refuse(row, "There is no play_link to check the video_id against.")
+            refuse(row, f"There is no play_link to check the {id_field} against.")
             continue
         try:
-            linked = parse_youtube_link(row["play_link"])
+            linked = kind.parse_link(row["play_link"])
         except ValueError:
             linked = None
         if linked is None:
-            refuse(row, "The play_link isn't a YouTube address.")
+            refuse(row, f"The play_link isn't a {kind.name} address.")
             continue
         if linked != vid:
-            refuse(row, "The video_id and the play_link are different videos, so neither can be trusted.")
+            refuse(row, f"The {id_field} and the play_link are different {kind.items}, so neither can be trusted.")
             continue
         if not key[0] or not key[1]:
             refuse(row, "The title or the year is missing, so it can't be matched.")
@@ -241,7 +283,7 @@ def plan_links(con, rows) -> dict:
             refuse(row, "Listed more than once for the same year, so there is no telling which id is right.")
             continue
         if len(ids_listed[vid]) > 1:
-            refuse(row, "This video_id is listed for more than one film.")
+            refuse(row, f"This {id_field} is listed for more than one film.")
             continue
         same_title = by_key.get(key[0], [])                                      # rule 3
         titles_here = [t for t in same_title if str(t["year"] or "") == key[1]]
@@ -264,16 +306,16 @@ def plan_links(con, rows) -> dict:
                    titles_here)
             continue
         copy = digital[0]
-        if copy["youtube_id"] == vid:
+        if copy[col] == vid:
             already += 1
             continue
-        if copy["youtube_id"]:
-            refuse(row, "The digital copy already has a different YouTube link, and one that is there is never "
+        if copy[col]:
+            refuse(row, f"The digital copy already has a different {kind.name} link, and one that is there is never "
                         "replaced.", titles_here)
             continue
         if vid in holder:                                                        # rule 5
             other = holder[vid][1]
-            refuse(row, f"That YouTube id is already on another film: {_name(other)}.", titles_here)
+            refuse(row, f"That {kind.name} id is already on another film: {_name(other)}.", titles_here)
             continue
         link.append((copy["id"], vid))
     return {"link": link, "already_linked": already, "not_loaded": refused}
@@ -283,23 +325,23 @@ class LoadConflict(Exception):
     """The database refused a write while loading (an id taken since the plan was made); nothing was written."""
 
 
-def load_links(con, rows) -> dict:
+def load_links(con, rows, kind: LinkKind = YOUTUBE) -> dict:
     """plan_links, then write every planned link in one transaction: all of them or none. The transaction starts
     before the plan is read, so what is planned is what is written. An id is only ever written to a copy that has
     none. Raises LoadConflict, with nothing written, when the database refuses a write. Commits."""
     con.commit()                                    # nothing of the caller's is pending; BEGIN needs a clean slate
     con.execute("BEGIN IMMEDIATE")
     try:
-        plan = plan_links(con, rows)
+        plan = plan_links(con, rows, kind)
         for copy_id, video_id in plan["link"]:
-            done = con.execute("UPDATE copies SET youtube_id = ?, updated_at = CURRENT_TIMESTAMP "
-                               "WHERE id = ? AND youtube_id IS NULL", (video_id, copy_id))
+            done = con.execute(f"UPDATE copies SET {kind.column} = ?, updated_at = CURRENT_TIMESTAMP "
+                               f"WHERE id = ? AND {kind.column} IS NULL", (video_id, copy_id))
             if done.rowcount != 1:
                 raise LoadConflict("a copy changed while the list was loading")
         con.commit()
     except sqlite3.IntegrityError as e:
         con.rollback()
-        raise LoadConflict("a YouTube id was taken while the list was loading") from e
+        raise LoadConflict(f"a {kind.name} id was taken while the list was loading") from e
     except BaseException:
         con.rollback()
         raise
