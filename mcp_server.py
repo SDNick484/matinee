@@ -156,7 +156,7 @@ _LIST_KEYS = ("id", "name", "kind", "season_start", "season_end", "in_season", "
 TOO_OLD_FOR_CALENDAR = "This Matinee server is too old for watch_calendar. Update Matinee."
 TOO_OLD_FOR_PLAY = "This Matinee server is too old for play_on_tv. Update Matinee."
 CANT_PLAY = "This connection can't play: it has no Matinee key that can write (MATINEE_API_KEY)."
-PLAY_MODES = ("youtube", "disc")
+PLAY_MODES = ("fandango", "youtube", "disc")
 _API_ERROR_PREFIX = re.compile(r"^Matinee API error \(\d+\): ")
 TOO_OLD_FOR_COPIES = "This Matinee server is too old for list_copies. Update Matinee."
 # list_copies: the values a filter accepts, copied from db.py (tests/test_mcp_server.py keeps them equal), and the
@@ -1141,13 +1141,15 @@ class MatineeClient:
     def play_on_tv(self, title_id: int, mode: Optional[str] = None) -> Dict[str, Any]:
         """Start an owned film on the TV: POST /admin/api/titles/<id>/play, which checks the copy, waits for Home
         Assistant, then logs today's watch. With no `mode` the title's `play` (editors' title detail) says what it
-        can do: one way plays that way; two ways plays nothing and answers with the choices. No attendees are sent.
-        The answer never carries the title detail, so it never carries the YouTube id. This only calls Matinee's own
+        can do: a Fandango at Home link plays there, whatever else the title has (Fandango is the primary way);
+        otherwise one way plays that way, and YouTube plus a disc plays nothing and answers with the two choices. An
+        explicit mode plays that mode. No attendees are sent. The answer never carries the title detail, so it never
+        carries the YouTube or Fandango id. This only calls Matinee's own
         route: the Home Assistant webhook stays in the app's environment."""
         if not self.api_key:
             raise MatineeError(CANT_PLAY)
         if mode is not None and mode not in PLAY_MODES:
-            raise MatineeError("mode must be youtube or disc.")
+            raise MatineeError("mode must be fandango, youtube or disc.")
         title_id = int(title_id)
         if mode is None:
             try:
@@ -1161,13 +1163,17 @@ class MatineeClient:
                 raise MatineeError("Play on TV isn't set up on this Matinee server, or this connection's key can't "
                                    "play (it needs MATINEE_API_KEY).")
             name = detail.get("title") or f"Movie {title_id}"
-            youtube, disc = play.get("youtube"), play.get("disc")
-            if youtube and disc:
-                return {"played": False, "choices": list(PLAY_MODES),
+            fandango, youtube, disc = play.get("fandango"), play.get("youtube"), play.get("disc")
+            if fandango:
+                mode = "fandango"
+            elif youtube and disc:
+                return {"played": False, "choices": ["youtube", "disc"],
                         "message": f"{name} can play on YouTube or from the disc. Which one?", "disc": disc}
-            if not (youtube or disc):
-                raise MatineeError(f"{name} can't play: it has no disc and no YouTube link.", status=409)
-            mode = "youtube" if youtube else "disc"
+            elif not (youtube or disc):
+                raise MatineeError(f"{name} can't play: it has no disc and no Fandango at Home or YouTube link.",
+                                   status=409)
+            else:
+                mode = "youtube" if youtube else "disc"
         try:
             res = self._api_request("POST", f"/admin/api/titles/{title_id}/play", {"mode": mode})
         except MatineeError as e:
@@ -1240,9 +1246,10 @@ class MatineeClient:
 
 # The one line that names play_on_tv: only the `all` level registers it, so the other levels drop it.
 _PLAY_LINE = ('- "Put on Brooklyn", "play Heat on the TV": find the id with search_collection, then call '
-              'play_on_tv(title_id=...). It turns the TV on and logs a watch. A film that can play on YouTube and from '
-              'a disc answers with the two choices and plays nothing: ask which, then call again with mode="youtube" '
-              'or mode="disc". For a disc, say where it is shelved from the answer.\n')
+              'play_on_tv(title_id=...). It turns the TV on and logs a watch. A film with a Fandango at Home link plays '
+              'there. Otherwise a film that can play on YouTube and from a disc answers with the two choices and plays '
+              'nothing: ask which, then call again with mode="youtube" or mode="disc". For a disc, say where it is '
+              'shelved from the answer.\n')
 SERVER_INSTRUCTIONS = """\
 Matinee is the family's own collection of physical discs and digital copies.
 - Recommend only what get_recommendations or search_collection return. Use search_tmdb only when the user asks about movies they do not own.
@@ -1522,11 +1529,13 @@ def log_watch(
                                      attendees=attendees, date_bucket=date_bucket)
 
 
-def play_on_tv(title_id: int, mode: Optional[Literal["youtube", "disc"]] = None) -> Dict[str, Any]:
+def play_on_tv(title_id: int, mode: Optional[Literal["fandango", "youtube", "disc"]] = None) -> Dict[str, Any]:
     """Put an owned film on the Family Room TV (it turns the TV on) and log today's watch. title_id comes from
-    search_collection or where_is. mode: "youtube" or "disc". Leave it out when the film can play only one way: it
-    plays that way. When it can play both ways and no mode is given, nothing plays and the answer is
+    search_collection or where_is. mode: "fandango", "youtube" or "disc"; leave it out to let Matinee choose. With no
+    mode, a film with a Fandango at Home link plays there; otherwise a film that can play only one way plays that
+    way, and one that can play on YouTube and from a disc plays nothing and answers
     {"played": false, "choices": ["youtube", "disc"], "message", "disc"}: ask which, then call again with that mode.
+    Pass mode="youtube" or "disc" only when the user asks for that way.
     A disc answer lists where the disc is shelved (disc[].line). Who watched is decided by Matinee from the film's
     rating (everyone for PG-13 and below, the adults for R); there is nothing to pass. Needs a Matinee key that can
     write, and Play on TV set up on the Matinee host; otherwise the answer is the reason."""
