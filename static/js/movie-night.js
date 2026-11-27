@@ -3,6 +3,7 @@ import { api, esc, isAdmin, state } from "./core.js";
 import { icon } from "./icons.js";
 import { closeModal } from "./forms.js";
 import { activePeople, personDotsHTML, personTogglesHTML, readToggles } from "./people.js";
+import { playBarHtml, wirePlay } from "./play.js";
 
   // ================================================================= Movie Night Modal
   async function openMovieNightModal() {
@@ -15,6 +16,7 @@ import { activePeople, personDotsHTML, personTogglesHTML, readToggles } from "./
 
     let currentMode = "forgotten_gems";
     let currentPick = null;
+    let pickAudienceIds = null;   // who the pick was made for (the response's audience), null for Everyone
     const CAP_KEY = "matinee.movieNight.maxCert";
     let currentCap = "";
     try {
@@ -149,6 +151,9 @@ import { activePeople, personDotsHTML, personTogglesHTML, readToggles } from "./
         fetchPick();
       });
 
+      // The play buttons under the pick (editors only): the content box stays while the pick inside it changes.
+      if (isAdmin) wirePlay(document.getElementById("movie-night-content"), () => currentPick, () => pickAudienceIds);
+
       document.getElementById("btn-movie-night-close")?.addEventListener("click", closeModal);
       document.getElementById("btn-movie-night-cancel")?.addEventListener("click", closeModal);
       document.getElementById("modal-overlay")?.addEventListener("click", (e) => {
@@ -219,6 +224,7 @@ import { activePeople, personDotsHTML, personTogglesHTML, readToggles } from "./
           const ratingBadge = ratingVal ? `<span class="movie-night-score">★ ${ratingVal}</span>` : "";
 
           content.innerHTML = `
+            <div class="movie-night-pick">
             <div class="movie-night-card movie-night-animated">
               ${currentPick.poster_url ? `<img src="${currentPick.poster_url}" class="movie-night-poster" alt="${esc(currentPick.title)}">` : '<div class="movie-night-poster placeholder">No Poster</div>'}
               <div class="movie-night-info">
@@ -234,7 +240,11 @@ import { activePeople, personDotsHTML, personTogglesHTML, readToggles } from "./
                 <div class="movie-night-reason">${esc(currentPick.reason || currentPick.recommendation_reason || "Curated pick")}</div>
               </div>
             </div>
+            ${isAdmin ? playBarHtml(currentPick) : ""}
+            </div>
           `;
+          // The audience the pick was made for (anything but Everyone) is who the play logs as watching.
+          pickAudienceIds = aud && res.audience && Array.isArray(res.audience.people) ? res.audience.people.map((x) => x.id) : null;
           if (viewBtn) viewBtn.disabled = false;
         } else {
           currentPick = null;

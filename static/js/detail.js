@@ -11,6 +11,7 @@ import {
   downscaleImage, MAX_COVER_BYTES, openCopyModal, openCoverPreviewModal, openEditCopyModal
 } from "./forms.js";
 import { bindWantSection, wantSectionHTML } from "./wishlist.js";
+import { playBarHtml, wirePlay } from "./play.js";
 
   // ================================================================= 7.3 Detail Page
   // Editor-only line under a copy: the digital code (discs only, and only while it says something), the purchase date
@@ -26,17 +27,21 @@ import { bindWantSection, wantSectionHTML } from "./wishlist.js";
     return parts.length ? `<span class="copy-meta copy-extra">${esc(parts.join(" · "))}</span>` : "";
   }
 
-  async function renderDetail(container, titleId) {
+  // `fresh` is the title's detail when the caller already has it (the play route answers with it): drawn without the
+  // loading screen, the fetch or the scroll to the top.
+  async function renderDetail(container, titleId, fresh = null) {
     const seq = state.routeSeq;   // see core.js: stop after an await once the user has navigated away
-    window.scrollTo({ top: 0, behavior: "instant" });
-    container.innerHTML = `
-      <div style="text-align:center;padding:48px 16px;color:var(--ink-2)">Loading movie details…</div>
-    `;
+    if (!fresh) {
+      window.scrollTo({ top: 0, behavior: "instant" });
+      container.innerHTML = `
+        <div style="text-align:center;padding:48px 16px;color:var(--ink-2)">Loading movie details…</div>
+      `;
+    }
 
     const apiPrefix = isAdmin ? "/admin/api" : "/api";
     let title;
     try {
-      title = await api(`${apiPrefix}/titles/${titleId}`);
+      title = fresh || await api(`${apiPrefix}/titles/${titleId}`);
     } catch (err) {
       if (seq !== state.routeSeq) return;
       if (err.status === 404) {
@@ -215,6 +220,7 @@ import { bindWantSection, wantSectionHTML } from "./wishlist.js";
               <div class="meta-line">
                 ${metaParts.join(' <span style="opacity:0.4">·</span> ')}
               </div>
+              ${isAdmin ? playBarHtml(title) : ""}
               ${
                 ratingsHtml.length > 0
                   ? `<div class="ratings-row">${ratingsHtml.join("")}</div>`
@@ -428,6 +434,11 @@ import { bindWantSection, wantSectionHTML } from "./wishlist.js";
 
     // Editor controls (7.4)
     if (isAdmin) {
+      // Play on the TV: after a start, draw this page again from the answer so the new watch shows.
+      wirePlay(container.querySelector(".detail-view"), () => title, undefined, (res) => {
+        if (seq === state.routeSeq && res.detail) renderDetail(container, titleId, res.detail);
+      });
+
       const bindCertOverride = () => {
         document.getElementById("cert-override")?.addEventListener("change", async (e) => {
           const sel = e.target;

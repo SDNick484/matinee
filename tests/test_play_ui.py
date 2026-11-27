@@ -398,3 +398,170 @@ def test_touch_target_and_no_sideways_scroll(server, browser, stub, width):
     assert errors == []
 
 
+# ----------------------------------------------------------------------------------- the details page
+def _detail(browser, server, title_id, width=412):
+    page = browser.new_page(viewport={"width": width, "height": 915})
+    errors = []
+    page.on("pageerror", lambda e: errors.append(str(e)))
+    page.goto(f"{server}/admin#/t/{title_id}")
+    page.wait_for_selector(".detail-view .hero-title")
+    return page, errors
+
+
+def test_detail_buttons(server, browser, stub):
+    ids = _seed()
+    page, errors = _detail(browser, server, ids["heat"])
+    bar = page.locator(".detail-view .play-bar")
+    expect(bar.get_by_role("button", name="Play on YouTube")).to_be_visible()
+    expect(bar.get_by_role("button", name="Start the disc")).to_be_visible()
+    expect(bar).to_contain_text(SHELF_LINE)
+    assert bar.bounding_box()["y"] < 500                       # near the top of the page, with the title
+    assert page.locator(".watch-row").count() == 0
+    bar.get_by_role("button", name="Start the disc").click()
+    expect(page.locator(".play-note")).to_contain_text("Starting Heat on Family Room TV.")
+    expect(page.locator(".play-note")).to_contain_text(SHELF_LINE)
+    page.wait_for_selector(".watch-row")                       # redrawn from the answer: the watch shows
+    assert stub.posts == [{"event": "matinee_play", "mode": "disc", "source": "AV Receiver", "title": "Heat"}]
+    assert [rows[1] for rows in _watch_rows(ids["heat"])] == [[ids["people"]["Nick"], ids["people"]["Lauren"]]]
+    _no_hscroll(page, 412)
+    assert errors == []
+
+    page, errors = _detail(browser, server, ids["brooklyn"])
+    bar = page.locator(".detail-view .play-bar")
+    expect(bar.locator("button")).to_have_count(1)
+    expect(bar.get_by_role("button", name="Play on YouTube")).to_be_visible()
+    bar.get_by_role("button", name="Play on YouTube").click()
+    expect(_toast(page)).to_have_text(STARTING)
+    page.wait_for_selector(".watch-row")
+    assert len(stub.posts) == 2 and stub.posts[1]["content_id"] == YT_ID
+    assert errors == []
+
+    page, errors = _detail(browser, server, ids["elf"])
+    assert page.locator(".play-bar, [data-play-title], [data-play-mode]").count() == 0
+
+
+def test_detail_failure_keeps_the_page(server, browser, stub):
+    ids = _seed()
+    stub.status = 500
+    page, errors = _detail(browser, server, ids["brooklyn"])
+    page.locator(".play-bar").get_by_role("button", name="Play on YouTube").click()
+    expect(_toast(page)).to_have_text("Couldn't reach the TV. Brooklyn wasn't started.")
+    _settle(page)
+    assert page.locator(".watch-row").count() == 0
+    assert errors == []
+
+
+@pytest.mark.parametrize("width", [412, 360])
+def test_detail_no_sideways_scroll(server, browser, stub, width):
+    ids = _seed()
+    page, _errors = _detail(browser, server, ids["heat"], width)
+    expect(page.locator(".play-bar")).to_be_visible()
+    for b in page.locator(".play-bar button").all():
+        assert b.bounding_box()["height"] >= 44
+    _no_hscroll(page, width)
+
+
+# ------------------------------------------------------------------------------------------ Movie Night
+def _movie_night(browser, server, width=412):
+    page = browser.new_page(viewport={"width": width, "height": 915})
+    errors, plays = [], []
+    page.on("pageerror", lambda e: errors.append(str(e)))
+    page.on("request", lambda r: plays.append(r.post_data_json) if r.url.endswith("/play") else None)
+    page.goto(f"{server}/admin")
+    page.wait_for_selector(".movie-card")
+    page.click("#btn-header-movie-night")
+    page.click('.movie-night-tab[data-mode="never_watched"]')
+    page.wait_for_selector(".movie-night-card")
+    return page, plays, errors
+
+
+def _pick_after(page, action, audience=None):
+    """Run `action` (a click that asks for a new pick) and wait for the new pick's card."""
+    with page.expect_response(lambda r: "/recommendations" in r.url and (audience is None or f"audience={audience}" in r.url)):
+        action()
+    page.wait_for_selector(".movie-night-card")
+
+
+def test_movie_night_buttons(server, browser, stub):
+    import app as core
+
+    ids = _seed()
+    con = core.connect()                                       # Brooklyn is the only film Movie Night can pick
+    con.execute("INSERT INTO watches (title_id, watched_date) VALUES (?, '2025-01-01')", (ids["heat"],))
+    con.execute("INSERT INTO watches (title_id, watched_date) VALUES (?, '2025-01-01')", (ids["elf"],))
+    con.commit()
+    con.close()
+    page, plays, errors = _movie_night(browser, server)
+    expect(page.locator(".movie-night-title")).to_have_text("Brooklyn")
+    bar = page.locator("#movie-night-content .play-bar")
+    expect(bar.locator("button")).to_have_count(1)
+
+    expect(bar.get_by_role("button", name="Play on YouTube")).to_be_visible()
+    bar.get_by_role("button", name="Play on YouTube").click()    # Everyone: no attendees key
+    expect(_toast(page)).to_have_text(STARTING)
+    assert plays == [{"mode": "youtube"}]
+    assert [r[1] for r in _watch_rows(ids["brooklyn"])] == [sorted(ids["people"].values())]
+    _settle(page)
+
+    adults = sorted(ids["people"][n] for n in ("Nick", "Lauren"))
+    kids = sorted(ids["people"][n] for n in ("Midge", "Alice", "Paige"))
+    for n, (audience, want) in enumerate((("adults", adults), ("kids", kids)), start=2):
+        _clear_watches(ids["brooklyn"])                         # Brooklyn is unseen by the new audience again
+        _pick_after(page, lambda: page.click(f'.movie-night-audience-option[data-audience="{audience}"]'), audience)
+        page.locator("#movie-night-content .play-bar").get_by_role("button", name="Play on YouTube").click()
+        _until(page, lambda: len(plays) == n, f"post {n}")
+        assert plays[-1]["mode"] == "youtube" and sorted(plays[-1]["attendees"]) == want
+        _settle(page)
+        assert [r[1] for r in _watch_rows(ids["brooklyn"])] == [want]
+    assert len(stub.posts) == 3
+    assert errors == []
+
+
+def test_movie_night_second_roll(server, browser, stub):
+    ids = _seed()
+    import app as core
+
+    con = core.connect()                                       # Brooklyn and Heat are the picks; Elf was seen
+    con.execute("INSERT INTO watches (title_id, watched_date) VALUES (?, '2025-01-01')", (ids["elf"],))
+    con.commit()
+    con.close()
+    page, plays, errors = _movie_night(browser, server)
+    for _roll in range(3):
+        _pick_after(page, lambda: page.click("#btn-movie-night-roll"))
+        name = page.locator(".movie-night-title").inner_text()
+        bar = page.locator("#movie-night-content .play-bar")
+        expect(bar.locator("button").first).to_be_visible()
+        before = len(stub.posts)
+        if name == "Heat":
+            bar.get_by_role("button", name="Start the disc").click()
+        else:
+            bar.get_by_role("button", name="Play on YouTube").click()
+        _until(page, lambda: len(stub.posts) > before, "the post")
+        assert stub.posts[-1]["title"] == name
+        _settle(page)
+        page.wait_for_timeout(200)
+        assert len(stub.posts) == before + 1
+        _clear_watches(ids["brooklyn"], ids["heat"])            # the film is unseen again for the next roll
+    assert errors == []
+
+
+def test_movie_night_no_sideways_scroll(server, browser, stub):
+    ids = _seed()
+    import app as core
+
+    con = core.connect()
+    con.execute("INSERT INTO watches (title_id, watched_date) VALUES (?, '2025-01-01')", (ids["brooklyn"],))
+    con.execute("INSERT INTO watches (title_id, watched_date) VALUES (?, '2025-01-01')", (ids["elf"],))
+    con.commit()
+    con.close()
+    for width in (412, 360):
+        page, _plays, _errors = _movie_night(browser, server, width)
+        expect(page.locator(".movie-night-title")).to_have_text("Heat")
+        bar = page.locator("#movie-night-content .play-bar")
+        expect(bar).to_contain_text(SHELF_LINE)
+        for b in bar.locator("button").all():
+            assert b.bounding_box()["height"] >= 44
+        dialog = page.locator(".movie-night-dialog")
+        assert page.evaluate("(d) => d.scrollWidth <= d.clientWidth", dialog.element_handle())
+        _no_hscroll(page, width)
+        page.close()
