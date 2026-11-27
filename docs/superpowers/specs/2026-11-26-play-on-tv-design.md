@@ -2,7 +2,7 @@
 
 Date: 2026-11-26. Repo `main` @ `856870d`, schema v12.
 Size: a project. Schema v13 (one column), one new setting, three new routes, UI on three screens, one new Home
-Assistant automation. Planned as four small PRs (§11).
+Assistant automation, one new MCP tool. Planned as five small PRs (§11).
 
 ## 1. Intent
 
@@ -19,13 +19,14 @@ once, and the owned answer needs to carry the id so It's a Wonderful App can use
 2. A one-time load of a list of owned YouTube films links the clean matches and hands back a list of the rest.
 3. A ▶ on a playable film starts it on the Family Room TV through Home Assistant, and adds it to watch history.
 4. `GET /admin/api/tmdb/<tmdb_id>/owned` carries the id on each digital copy.
+5. An assistant can start a film on the TV through Matinee's MCP server ("put on Brooklyn").
 
 ### Non-goals
 
 - Hearing back from the TV. Matinee does not listen for TV events or confirm the film is up (decision 5).
 - A triage screen, or any stored review state, for list rows that don't load (decisions 8, 9).
 - Starting a title in any app but YouTube. A digital copy with no YouTube id is not a way to play.
-- An assistant (MCP) starting the TV, or MCP carrying the id (§7).
+- MCP carrying the YouTube id in its answers (§7). The assistant names the film; Matinee looks up the link.
 - The It's a Wonderful App follow-up that uses the id. Don't make it harder; don't do it.
 - Volume, pause, resume position, any TV but the Family Room one.
 - Correcting titles Matinee has matched to the wrong film (the comparison in §9 found some; Nick fixes them).
@@ -71,7 +72,10 @@ once, and the owned answer needs to carry the id so It's a Wonderful App can use
 | 23 | How the list is loaded | One editor-only request (a documented `curl`); the answer is the list of what didn't load | Claude's call |
 | 24 | The CSV export | Gains a `youtube_link` column | Claude's call |
 | 25 | The play setting | `HA_PLAY_WEBHOOK_URL`, the name It's a Wonderful App uses; 5 second wait | Claude's call |
-| 26 | MCP | No change. Told to Nick as "the MCP copy tools carry it" in the playback; corrected here, see §7 | Claude's call, **changed after playback** |
+| 26 | The id in MCP answers | Not carried. Told to Nick as "the MCP copy tools carry it" in the playback; corrected, see §7 | Claude's call, **changed after playback**, told to Nick |
+| 27 | An assistant starting a film | Yes: an MCP tool, as a fifth PR | Nick (asked after reading the design; it had been a non-goal by Claude's call) |
+| 28 | Which MCP write level has the tool | `all` only, the most restricted; never `log` or `none` | Claude's call, said to Nick when he chose 27 |
+| 29 | The tool with two ways to play and no mode given | It plays nothing and answers with the two choices | Claude's call |
 
 ## 3. What exists (looked up 2026-11-26)
 
@@ -245,11 +249,28 @@ A film abandoned after ten minutes keeps its watch until someone deletes it, lik
 
 ## 7. MCP
 
-No tool changes, so `docs/mcp-setup.md` is unchanged. The copy rows MCP returns are public fields only by an
-earlier decision ("the editor-only `code_status`, `purchased_on` and `price_cents` are never in either shape"), the
-id is editor-only, and an assistant has no use for it without a play tool, which is a non-goal. The playback told
-Nick the MCP copy tools would carry the id; that was wrong about the existing rule and is reversed here
-(decision 26). A test asserts `list_copies` and `get_movie` do not carry `youtube_id`.
+**One new tool, `play_on_tv`** (decision 27): it takes a film (the way `log_watch` names one) and an optional
+`mode` (`youtube` or `disc`), and calls `POST /admin/api/titles/<id>/play`, so every rule in §6 holds: the id is
+checked, Home Assistant is waited for, the watch is logged once per day with attendance by rating. It sends no
+`attendees`.
+
+- With one way to play and no `mode`, it plays that way. With both ways and no `mode`, it plays nothing and
+  answers with the two choices (decision 29). A film that can't play, Play being off (503) and Home Assistant not
+  taking it (502) come back as the route's sentence.
+- Its answer is the route's message, with the disc lines for a disc.
+- It only goes through the app's route: the webhook setting stays in the app's environment and is never given to
+  the `matinee-mcp` service. A connection that can't write to the app can't play.
+- **Level:** it joins `WRITE_TOOLS` at `all` only (decision 28). The remote service at `log` or `none` doesn't
+  register it, and the server instructions name it only where it is registered. stdio registers it like every tool.
+- **Hints:** not read-only, not destructive, not idempotent (a call starts the TV again), open world (it reaches
+  the TV through Home Assistant).
+- Rule 6: the tool, tests in `tests/test_mcp_server.py` (one way, two ways with and without `mode`, 409, 502, 503,
+  not registered below `all`), and `docs/mcp-setup.md`.
+
+**The id is not in MCP's answers.** The copy rows MCP returns are public fields only by an earlier decision ("the
+editor-only `code_status`, `purchased_on` and `price_cents` are never in either shape"), and the id is
+editor-only. The playback told Nick the MCP copy tools would carry it; that was wrong about the existing rule and
+is reversed here (decision 26). A test asserts `list_copies` and `get_movie` do not carry `youtube_id`.
 
 ## 8. The Home Assistant side
 
@@ -293,13 +314,15 @@ year and never picks between candidates.
    second load links nothing new and never overwrites.
 8. A v1 database and a v12 database both migrate to v13; `migrate()` twice changes nothing.
 9. The ▶ doesn't open the details page, and still works on the second visit to the grid.
+10. `play_on_tv` is absent from the remote service at `none` and `log`, and with both ways and no `mode` it sends
+    nothing to Home Assistant.
 
 ## 11. Left to the builder
 
-- The plan, as four PRs, each shippable alone: (1) the id on the copy: schema, writes, reads, the form field, the
+- The plan, as five PRs, each shippable alone: (1) the id on the copy: schema, writes, reads, the form field, the
   owned answer, the export column; (2) the list load and its doc; (3) Play behind the setting: the setting, the
   rule, the route, the watch, the Home Assistant doc, no UI; (4) the buttons on the three pages with the
-  Playwright checks.
+  Playwright checks; (5) the MCP `play_on_tv` tool.
 - Module layout. The play rule and the outbound call are route-free and belong in a sibling module (CLAUDE.md:
   it goes in `_SPLIT_MODULES` and the installer's `cp` line); routes and `app.logger` calls stay in `app.py`.
   No new runtime dependency: `urllib` as `post_ha_event` uses.
