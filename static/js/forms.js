@@ -736,9 +736,27 @@ import { openWantModal } from "./wishlist.js";
     resumeBarcodeScanner();
   }
 
+  // Escape on a title page with nothing open goes back to the collection, as the Back link does. "Nothing open" is
+  // judged here, in the capture phase, before any handler (lists.js on document, the one below) has closed a sheet:
+  // an Escape that closes something must not also leave the page.
+  let escapeLeavesTitle = false;
+  window.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape") return;
+    const tag = document.activeElement ? document.activeElement.tagName.toLowerCase() : "";
+    escapeLeavesTitle = state.route?.path === "/t/:id"
+      && !(e.altKey || e.ctrlKey || e.metaKey || e.shiftKey)
+      && !["input", "textarea", "select"].includes(tag)
+      && !document.querySelector("#modal-root > *, .modal-overlay, .filter-popover.open");
+  }, true);
+
   // Close modal or filter popovers on Escape key, or navigate adjacent movies on ArrowLeft/ArrowRight
   window.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
+      if (escapeLeavesTitle) {
+        escapeLeavesTitle = false;
+        location.hash = state.grid.lastHash || "#/";
+        return;
+      }
       closeModal();
       state.openPopoverId = null;
       document.querySelectorAll(".filter-popover.open").forEach((p) => {

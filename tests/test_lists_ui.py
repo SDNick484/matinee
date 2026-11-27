@@ -192,3 +192,62 @@ def test_rating_row_with_the_lists_button_does_not_scroll_at_360_or_412(server, 
         _no_hscroll(page, width)
         assert errors == []
         page.close()
+
+
+# ------------------------------------------------------------ Escape on a title page goes back to the collection
+def _hash_is(page, expected):
+    page.wait_for_function("h => location.hash === h || (h === '#/' && location.hash === '')", arg=expected)
+
+
+def test_escape_on_a_title_page_goes_back_to_the_collection_as_it_was(server, browser):
+    """From the grid filtered to unwatched, open Elf and press Escape: the grid comes back with the same filter."""
+    ids = _seed()
+    page = browser.new_page(viewport={"width": 412, "height": 915})
+    errors = []
+    page.on("pageerror", lambda e: errors.append(str(e)))
+    page.goto(f"{server}/admin#/?watched=unwatched")
+    page.click(f'a.movie-card[data-id="{ids["elf"]}"]')
+    page.wait_for_selector(".detail-view .hero-title")
+    page.keyboard.press("Escape")
+    _hash_is(page, "#/?watched=unwatched")
+    page.wait_for_selector(f'a.movie-card[data-id="{ids["elf"]}"]')
+    assert page.locator(".detail-view").count() == 0 and errors == []
+
+
+def test_escape_on_a_title_page_opened_directly_goes_to_the_whole_collection(server, browser):
+    ids = _seed()
+    page, errors = _page(browser, f"{server}/#/t/{ids['paddington']}")          # a visitor, no grid before it
+    page.wait_for_selector(".detail-view .hero-title")
+    page.keyboard.press("Escape")
+    _hash_is(page, "#/")
+    page.wait_for_selector("a.movie-card")
+    assert errors == []
+
+
+def test_escape_closes_an_open_sheet_first_and_only_then_leaves_the_title(server, browser):
+    ids = _seed()
+    page, errors = _page(browser, f"{server}/admin#/t/{ids['elf']}")
+    page.click("#btn-title-lists")
+    page.locator(".list-membership-dialog").wait_for()
+    page.keyboard.press("Escape")
+    page.locator(".list-membership-dialog").wait_for(state="detached")
+    page.wait_for_selector(".detail-view .hero-title")
+    assert page.evaluate("location.hash") == f"#/t/{ids['elf']}"                # still on Elf
+    page.locator("#list-chips .list-chip").first.click()                        # a list sheet: same rule
+    page.locator(".list-dialog").wait_for()
+    page.keyboard.press("Escape")
+    page.locator(".list-dialog").wait_for(state="detached")
+    assert page.evaluate("location.hash") == f"#/t/{ids['elf']}"
+    page.keyboard.press("Escape")
+    _hash_is(page, "#/")
+    assert errors == []
+
+
+def test_escape_while_typing_in_a_field_stays_on_the_title(server, browser):
+    ids = _seed()
+    page, errors = _page(browser, f"{server}/admin#/t/{ids['elf']}")
+    page.focus("#input-watch-date")
+    page.keyboard.press("Escape")
+    page.wait_for_timeout(300)                                                  # nothing to wait for: it must not move
+    assert page.evaluate("location.hash") == f"#/t/{ids['elf']}" and page.locator(".detail-view").count() == 1
+    assert errors == []
