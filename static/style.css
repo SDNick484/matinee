@@ -1790,6 +1790,10 @@ main#view {
   min-width: 0;
 }
 
+/* The sentence the server gave for a YouTube link it refused, under the field. */
+.form-field-error { color: var(--danger); font-size: var(--fs-xs); }
+.form-field-error[hidden] { display: none; }
+
 .form-actions {
   display: flex;
   align-items: center;
