@@ -6,6 +6,7 @@ import { renderDetail } from "./detail.js";
 import { renderAdd, stopBarcodeScanner } from "./add.js";
 import { closeModal } from "./forms.js";
 import { renderStats } from "./stats.js";
+import { renderCalendar } from "./calendar.js";
 import { renderAbout, renderNotFound } from "./about.js";
 import { renderAsk } from "./ask.js";
 import { openMovieNightModal } from "./movie-night.js";
@@ -39,6 +40,14 @@ import { openListsManagerModal } from "./lists.js";
     }
     if (segments[0] === "stats") {
       return { path: "/stats", params: {}, query };
+    }
+    if (segments[0] === "calendar") {
+      const month = segments[1] || null;   // YYYY-MM, or null for this month
+      const m = month && /^(\d{4})-(\d{2})$/.exec(month);
+      if (segments.length > 2 || (month && !(m && +m[1] >= 1 && +m[2] >= 1 && +m[2] <= 12))) {
+        return { path: "/404", params: {}, query };
+      }
+      return { path: "/calendar", params: { month }, query };
     }
     if (segments[0] === "ask") {
       return { path: "/ask", params: {}, query };
@@ -78,6 +87,9 @@ import { openListsManagerModal } from "./lists.js";
         <button type="button" class="btn btn-sm btn-ghost" id="btn-header-lists" title="Manage Lists">
           ${icon("list")} Lists
         </button>
+        <a href="#/calendar" class="btn btn-sm btn-ghost" id="btn-header-calendar">
+          ${icon("calendar")} Calendar
+        </a>
         <a href="#/stats" class="btn btn-sm btn-ghost" id="btn-header-stats">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
           Stats
@@ -92,6 +104,9 @@ import { openListsManagerModal } from "./lists.js";
         <button type="button" class="btn btn-sm btn-ghost" id="btn-header-movie-night" title="Movie Night Picker">
           ${icon("dice")} Movie Night
         </button>
+        <a href="#/calendar" class="btn btn-sm btn-ghost" id="btn-header-calendar">
+          ${icon("calendar")} Calendar
+        </a>
         <a href="#/stats" class="btn btn-sm btn-ghost" id="btn-header-stats">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
           Stats
@@ -108,7 +123,7 @@ import { openListsManagerModal } from "./lists.js";
     document.getElementById("btn-header-lists")?.addEventListener("click", () => openListsManagerModal());
 
     // Header admin bar is a swipeable row on phones; mark and reveal the current page's button.
-    const activeId = { "/ask": "btn-header-ask", "/wanted": "btn-header-wanted", "/stats": "btn-header-stats", "/add": "btn-header-add" }[state.route?.path];
+    const activeId = { "/ask": "btn-header-ask", "/wanted": "btn-header-wanted", "/calendar": "btn-header-calendar", "/stats": "btn-header-stats", "/add": "btn-header-add" }[state.route?.path];
     const activeBtn = activeId ? document.getElementById(activeId) : null;
     if (activeBtn) activeBtn.setAttribute("aria-current", "page");
     bindScrollRow(nav, activeBtn);
@@ -118,6 +133,7 @@ import { openListsManagerModal } from "./lists.js";
       if (isAdmin) {
         footerLinks.innerHTML = `
           <a href="#/">Collection</a> &nbsp;·&nbsp;
+          <a href="#/calendar">Calendar</a> &nbsp;·&nbsp;
           <a href="#/stats">Stats</a> &nbsp;·&nbsp;
           <a href="#/about">About &amp; TMDB Attribution</a> &nbsp;·&nbsp;
           <a href="/${location.hash ? hashWithoutEditorFilters(location.hash) : ""}">Public View</a>
@@ -125,6 +141,7 @@ import { openListsManagerModal } from "./lists.js";
       } else {
         footerLinks.innerHTML = `
           <a href="#/">Collection</a> &nbsp;·&nbsp;
+          <a href="#/calendar">Calendar</a> &nbsp;·&nbsp;
           <a href="#/stats">Stats</a> &nbsp;·&nbsp;
           <a href="#/about">About &amp; TMDB Attribution</a> &nbsp;·&nbsp;
           <a href="/admin${location.hash || ""}">Admin Sign In</a>
@@ -215,6 +232,11 @@ import { openListsManagerModal } from "./lists.js";
         state.grid.scrollY = window.scrollY;
       }
       await renderStats(view);
+    } else if (state.route.path === "/calendar") {
+      if (prevRoute.path === "/") {
+        state.grid.scrollY = window.scrollY;
+      }
+      await renderCalendar(view, state.route.params.month);
     } else if (state.route.path === "/about") {
       if (prevRoute.path === "/") {
         state.grid.scrollY = window.scrollY;
