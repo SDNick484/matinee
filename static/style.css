@@ -3272,3 +3272,69 @@ button.cal-day:focus-visible {
 .settings-stack { display: flex; flex-direction: column; gap: var(--s4); }
 /* The gear at the end of the editor bar: a square 44 px target. */
 .nav-actions .btn-icon { width: 44px; height: 44px; padding: 0; }
+
+/* ---------------------------------------------------------------- Play on the TV (spec 2026-11-26-play-on-tv §6.5) */
+/* The ▶ on a poster: a 44 px target in the poster's bottom-right corner, drawn as a smaller disc. */
+.play-btn {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  z-index: 3;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 0;
+  color: var(--ink);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.play-btn::before {
+  content: "";
+  position: absolute;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: rgba(14, 14, 18, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.6);
+}
+.play-btn .ico { position: relative; width: 18px; height: 18px; margin-left: 2px; }
+.play-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: -4px; }
+.play-btn:disabled, .play-bar-btn:disabled, .play-sheet-btn:disabled { opacity: 0.5; cursor: progress; }
+/* The buttons at the top of a title and under the Movie Night pick. */
+.play-bar { display: flex; flex-direction: column; gap: var(--s2); min-width: 0; margin: var(--s1) 0; }
+.play-bar-buttons { display: flex; flex-wrap: wrap; gap: var(--s2); }
+.play-bar-btn, .play-sheet-btn { min-height: 44px; height: auto; touch-action: manipulation; }
+.play-bar-btn .ico { width: 1em; height: 1em; }
+.play-lines { list-style: none; margin: 0; padding: 0; font-size: var(--fs-xs); color: var(--ink-2); }
+.play-lines li { overflow-wrap: anywhere; }
+/* The chooser for a title with two ways. */
+.play-sheet .btn, .play-sheet-cancel { min-height: 44px; }
+.play-sheet .modal-title { overflow-wrap: anywhere; }
+/* The message a disc play leaves until it is dismissed. */
+.play-note {
+  position: fixed;
+  left: var(--s3);
+  right: var(--s3);
+  bottom: calc(var(--s4) + env(safe-area-inset-bottom, 0px));
+  max-width: 480px;
+  margin: 0 auto;
+  z-index: 150;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--s2);
+  background: var(--card);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: var(--r-card);
+  padding: var(--s3) var(--s4);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+.play-note .play-note-dismiss { min-height: 44px; }
