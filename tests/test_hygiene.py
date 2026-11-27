@@ -1,8 +1,8 @@
 """No personal LAN addresses, hostnames or container IDs in the published tree.
 
 Like Cookbook-Collection's test_hygiene.py. Design history (docs/superpowers/, openspec/, .superpowers/)
-records what was true at the time and is exempt. Docs and examples use 192.168.1.100, mcp.example.com
-and "the Matinee host" instead.
+records what was true at the time and is exempt. Container IDs match in any case, with a space, dash or
+underscore (CT 2NN, ct2NN-ops). Docs and examples use 192.168.1.100, mcp.example.com and "the Matinee host" instead.
 """
 import re
 import subprocess
@@ -11,7 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 EXEMPT = ("docs/superpowers/", "openspec/", ".superpowers/")
 # Built from fragments so this file does not match its own pattern.
-PATTERN = re.compile("|".join((r"192\.168\.1\.1" + "74", "nick" + "andrade", r"CT ?2" + "10")))
+PATTERN = re.compile("|".join((r"192\.168\.1\.1" + "74", "nick" + "andrade", r"CT[ _-]?2" + "10")), re.IGNORECASE)
 SKIP_DIRS = {".git", "dist", "data", "__pycache__", ".pytest_cache", ".venv", "node_modules"}
 
 
@@ -64,3 +64,9 @@ def test_installer_preserves_existing_port():
     text = (ROOT / "installer" / "setup-head.sh").read_text(encoding="utf-8")
     assert "sed -n 's/^PORT=//p' \"$CONF\"" in text
     assert 'PORT="${MATINEE_PORT:-8771}"' in text
+
+
+def test_pattern_catches_container_id_spellings():
+    for sample in ("CT " + "210", "CT" + "210", "/usr/local/bin/ct" + "210-notify", "/etc/conf.d/ct" + "210-ops", "ct_" + "210"):
+        assert PATTERN.search(sample), sample
+    assert not PATTERN.search("/usr/local/bin/ops-notify")
