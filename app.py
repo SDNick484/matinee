@@ -64,6 +64,8 @@ from lists import find_list, title_lists, list_members, create_list, update_list
 from lists import set_membership, clear_watch_soon  # noqa: F401
 from watched_days import parse_month, month_view  # noqa: F401
 from youtube import YOUTUBE_ID_RE, youtube_id_ok, parse_youtube_link  # noqa: F401
+from youtube import LoadConflict, load_links, plan_links, read_library  # noqa: F401
+from export import not_loaded_csv  # noqa: F401
 
 
 # ===================================================================== split modules
@@ -1050,6 +1052,40 @@ def delete_copy(copy_id):
     con.execute("DELETE FROM copies WHERE id=?", (copy_id,))
     con.commit()
     return jsonify(ok=True, title_id=cur["title_id"])
+
+
+LOAD_LIST_MAX_BYTES = 2_000_000     # a list of a few hundred films is about 50 KB
+
+
+@app.post("/admin/api/youtube-links")
+@editor_required
+def load_youtube_links():
+    """Load a list of owned YouTube films (spec 2026-11-26-play-on-tv-design §5): a JSON array or text/csv of
+    {title, year, video_id, play_link}. A row that matches exactly one digital copy, by cleaned title and the same
+    year, gets its id; every other row comes back with a reason. ?dry_run=1 changes nothing, ?format=csv answers the
+    not-loaded rows as a spreadsheet. Editors only (the read key gets 403): ids are editor-only data."""
+    fmt = request.args.get("format") or "json"
+    if fmt not in ("json", "csv"):
+        return make_err(400, f'Unknown format "{fmt}". Use json or csv.')
+    dry_run = (request.args.get("dry_run") or "").lower() in ("1", "true", "yes")
+    if (request.content_length or 0) > LOAD_LIST_MAX_BYTES:
+        return make_err(413, "That list is too large to load in one go.")
+    try:
+        rows = read_library(request.get_data(), request.content_type or "")
+    except ValueError as e:
+        return make_err(400, str(e))
+    try:
+        plan = plan_links(db(), rows) if dry_run else load_links(db(), rows)
+    except LoadConflict:
+        return make_err(409, "Something changed while the list was loading. Nothing was loaded: run it again.")
+    if not dry_run:
+        app.logger.info("YouTube list loaded by %s: %d linked, %d already linked, %d not loaded",
+                        who(), len(plan["link"]), plan["already_linked"], len(plan["not_loaded"]))
+    if fmt == "csv":
+        return app.response_class(not_loaded_csv(plan["not_loaded"]), mimetype="text/csv", headers={
+            "Content-Disposition": 'attachment; filename="youtube-links-not-loaded.csv"', "Cache-Control": "no-store"})
+    return jsonify(linked=len(plan["link"]), already_linked=plan["already_linked"],
+                   not_loaded=plan["not_loaded"], dry_run=dry_run)
 
 
 # ============================================================================== wish list (editors only)
