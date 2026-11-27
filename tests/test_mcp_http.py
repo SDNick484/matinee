@@ -41,7 +41,7 @@ EMAIL = "nick@example.com"
 HOST = "mcp.example.com"
 READ_TOOLS = {"search_collection", "get_movie", "where_is", "get_recommendations",
               "get_collection_stats", "list_people", "get_lists", "get_list", "list_copies", "search_tmdb",
-              "get_wishlist"}
+              "get_wishlist", "watch_calendar"}
 WRITE = {"rate_movie", "log_watch", "add_movie", "want_movie", "set_list_membership"}
 
 
@@ -305,7 +305,7 @@ def test_default_is_read_only(client, token):
     assert tool_names(client, tok, open_session(client, tok)) == READ_TOOLS
 
 
-def test_writes_enabled_lists_sixteen(env, signing_key, where_is_calls, token):
+def test_writes_enabled_lists_seventeen(env, signing_key, where_is_calls, token):
     env["MATINEE_MCP_READONLY"] = "0"
     with make_client(env, signing_key) as c:
         tok = token()
@@ -693,7 +693,7 @@ def test_log_level_refuses_add_movie(env, signing_key, where_is_calls, token, fa
     assert [r for r in fake_matinee.requests if r[0] in ("POST", "PUT", "DELETE")] == []
 
 
-def test_main_log_level_uses_the_api_key_and_registers_fourteen_tools(served):
+def test_main_log_level_uses_the_api_key_and_registers_fifteen_tools(served):
     import asyncio
 
     import mcp_http
