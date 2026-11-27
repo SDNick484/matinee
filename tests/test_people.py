@@ -448,3 +448,82 @@ def test_list_people_active_only(client):
     client.put(f"/admin/api/people/{ids['Paige']}", json={"active": False})
     assert [p["name"] for p in matinee.list_people(db(), active_only=True)] == ["Nick", "Lauren", "Midge", "Alice"]
     assert len(matinee.list_people(db())) == 5
+
+
+# ------------------------------------------------------------------ the rated "Who watched" default (issue 50)
+# Scenario: Nick and Lauren are the adults, Midge, Alice and Paige the kids. Amélie is TMDB R, The Dark Knight
+# PG-13, The Princess Bride PG, Toy Story G and Kantara has no certification.
+
+import datetime as _dt
+
+_ADULTS = ["Nick", "Lauren"]
+_EVERYONE = ["Nick", "Lauren", "Midge", "Alice", "Paige"]
+
+
+def _log_names(client, tmdb_id, override=None, **body):
+    """Log a watch today for a seeded fixture title, no attendees unless `body` has them; the names recorded."""
+    row = db().execute("SELECT id FROM titles WHERE tmdb_id = ?", (tmdb_id,)).fetchone()
+    tid = row["id"] if row else seed_title(db(), tmdb_id)
+    if override:
+        db().execute("UPDATE titles SET certification_override = ? WHERE id = ?", (override, tid))
+        db().commit()
+    res = client.post(f"/admin/api/titles/{tid}/watches", json={"watched_date": _dt.date.today().isoformat(), **body})
+    assert res.status_code == 200
+    names = {p["id"]: p["name"] for p in client.get("/admin/api/people").json["people"]}
+    return [names[i] for i in res.json["watch"]["attendees"]]
+
+
+@pytest.mark.parametrize("tmdb_id, override, who", [
+    (194, None, _ADULTS),            # R
+    (155, None, _ADULTS),            # PG-13
+    (2493, "NC-17", _ADULTS),        # NC-17 (override on a PG title)
+    (862, None, _EVERYONE),          # G
+    (2493, None, _EVERYONE),         # PG
+    (2493, "NR", _EVERYONE),         # NR
+    (848326, None, _EVERYONE),       # no certification at all
+    (2493, "PG-13", _ADULTS),        # override PG-13 on a TMDB PG movie
+    (194, "PG", _EVERYONE),          # override PG on a TMDB R movie
+])
+def test_rated_default_from_the_page(client, tmdb_id, override, who):
+    seed_people(db())
+    assert _log_names(client, tmdb_id, override) == who
+
+
+def test_rated_default_explicit_attendees_win(client):
+    seed_people(db())
+    assert _log_names(client, 194, attendees=["Nick", "Midge"]) == ["Nick", "Midge"]
+    assert _log_names(client, 155, attendees=_EVERYONE) == _EVERYONE
+
+
+def test_rated_default_old_pg_watch_is_still_adults(client):
+    seed_people(db())
+    assert _log_names(client, 2493, date_bucket="over_10_years") == _ADULTS
+    assert _log_names(client, 2493, watched_date="2001-05-01") == _ADULTS
+
+
+def test_rated_default_is_everyone_when_no_adult_is_active(client):
+    ids = seed_people(db())
+    for name in _ADULTS:
+        client.put(f"/admin/api/people/{ids[name]}", json={"active": False})
+    assert _log_names(client, 194) == ["Midge", "Alice", "Paige"]
+
+
+def test_rated_default_skips_an_inactive_adult_and_an_inactive_kid_stays_out(client):
+    ids = seed_people(db())
+    client.put(f"/admin/api/people/{ids['Lauren']}", json={"active": False})
+    assert _log_names(client, 194) == ["Nick"]
+
+
+def test_rated_default_unit(client):
+    con = db()
+    ids = seed_people(con)
+    adults = [ids[n] for n in _ADULTS]
+    everyone = [ids[n] for n in _EVERYONE]
+    d = matinee.default_attendees
+    assert matinee.ADULT_CERTS == ("R", "PG-13", "NC-17")
+    assert d(con, None, None) == everyone
+    assert d(con, None, None, "R") == adults
+    assert d(con, None, None, "PG-13", via_mcp=True) == everyone
+    assert d(con, None, None, "R", via_mcp=True) == adults
+    assert d(con, None, None, "NC-17", via_mcp=True) == adults
+    assert d(con, None, "over_10_years", "G") == adults

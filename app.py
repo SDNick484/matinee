@@ -48,7 +48,7 @@ from images import sniff_image, poster_file_of, delete_custom_poster  # noqa: F4
 from people import PERSON_KINDS, PERSON_COLORS, MAX_ACTIVE_PEOPLE, RESERVED_PERSON_NAMES, person_out  # noqa: F401
 from people import PERSON_SELECT, list_people, get_person, person_name_arg, person_kind_arg  # noqa: F401
 from people import person_color_arg, person_sort_arg, check_active_room, resolve_people, default_attendees  # noqa: F401
-from people import set_attendees, watch_response  # noqa: F401
+from people import set_attendees, watch_response, ADULT_CERTS  # noqa: F401
 from browse import PRIVATE_COPY, PRIVATE_WATCH, TITLE_COLS, get_locations, get_location_path_map  # noqa: F401
 from browse import get_descendant_location_ids, copy_label, copy_out, watch_out, title_detail, SORTS  # noqa: F401
 from browse import like_escape, QUALITY_MAP, CARD_SELECT, _card, title_cards, PEOPLE_PARAMS  # noqa: F401
@@ -1202,7 +1202,7 @@ def fire_watch_event(con, title_id, watched_date):
 @editor_required
 def add_watch(title_id):
     con = db()
-    row = con.execute("SELECT id FROM titles WHERE id=?", (title_id,)).fetchone()
+    row = con.execute("SELECT id, certification, certification_override FROM titles WHERE id=?", (title_id,)).fetchone()
     if not row:
         abort(make_err(404, "No such title"))
     data = request.get_json(silent=True) or {}
@@ -1244,7 +1244,9 @@ def add_watch(title_id):
     if "attendees" in data:
         attendees = resolve_people(con, data["attendees"])  # validated before anything is written
     else:
-        attendees = default_attendees(con, watched_date, date_bucket)
+        # The effective certification (override, else TMDB). The MCP sends "source": "mcp" so PG-13 counts as everyone.
+        attendees = default_attendees(con, watched_date, date_bucket, row["certification_override"] or row["certification"],
+                                      via_mcp=data.get("source") == "mcp")
     try:
         cur = con.execute("INSERT INTO watches(title_id, watched_date, notes, date_bucket) VALUES (?, ?, ?, ?)",
                           (title_id, watched_date, notes, date_bucket))

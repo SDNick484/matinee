@@ -756,3 +756,54 @@ def test_an_old_date_switches_the_kids_off_like_ten_plus_years(server, browser):
     _settled(page, posts, 3)
     assert posts[-1] == {"watched_date": recent}
     assert errors == []
+
+
+def _pressed(page):
+    toggles = page.locator("#who-watched-row .person-toggle")
+    return [toggles.nth(i).get_attribute("aria-pressed") for i in range(toggles.count())]
+
+
+def test_who_watched_starts_with_the_kids_off_on_an_r_movie_and_on_for_pg(server, browser, monkeypatch):
+    """Issue 50: Amelie (R) starts with Nick and Lauren only, and Watched Today sends no attendees because the toggles
+    match the default; Hocus Pocus (PG) starts with everyone."""
+    monkeypatch.setitem(TITLE, "title", "Amélie")
+    monkeypatch.setitem(TITLE, "certification", "R")
+    page, posts, puts, errors = _open(browser, server, PEOPLE)
+    assert _pressed(page) == ["true", "true", "false", "false", "false"]
+    _mark_stale(page)
+    page.click("#btn-watched-today")
+    _settled(page, posts, 1)
+    assert set(posts[-1]) == {"watched_date", "live"}
+    assert errors == []
+    page.close()
+
+    monkeypatch.setitem(TITLE, "title", "Hocus Pocus")
+    monkeypatch.setitem(TITLE, "certification", "PG")
+    page, posts, puts, errors = _open(browser, server, PEOPLE)
+    assert _pressed(page) == ["true"] * 5
+    assert errors == []
+
+
+def test_certification_override_resets_the_toggles_unless_changed_by_hand(server, browser, monkeypatch):
+    monkeypatch.setitem(TITLE, "certification", "PG")
+    monkeypatch.setitem(TITLE, "certification_tmdb", "PG")
+    page, posts, puts, errors = _open(browser, server, PEOPLE)
+
+    def put_cert(route):
+        value = route.request.post_data_json["certification"]
+        _json(route, {"ok": True, "certification": value or "PG", "certification_tmdb": "PG", "certification_override": value})
+
+    page.route("**/admin/api/titles/1/certification", put_cert)
+    assert _pressed(page) == ["true"] * 5
+    page.select_option("#cert-override", "R")
+    page.wait_for_function("document.querySelectorAll('#who-watched-row .person-toggle[aria-pressed=false]').length === 3")
+    assert _pressed(page) == ["true", "true", "false", "false", "false"]
+    page.select_option("#cert-override", "")                                 # back to PG: everyone
+    page.wait_for_function("document.querySelectorAll('#who-watched-row .person-toggle[aria-pressed=false]').length === 0")
+
+    page.click('#who-watched-row .person-toggle[data-person-id="5"]')        # Paige was away: changed by hand
+    page.select_option("#cert-override", "R")
+    page.wait_for_selector("#cert-override option[value=R]:checked", state="attached")
+    page.wait_for_timeout(200)
+    assert _pressed(page) == ["true", "true", "true", "true", "false"]       # left alone
+    assert errors == []

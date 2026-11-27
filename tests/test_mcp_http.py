@@ -668,7 +668,7 @@ def test_log_level_logs_a_watch_for_paddington_2(env, signing_key, where_is_call
     assert len(posts) == 1
     (method, path, auth), body = posts[0]
     assert path == "/admin/api/titles/214/watches" and auth == f"Bearer {KEY}"
-    assert json.loads(body) == {"watched_date": "2026-11-10"}
+    assert json.loads(body) == {"watched_date": "2026-11-10", "source": "mcp"}
 
 
 def test_log_level_can_rate_too(env, signing_key, where_is_calls, token, fake_matinee):

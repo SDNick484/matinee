@@ -1111,10 +1111,11 @@ class MatineeClient:
     ) -> Dict[str, Any]:
         """Record a watch event for a title with date, optional notes, optional attendees (names) and an optional
         date bucket for an undated watch. No `attendees` key is sent when None: the server then records everyone,
-        or only the adults for a watch over ten years old (date_bucket "over_10_years" or an older date). An empty
-        list is sent as is."""
+        or only the adults for an R or NC-17 movie or a watch over ten years old (date_bucket "over_10_years" or an
+        older date). An empty list is sent as is. `"source": "mcp"` is always sent: it makes the server treat PG-13
+        as everyone (the movie page records PG-13 as adults only)."""
         date_val = watched_date if watched_date is not None else watched_at
-        payload: Dict[str, Any] = {"watched_date": date_val}
+        payload: Dict[str, Any] = {"watched_date": date_val, "source": "mcp"}
         if notes:
             payload["notes"] = notes
         if date_bucket:
@@ -1192,6 +1193,7 @@ Matinee is the family's own collection of physical discs and digital copies.
 - "The girls" or "the kids": audience="kids". "Us two", "date night": audience="adults". A named person: audience="Alice". After watching, pass attendees to log_watch only when someone was missing. \
 If a tool answers that no people are set up, repeat the call without audience.
 - After a pick, "where is it?": call where_is(title). After watching: call log_watch, then rate_movie if the user gives a rating.
+- log_watch with no attendees records only the adults for an R or NC-17 movie (and for a watch over ten years ago): pass attendees to name the kids if they watched. PG-13 and anything lower records everyone.
 - "What do we want to buy" or "what is on the wish list": call get_wishlist. A movie can be wanted in a format the family does not own yet even when another format is owned.
 - "Pick something" with nothing else to go on: call get_recommendations with no mode; it uses the family's Watch Soon list first. \
 Near a holiday, call get_lists and pass in_season=true when a list is in season; list="Christmas" picks from one list.
@@ -1206,6 +1208,8 @@ It lists only watches with an exact date; one logged as "1-2 Years ago" has no d
 READONLY_INSTRUCTIONS = SERVER_INSTRUCTIONS.replace(
     " After watching: call log_watch, then rate_movie if the user gives a rating.", "").replace(
     " After watching, pass attendees to log_watch only when someone was missing.", "").replace(
+    "- log_watch with no attendees records only the adults for an R or NC-17 movie (and for a watch over ten years "
+    "ago): pass attendees to name the kids if they watched. PG-13 and anything lower records everyone.\n", "").replace(
     '- "Add it to Watch Soon" or "save it for later": set_list_membership(list="Watch Soon", title_id=..., on=true).\n',
     "")
 # Said at the levels that lack tools, in words that name none of them.
@@ -1452,8 +1456,10 @@ def log_watch(
 ) -> Dict[str, Any]:
     """Record a watch event with an optional ISO date (YYYY-MM-DD; omit or pass null for dateless/historical watch) and optional notes.
     date_bucket: for a watch with no exact date, roughly how long ago ("over_10_years" = more than ten years ago).
-    attendees: names of who watched; omit it when everyone did. For a watch over ten years ago (date_bucket=
-    "over_10_years", or a watched_date more than ten years back) with no attendees, only the adults are recorded."""
+    attendees: names of who watched; omit it when the default is right. With no attendees, an R or NC-17 movie records
+    only the adults (pass attendees to name the kids if they watched), and so does a watch over ten years ago
+    (date_bucket="over_10_years", or a watched_date more than ten years back); a PG-13 movie and anything rated lower
+    records everyone."""
     return _default_client.log_watch(title_id, watched_date=watched_date, notes=notes, watched_at=watched_at,
                                      attendees=attendees, date_bucket=date_bucket)
 

@@ -121,8 +121,14 @@ import { bindWantSection, wantSectionHTML } from "./wishlist.js";
     const people = isAdmin ? activePeople() : [];
     const showWho = people.length > 0;
     const whoLabel = "Who watched";
+    // A recent watch of an R, PG-13 or NC-17 movie starts with the adults only (people.ADULT_CERTS; the MCP differs for
+    // PG-13). title.certification is the effective one (override, else TMDB). With no active adult: everyone.
+    const ratedIds = () => {
+      const adultsOnly = ["R", "PG-13", "NC-17"].includes(title.certification) && people.some((p) => p.kind === "adult");
+      return people.filter((p) => !adultsOnly || p.kind === "adult").map((p) => p.id);
+    };
     const whoRowHTML = () =>
-      `<div class="who-watched" id="who-watched-row"><span class="who-watched-label">Who watched</span>${personTogglesHTML(people.map((p) => p.id), whoLabel)}</div>`;
+      `<div class="who-watched" id="who-watched-row"><span class="who-watched-label">Who watched</span>${personTogglesHTML(ratedIds(), whoLabel)}</div>`;
     const watchDatesHTML = (w) =>
       w.date_bucket && BUCKET_LABELS[w.date_bucket]
         ? (w.date_bucket === "unknown"
@@ -432,6 +438,7 @@ import { bindWantSection, wantSectionHTML } from "./wishlist.js";
             title.certification = res.certification;
             title.certification_tmdb = res.certification_tmdb;
             title.certification_override = res.certification_override;
+            if (!whoByHand) setToggles(defaultIds(currentWhen()));   // the new certification's default, unless changed by hand
             const slot = document.getElementById("cert-slot");
             if (slot) slot.innerHTML = certSlotHtml(title);
             bindCertOverride();
@@ -605,7 +612,7 @@ import { bindWantSection, wantSectionHTML } from "./wishlist.js";
       };
       // Who a log records when the page sends no attendees (app.default_attendees): every active person, or only
       // the active adults for a watch over ten years old, the "10+ Years" bucket (ruling R21) or a date before
-      // today minus ten years (decision D2). The page sends `attendees` only when the toggles differ from that
+      // today minus ten years (decision D2), or when the title is rated R, PG-13 or NC-17 (ratedIds). The page sends `attendees` only when the toggles differ from that
       // default, so an untouched row leaves the choice to the server; absent entirely when no people exist.
       // The cutoff uses the UTC date, as the server does.
       const tenYearsAgo = (() => {
@@ -613,7 +620,9 @@ import { bindWantSection, wantSectionHTML } from "./wishlist.js";
         return m === "02" && d === "29" ? `${Number(y) - 10}-03-01` : `${Number(y) - 10}-${m}-${d}`;
       })();
       const isOld = ({ bucket, date } = {}) => bucket === "over_10_years" || Boolean(date && date < tenYearsAgo);
-      const defaultIds = (when) => people.filter((p) => !isOld(when) || p.kind === "adult").map((p) => p.id);
+      const defaultIds = (when) => (isOld(when) ? people.filter((p) => p.kind === "adult").map((p) => p.id) : ratedIds());
+      let whoByHand = false;   // set once the editor taps a toggle; a certification change then leaves them alone
+      const currentWhen = () => (chosenBucket ? { bucket: chosenBucket } : { date: inputWatchDate?.value });
       const attendeesBody = (when) => {
         if (!whoRow) return {};
         const picked = readToggles(whoRow);
@@ -630,6 +639,7 @@ import { bindWantSection, wantSectionHTML } from "./wishlist.js";
       whoRow?.addEventListener("click", (e) => {
         const t = e.target.closest(".person-toggle");
         if (!t) return;
+        whoByHand = true;
         t.setAttribute("aria-pressed", t.getAttribute("aria-pressed") === "true" ? "false" : "true");
         syncLogButtons();
       });
