@@ -301,7 +301,7 @@ def test_no_public_route_carries_notes_people_or_attendance(client, family_with_
     list_ids = [r[0] for r in db().execute("SELECT id FROM lists")]
     rules, urls = _public_urls(family_with_history, list_ids)
     assert {"/api/titles", "/api/titles/<int:title_id>", "/api/recommendations", "/api/stats", "/api/me",
-            "/api/lists", "/api/lists/<int:list_id>"} <= rules
+            "/api/lists", "/api/lists/<int:list_id>", "/api/calendar"} <= rules
     for url in urls:
         res = client.get(url)
         assert res.status_code == 200, (url, res.status_code)
@@ -328,3 +328,21 @@ def test_people_parameters_answer_the_same_400_on_every_public_list(client, fami
     for path in ("/api/titles", "/api/recommendations"):
         res = client.get(f"{path}?{param}")
         assert res.status_code == 400 and res.get_json() == {"error": "Sign in to pick for specific people."}, path
+
+
+def test_the_public_calendar_is_a_public_rule_with_no_diary_in_it(client, family_with_history):
+    """/api/calendar names movies and dates only: no note, person or watch id, and no estimated date from a bucket."""
+    con = db()
+    con.execute("INSERT INTO watches (title_id, watched_date, date_bucket, notes) VALUES (?, '2026-11-19', "
+                "'past_year', ?)", (family_with_history[2], NOTE))
+    con.commit()
+    res = client.get("/api/calendar?month=2026-11")
+    assert res.status_code == 200
+    text = res.get_data(as_text=True)
+    for secret in (NOTE, *NAMES):
+        assert secret not in text
+    days = res.get_json()["days"]
+    assert list(days) == ["2026-11-07"] and [e["title"] for e in days["2026-11-07"]] == ["The Dark Knight"]
+    assert not PRIVATE_KEYS & set(_walk_keys(days))
+    for entry in days["2026-11-07"]:
+        assert set(entry) == {"title_id", "title", "year", "poster_url"}
