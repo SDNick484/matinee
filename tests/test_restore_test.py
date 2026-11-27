@@ -49,7 +49,7 @@ def env(tmp_path):
     notify.write_text(f'#!/bin/sh\necho "$@" >> {tmp_path}/notified\n')
     notify.chmod(0o755)
     log = tmp_path / "ops.log"
-    e = dict(os.environ, LOCAL_DIR=str(local), LOG=str(log), NOTIFY=str(notify), OPS_CONF=str(tmp_path / "no-ops-conf"),
+    e = dict(os.environ, LOCAL_DIR=str(local), LOG=str(log), NOTIFY_CMD=str(notify), OPS_CONF=str(tmp_path / "no-ops-conf"),
              TMPDIR=str(tmp_path))
     return local, log, tmp_path / "notified", e, tmp_path
 
@@ -103,7 +103,7 @@ def test_no_backups_fails_and_notifies(env):
     _, log, notified, e, _ = env
     r = run(e)
     assert r.returncode == 1
-    assert "FAILED: no matinee-matinee.db.gz found" in log.read_text()
+    assert "FAILED: no matinee-matinee*.db.gz found" in log.read_text()
     assert notified.read_text().startswith("Matinee restore test down")
 
 
@@ -173,3 +173,44 @@ def test_temp_files_are_cleaned_up(env):
     backup(local, "2026-11-10")
     run(e)
     assert not list(tmp.glob("matinee-restore-test.*"))
+
+
+def labelled(local_dir, day, name, **kw):
+    """A copy with a label, like `matinee-backup pre-upgrade` writes it, in a folder that may already exist."""
+    d = local_dir / day
+    d.mkdir(parents=True, exist_ok=True)
+    gz = d / name
+    tmp = d / "tmp.db"
+    make_db(tmp, **kw)
+    gz.write_bytes(gzip.compress(tmp.read_bytes()))
+    tmp.unlink()
+    return gz
+
+
+def test_newest_copy_is_checked_whatever_its_label(env):
+    local, log, _, e, _ = env
+    scheduled = backup(local, "2026-11-10", titles=1, copies=1)
+    pre = labelled(local, "2026-11-10", "matinee-matinee-pre-upgrade-143012.db.gz", titles=3, copies=5)
+    os.utime(scheduled, (time.time() - 3600, time.time() - 3600))   # the 02:00 copy is older than the pre-upgrade one
+    assert run(e).returncode == 0
+    assert "2026-11-10: integrity ok, 3 titles, 5 copies" in log.read_text()
+    assert pre.exists()
+
+
+def test_older_label_in_a_newer_folder_beats_a_newer_file_in_an_older_folder(env):
+    local, log, _, e, _ = env
+    labelled(local, "2026-11-11", "matinee-matinee-pre-upgrade-090000.db.gz", titles=2, copies=2)
+    gz = backup(local, "2026-11-10", titles=9, copies=9)
+    os.utime(gz, None)
+    assert run(e).returncode == 0
+    assert "2026-11-11: integrity ok, 2 titles, 2 copies" in log.read_text()
+
+
+def test_labelled_copy_counts_its_own_covers(env):
+    local, log, _, e, tmp = env
+    gz = labelled(local, "2026-11-10", "matinee-matinee-pre-upgrade-143012.db.gz")
+    (tmp / "155-custom-0123456789.jpg").write_bytes(b"\xff\xd8x")
+    subprocess.run(["tar", "-czf", str(gz.parent / "matinee-custom-covers-pre-upgrade-143012.tar.gz"), "-C", str(tmp),
+                    "155-custom-0123456789.jpg"], check=True)
+    assert run(e).returncode == 0
+    assert "1 custom covers" in log.read_text()
