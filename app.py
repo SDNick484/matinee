@@ -63,7 +63,7 @@ from lists import ListError, WATCH_SOON, has_lists, pacific_today, list_out, all
 from lists import find_list, title_lists, list_members, create_list, update_list, delete_list  # noqa: F401
 from lists import set_membership, clear_watch_soon  # noqa: F401
 from watched_days import parse_month, month_view  # noqa: F401
-from youtube import YOUTUBE_ID_RE, youtube_id_ok  # noqa: F401
+from youtube import YOUTUBE_ID_RE, youtube_id_ok, parse_youtube_link  # noqa: F401
 
 
 # ===================================================================== split modules
@@ -552,9 +552,36 @@ def copy_price_cents(v):
     return v
 
 
-def copy_values(data):
-    """Validate {kind, format, service, location_id, edition, code_status, purchased_on, price_cents} -> clean values,
-    or abort 400 with a message for the form."""
+YOUTUBE_LINK_ERROR = "That isn't a YouTube link. Paste the address of the film's YouTube page."
+
+
+def copy_youtube_id(data, kind, stored=False):
+    """The id for `youtube_link` in a request: None clears it. A link needs a digital copy; `stored` says the link
+    was already on the copy (an edit that turns it physical), which gets its own sentence."""
+    try:
+        found = parse_youtube_link(data.get("youtube_link"))
+    except ValueError:
+        abort(make_err(400, YOUTUBE_LINK_ERROR))
+    if found and kind == "physical":
+        abort(make_err(400, "This copy has a YouTube link. Clear it before making the copy physical." if stored
+                       else "A YouTube link belongs on a digital copy. A physical copy can't have one."))
+    return found
+
+
+def check_youtube_free(con, youtube_id, copy_id=None):
+    """409 naming the film when another copy already has this id (the unique index would refuse it anyway)."""
+    if not youtube_id:
+        return
+    row = con.execute("SELECT t.title, t.year FROM copies c JOIN titles t ON t.id = c.title_id "
+                      "WHERE c.youtube_id = ? AND c.id IS NOT ?", (youtube_id, copy_id)).fetchone()
+    if row:
+        name = f"{row['title']} ({row['year']})" if row["year"] else row["title"]
+        abort(make_err(409, f"That YouTube link is already on {name}."))
+
+
+def copy_values(data, youtube_stored=False):
+    """Validate {kind, format, service, location_id, edition, code_status, purchased_on, price_cents, youtube_link}
+    -> clean values (youtube_link becomes youtube_id), or abort 400 with a message for the form."""
     kind = (clean(data.get("kind")) or "").lower()
     if kind not in FORMATS:
         abort(make_err(400, "Is it a physical copy or a digital one?"))
@@ -593,7 +620,8 @@ def copy_values(data):
     return {"kind": kind, "format": fmt, "service": service, "location_id": location_id,
             "edition": copy_edition(data.get("edition")), "code_status": code_status,
             "purchased_on": copy_purchased_on(data.get("purchased_on")),
-            "price_cents": copy_price_cents(data.get("price_cents"))}
+            "price_cents": copy_price_cents(data.get("price_cents")),
+            "youtube_id": copy_youtube_id(data, kind, youtube_stored)}
 
 
 def tmdb_id_arg(v):
@@ -965,11 +993,13 @@ def add_copy():
     data = request.get_json(silent=True) or {}
     vals = copy_values(data)
     con = db()
+    check_youtube_free(con, vals["youtube_id"])       # before ensure_title, so a refusal creates nothing
     title_id = ensure_title(con, data)
     cid = con.execute("INSERT INTO copies(title_id, kind, format, service, location_id, edition, code_status, "
-                      "purchased_on, price_cents, added_by) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                      "purchased_on, price_cents, youtube_id, added_by) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                       (title_id, vals["kind"], vals["format"], vals["service"], vals["location_id"], vals["edition"],
-                       vals["code_status"], vals["purchased_on"], vals["price_cents"], who())).lastrowid
+                       vals["code_status"], vals["purchased_on"], vals["price_cents"], vals["youtube_id"],
+                       who())).lastrowid
     # a copy that satisfies the title's want ends it, in the same transaction (wish_items stay as history)
     wanted = get_want(con, title_id)
     cleared = bool(wanted) and want_satisfied_by(wanted["wanted_format"], vals["format"])
@@ -997,12 +1027,17 @@ def edit_copy(copy_id):
     data = request.get_json(silent=True) or {}
     merged = {k: data[k] if k in data else cur[k] for k in (
         "kind", "format", "service", "location_id", "edition", "code_status", "purchased_on", "price_cents")}
-    vals = copy_values(merged)
+    keep = "youtube_link" not in data               # absent keeps what is stored, even a value this app wouldn't write
+    merged["youtube_link"] = data["youtube_link"] if not keep else (cur["youtube_id"] if youtube_id_ok(cur["youtube_id"]) else None)
+    vals = copy_values(merged, youtube_stored=keep)
+    if keep:
+        vals["youtube_id"] = cur["youtube_id"]
     con = db()
+    check_youtube_free(con, vals["youtube_id"], copy_id)
     con.execute("UPDATE copies SET kind=?, format=?, service=?, location_id=?, edition=?, code_status=?, "
-                "purchased_on=?, price_cents=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                "purchased_on=?, price_cents=?, youtube_id=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
                 (vals["kind"], vals["format"], vals["service"], vals["location_id"], vals["edition"],
-                 vals["code_status"], vals["purchased_on"], vals["price_cents"], copy_id))
+                 vals["code_status"], vals["purchased_on"], vals["price_cents"], vals["youtube_id"], copy_id))
     con.commit()
     return jsonify(title_detail(cur["title_id"], True))
 
