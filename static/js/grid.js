@@ -179,7 +179,7 @@ import { playButtonHtml, wirePlay } from "./play.js";
           <div class="empty-state">
             <h2>Unable to load collection</h2>
             <p>${esc(err.message || "Failed to connect to Matinee server")}</p>
-            <button class="btn" onclick="location.reload()">Retry</button>
+            <button class="btn" data-reload>Retry</button>
           </div>
         `;
       }
@@ -747,7 +747,7 @@ import { playButtonHtml, wirePlay } from "./play.js";
           <div class="empty-state">
             <h2>No movies match</h2>
             <p>No owned movies match the active filters.</p>
-            <button class="btn btn-ghost" onclick="location.hash='#/'">Clear all filters</button>
+            <a class="btn btn-ghost" href="#/">Clear all filters</a>
           </div>
         `;
       } else {
@@ -772,7 +772,7 @@ import { playButtonHtml, wirePlay } from "./play.js";
           .map((t) => {
             const posterSrc = t.poster_url || (t.poster_file ? `/images/${esc(t.poster_file)}` : null);
             const posterHtml = posterSrc
-              ? `<img class="poster-img" src="${posterSrc}" loading="lazy" alt="${esc(t.title)}" onerror="this.onerror=null;this.parentElement.innerHTML='<div class=\\'poster-ph\\'>${esc(t.title)}<br>${t.year || ''}</div>';">`
+              ? `<img class="poster-img" src="${esc(posterSrc)}" loading="lazy" alt="${esc(t.title)}" data-poster-fallback="${esc(t.title)}" data-poster-year="${esc(t.year || "")}">`
               : `<div class="poster-ph"><span>${esc(t.title)}<br><small style="font-weight:400;color:var(--ink-3)">${t.year || ""}</small></span></div>`;
 
             const mediumLabel = t.has_disc && t.has_digital ? "Disc + Digital" : t.has_disc ? "On disc" : t.has_digital ? "Digital" : "";

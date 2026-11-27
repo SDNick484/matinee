@@ -226,7 +226,7 @@ import { playBarHtml, wirePlay } from "./play.js";
           content.innerHTML = `
             <div class="movie-night-pick">
             <div class="movie-night-card movie-night-animated">
-              ${currentPick.poster_url ? `<img src="${currentPick.poster_url}" class="movie-night-poster" alt="${esc(currentPick.title)}">` : '<div class="movie-night-poster placeholder">No Poster</div>'}
+              ${currentPick.poster_url ? `<img src="${esc(currentPick.poster_url)}" class="movie-night-poster" alt="${esc(currentPick.title)}">` : '<div class="movie-night-poster placeholder">No Poster</div>'}
               <div class="movie-night-info">
                 <div class="movie-night-title-row">
                   <h3 class="movie-night-title">${esc(currentPick.title)}</h3>

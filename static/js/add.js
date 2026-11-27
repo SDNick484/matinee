@@ -601,7 +601,7 @@ import { openCopyModal } from "./forms.js";
             .map((m) => {
               const thumbUrl = m.poster_path ? `${TMDB_IMG_THUMB}${m.poster_path}` : "";
               const thumbHtml = thumbUrl
-                ? `<img class="result-thumb" src="${esc(thumbUrl)}" loading="lazy" alt="${esc(m.title)}" onerror="this.style.display='none';">`
+                ? `<img class="result-thumb" src="${esc(thumbUrl)}" loading="lazy" alt="${esc(m.title)}" data-hide-on-error>`
                 : `<div class="result-thumb poster-ph" style="font-size:10px">${esc(m.title)}</div>`;
 
               return `
