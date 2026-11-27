@@ -165,11 +165,8 @@ def test_modules_load_versioned_once_and_every_view_renders(server, browser):
     page.wait_for_selector(".movie-night-dialog")
     page.keyboard.press("Escape")                       # forms.js's global keydown listener → closeModal
     page.wait_for_selector(".movie-night-dialog", state="detached")
-    page.click("#btn-header-locations")
-    page.click("#btn-modal-close")
-    page.wait_for_selector("#modal-overlay", state="detached")
     for hash_, sel in (("#/stats", ".stats-view"), ("#/about", ".about-view"), ("#/add", ".add-view"),
-                       ("#/ask", ".ask-view")):
+                       ("#/ask", ".ask-view"), ("#/settings", ".settings-view .people-add")):
         page.evaluate(f"location.hash = '{hash_}'")
         page.wait_for_selector(sel)
 

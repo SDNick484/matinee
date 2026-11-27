@@ -344,11 +344,14 @@ def test_people_module_is_listed():
     assert (STATIC / "js" / "people.js").is_file()
 
 
-def test_people_button_is_admin_only():
+def test_settings_gear_is_admin_only_and_replaces_the_people_locations_lists_buttons():
     router = (STATIC / "js" / "router.js").read_text(encoding="utf-8")
     header = _fn_body("updateHeader")
     admin_branch, _, anon_branch = header.partition("} else {")
-    assert 'id="btn-header-people"' in admin_branch and 'id="btn-header-people"' not in anon_branch
+    assert 'id="btn-header-settings"' in admin_branch and 'id="btn-header-settings"' not in anon_branch
+    assert 'aria-label="Settings"' in admin_branch
+    for gone in ("btn-header-people", "btn-header-locations", "btn-header-lists"):
+        assert gone not in router
     # loadPeople() is only ever called behind isAdmin
     calls = re.findall(r"[^\n;{}]*\bloadPeople\(\)", router)
     assert calls, "router.js never calls loadPeople()"
