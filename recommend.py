@@ -457,7 +457,7 @@ def _list_conditions(con, p: dict, mode: str, today: "dt.date | None"):
 
 def _recommend(con, p: dict, today: "dt.date | None" = None) -> dict:
     season_today = today
-    today = today or dt.date.today()
+    today = today or lists.pacific_today()
     mode = p["mode"]
     genre = p.get("genre")
     audience = resolve_audience(con, p["audience"]) if p.get("audience") else None

@@ -2,7 +2,6 @@
 detail), location paths, the poster-grid query and cards, facets, stats and recommendations. Every handler takes
 `private`; a public request never gets watch notes or attendance (tests/test_privacy.py walks these functions).
 Split out of app.py."""
-import datetime as dt
 
 from flask import abort, g, has_app_context, jsonify, request
 
@@ -535,7 +534,7 @@ def collection_stats(private):
         ).fetchall()
     ]
 
-    now = dt.date.today()
+    now = pacific_today()
     year_start = f"{now.year:04d}-01-01"
     month_start = f"{now.year:04d}-{now.month:02d}-01"
     total_watched_titles = con.execute("SELECT count(DISTINCT title_id) FROM watches").fetchone()[0]

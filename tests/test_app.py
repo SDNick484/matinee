@@ -677,6 +677,17 @@ def test_stats_endpoint_shape_and_counts():
     assert s_map["Movies Anywhere"] == 1
 
 
+def test_stats_this_month_is_the_pacific_month_on_a_utc_host(utc_host):
+    import datetime as dt
+    # 23:30 on 31 October in Los Angeles (PDT) is 06:30 UTC on 1 November: the household's month is still October.
+    utc_host(dt.datetime(2026, 11, 1, 6, 30, tzinfo=dt.timezone.utc))
+    t1 = add(129)
+    assert c.post(f"/admin/api/titles/{t1['id']}/watches", json={"watched_date": "2026-10-31"}).status_code == 200
+    assert c.post(f"/admin/api/titles/{t1['id']}/watches", json={"watched_date": "2026-09-30"}).status_code == 200
+    ws = c.get("/api/stats").get_json()["watched_stats"]
+    assert ws["watched_this_month"] == 1 and ws["watched_this_year"] == 2
+
+
 def test_stats_percentages():
     add(194, "physical", "4K UHD")
     add(194, "physical", "Blu-ray")

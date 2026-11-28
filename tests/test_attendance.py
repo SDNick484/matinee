@@ -332,6 +332,12 @@ def test_other_logs_still_default_to_everyone(client, princess_bride, people, bo
     assert w["attendees"] == [people[n] for n in ("Nick", "Lauren", "Midge", "Alice", "Paige")]
 
 
+@pytest.mark.parametrize("bucket", ["someday", "last week", "fortnight"])
+def test_an_unrecognised_bucket_is_a_400_and_writes_nothing(client, princess_bride, bucket):
+    assert log_bucket(client, princess_bride, bucket).status_code == 400
+    assert db().execute("SELECT count(*) FROM watches WHERE title_id=?", (princess_bride,)).fetchone()[0] == 0
+
+
 def test_ten_plus_years_with_no_people_writes_no_rows(client, princess_bride):
     w = log_bucket(client, princess_bride, "over_10_years").get_json()["watch"]
     assert rows_for(w["id"]) == [] and w["attendees"] == []

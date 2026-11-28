@@ -14,11 +14,12 @@ import pytest
 
 import app as matinee_app
 from app import app, db, init_db
-from conftest import FakeResponse, FakeThread, seed_people
+from conftest import PACIFIC_EVENING_UTC, FakeResponse, FakeThread, seed_people
+from lists import pacific_today
 
 WEBHOOK_ID = "k3Qx9-Zr7wLmPv2T-movie-night"
 URL = f"http://homeassistant.local:8123/api/webhook/{WEBHOOK_ID}"
-TODAY = dt.date.today().isoformat()
+TODAY = pacific_today().isoformat()
 PAYLOAD_KEYS = {"event", "title", "year", "runtime", "certification", "formats", "location", "watched_date",
                 "title_id"}
 
@@ -111,6 +112,21 @@ def test_todays_watch_posts_the_payload(client, posts):
     assert [t.daemon for t in FakeThread.created] == [True]
 
 
+def test_an_evening_watch_fires_on_a_utc_host(client, posts, utc_host):
+    # 23:30 Pacific on the 27th; the UTC host's date is already the 28th. "Today" is the household's (Pacific) day.
+    utc_host(PACIFIC_EVENING_UTC)
+    seed_paddington()
+    assert log(client, watched_date="2026-11-27").status_code == 200
+    assert len(posts) == 1 and posts[0]["body"]["watched_date"] == "2026-11-27"
+
+
+def test_the_utc_hosts_date_does_not_fire_before_pacific_midnight(client, posts, utc_host):
+    utc_host(PACIFIC_EVENING_UTC)
+    seed_paddington()
+    assert log(client, watched_date="2026-11-28").status_code == 200
+    assert posts == [] and FakeThread.created == []
+
+
 def test_watched_at_alias_counts_as_a_date(client, posts):
     seed_paddington()
     assert log(client, watched_at=TODAY).status_code == 200
@@ -153,8 +169,8 @@ def test_the_response_is_the_same_with_the_feature_on(client, posts, monkeypatch
 
 @pytest.mark.parametrize("body", [
     {"watched_date": "2019-07-04"},                                  # history
-    {"watched_date": (dt.date.today() - dt.timedelta(days=1)).isoformat()},
-    {"watched_date": (dt.date.today() + dt.timedelta(days=1)).isoformat()},   # add_watch allows tomorrow
+    {"watched_date": (pacific_today() - dt.timedelta(days=1)).isoformat()},
+    {"watched_date": (pacific_today() + dt.timedelta(days=1)).isoformat()},   # add_watch allows tomorrow
     {"watched_date": None},                                          # dateless
     {},                                                              # no date at all
     {"watched_date": ""},

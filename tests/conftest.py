@@ -1,6 +1,11 @@
+import datetime as dt
 import os
 import tempfile
+import time
+import types
 from pathlib import Path
+
+import pytest
 
 # Ensure DATA_DIR is isolated to a clean temp directory during pytest collection
 if "DATA_DIR" not in os.environ or not os.environ["DATA_DIR"]:
@@ -85,3 +90,46 @@ class FakeThread:
 
     def start(self):
         self.target(*self.args, **self.kwargs)
+
+
+# 23:30 on 27 November 2026 in Los Angeles is 07:30 UTC on the 28th: a UTC host's date is one day ahead of the household's.
+PACIFIC_EVENING_UTC = dt.datetime(2026, 11, 28, 7, 30, tzinfo=dt.timezone.utc)
+
+
+def _frozen_dt(instant):
+    """The datetime module with date.today() and datetime.now() reading `instant`; date.today() is the host's date."""
+    class FrozenDate(dt.date):
+        @classmethod
+        def today(cls):
+            local = instant.astimezone()
+            return cls(local.year, local.month, local.day)
+
+    class FrozenDatetime(dt.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return instant.astimezone(tz) if tz else instant.replace(tzinfo=None)
+
+    ns = types.SimpleNamespace(**{k: getattr(dt, k) for k in dir(dt) if not k.startswith("_")})
+    ns.date, ns.datetime = FrozenDate, FrozenDatetime
+    return ns
+
+
+@pytest.fixture
+def utc_host(monkeypatch):
+    """A UTC host whose clock the test sets: call the yielded `pin(instant)` (an aware UTC datetime). Every `dt` name in
+    app and recommend reads that instant (app's `dt` reaches the split modules through _AppModule). TZ is restored."""
+    old_tz = os.environ.get("TZ")
+    os.environ["TZ"] = "UTC"
+    time.tzset()
+
+    def pin(instant):
+        monkeypatch.setattr("app.dt", _frozen_dt(instant))
+        monkeypatch.setattr("recommend.dt", _frozen_dt(instant))
+    try:
+        yield pin
+    finally:
+        if old_tz is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = old_tz
+        time.tzset()

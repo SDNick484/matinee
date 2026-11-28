@@ -1477,7 +1477,8 @@ def add_watch(title_id):
             elif "unknown" in normalized:
                 date_bucket = "unknown"
             else:
-                date_bucket = raw_bucket
+                abort(make_err(400, "Invalid date_bucket: use past_year, 1_2_years, 2_5_years, 5_10_years, "
+                                    "over_10_years or unknown"))
 
     watched_date = None
     explicit_date = raw_date is not None and bool(str(raw_date).strip())
@@ -1487,11 +1488,11 @@ def add_watch(title_id):
             watched_date = parsed.isoformat()
         except (ValueError, TypeError):
             abort(make_err(400, "Invalid watched_date: format must be YYYY-MM-DD"))
-        if parsed > dt.date.today() + dt.timedelta(days=1):
+        if parsed > pacific_today() + dt.timedelta(days=1):
             abort(make_err(400, "watched_date cannot be in the future."))
     elif date_bucket and date_bucket in WATCH_BUCKET_OFFSETS:
         days = WATCH_BUCKET_OFFSETS[date_bucket]
-        estimated_date = dt.date.today() - dt.timedelta(days=days)
+        estimated_date = pacific_today() - dt.timedelta(days=days)
         watched_date = estimated_date.isoformat()
 
     notes = clean(data.get("notes"))
@@ -1513,7 +1514,7 @@ def add_watch(title_id):
     # Home Assistant hears only about a watch dated today with no bucket: a back-filled history (an old date, a
     # bucket, no date) must not start a "movie night". Editing a watch afterwards never gets here.
     # Only the + Watched Today button sends live: true (json true, not a string); Log Date and MCP never do.
-    if data.get("live") is True and explicit_date and not date_bucket and watched_date == dt.date.today().isoformat():
+    if data.get("live") is True and explicit_date and not date_bucket and watched_date == pacific_today().isoformat():
         fire_watch_event(con, title_id, watched_date)
     return jsonify(ok=True, watch=watch_response(con, watch_id, title_id), removed_from=removed_from)
 

@@ -63,12 +63,9 @@ was sent:
 So only a deliberate "we are watching this now" tap starts a movie night; back-filling history, logging a date by
 hand and assistants never do. A film you did watch today but logged some other way sends nothing.
 
-**"Today" is the Matinee host's today.** The phone sends its own local date (**+ Watched Today** sends today's date
-where the phone is) and Matinee compares it with the date on the host's clock, in the host's time zone. If the host
-runs in UTC and the phone is in Pacific time, a movie night after about 4 PM Pacific is already "tomorrow" on the
-host, so the watch counts as yesterday's and nothing is sent. Check with `date` on the Matinee host. If the time zone
-is wrong, set it (on Alpine: `apk add tzdata && setup-timezone -z America/Los_Angeles`) and
-`rc-service matinee restart`.
+**"Today" is Pacific time, whatever the Matinee host's time zone.** The phone sends its own local date (**+ Watched
+Today** sends today's date where the phone is) and Matinee compares it with today in America/Los_Angeles, so a movie
+night after 4 PM Pacific counts as today even when the host runs in UTC.
 
 ## 4. What Home Assistant receives
 
@@ -174,7 +171,6 @@ remove the `conditions:` block to react to every film. Other fields work the sam
 - **`… answered HTTP 4xx/5xx`**: Home Assistant refused it; `local_only: true` rejects a request that does not come
   from the local network.
 - **`… failed: TimeoutError`**: Home Assistant did not answer within 3 seconds. The watch was still saved.
-- **It works at lunch but not on movie night.** The Matinee host's time zone is probably UTC: see the note on "today" in section 3a.
 - Logging a film for an earlier day, with a bucket, or with no date never fires (section 3a).
 
 ## 7. Play on the Family Room TV
