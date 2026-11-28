@@ -6,7 +6,8 @@ A want is independent of copies: a title can be wanted on 4K UHD while owned on 
 Adding a copy that satisfies it ends it (want_satisfied_by). What was pushed to the Wish Lists app is kept in
 wish_items even after that. The Wish Lists app's own purchase status is never read, so there are no spoilers.
 """
-import json, urllib.error, urllib.parse, urllib.request
+import json, math, re, urllib.error, urllib.parse, urllib.request
+from decimal import Decimal
 
 from flask import abort
 
@@ -16,6 +17,8 @@ from db import FORMATS, NOTE_MAX
 
 
 ALL_FORMATS = [f for kind in FORMATS.values() for f in kind]
+TARGET_MAX_CENTS = 99999            # $999.99; mirrors the CHECK on wants.target_cents
+KEEP_TARGET = object()              # what want_target_arg stands for when the body has no target_price key
 
 
 # ----------------------------------------------------------------------------- validation
@@ -42,6 +45,38 @@ def want_note_arg(v):
     return note
 
 
+def want_target_arg(v, fmt):
+    """The target price in whole cents, or None to clear it. `v` is a number or numeric string in dollars (an
+    optional leading $ is fine): more than 0, at most 999.99, at most two decimals. Only a physical `fmt` can carry
+    one (spec decision 14), though null and blank are always allowed. Anything else is a 400 with a sentence."""
+    if v is None or (isinstance(v, str) and not v.strip()):
+        return None
+    shape = "Target price must be an amount in dollars like 15 or 12.50, with at most two decimals."
+    if isinstance(v, bool) or not isinstance(v, (int, float, str)) or (isinstance(v, float) and not math.isfinite(v)):
+        abort(make_err(400, shape))
+    if isinstance(v, str):
+        text = v.strip()
+        text = text[1:] if text.startswith("$") else text
+        if not re.fullmatch(r"\d+(\.\d{1,2})?|\.\d{1,2}", text):
+            abort(make_err(400, shape))
+        v = text
+    dollars = Decimal(str(v))
+    if not 0 < dollars <= Decimal(TARGET_MAX_CENTS) / 100:      # before quantize, which fails on a huge number
+        abort(make_err(400, "Target price must be more than $0 and at most $999.99."))
+    if dollars != dollars.quantize(Decimal("0.01")):
+        abort(make_err(400, shape))
+    cents = int(dollars * 100)
+    if fmt not in FORMATS["physical"]:
+        abort(make_err(400, "Target price needs a physical format: 4K UHD, Blu-ray, 3D Blu-ray, DVD or VHS. "
+                            "Pick one, or leave the price blank."))
+    return cents
+
+
+def target_dollars(cents):
+    """The API's number for a stored target: dollars (15.0, 12.5), or None when the want is not watched."""
+    return None if cents is None else round(cents / 100, 2)
+
+
 def want_satisfied_by(wanted_format, copy_format):
     """A copy ends a want when it is the format wanted, or when the want names no format."""
     return wanted_format is None or wanted_format == copy_format
@@ -49,8 +84,10 @@ def want_satisfied_by(wanted_format, copy_format):
 
 # ----------------------------------------------------------------------------- reading wants
 def get_want(con, title_id):
-    r = con.execute("SELECT wanted_format, note, created_at FROM wants WHERE title_id=?", (title_id,)).fetchone()
-    return {"wanted_format": r["wanted_format"], "note": r["note"], "created_at": r["created_at"]} if r else None
+    r = con.execute("SELECT wanted_format, note, created_at, target_cents FROM wants WHERE title_id=?",
+                    (title_id,)).fetchone()
+    return {"wanted_format": r["wanted_format"], "note": r["note"], "created_at": r["created_at"],
+            "target_price": target_dollars(r["target_cents"])} if r else None
 
 
 def wishes_for_title(con, title_id):
@@ -62,7 +99,7 @@ def wishes_for_title(con, title_id):
 def list_wants(con, image_url, poster_file_of):
     """Every want, newest first, for the Wanted view and the MCP get_wishlist tool."""
     out = []
-    for r in con.execute("""SELECT w.title_id, w.wanted_format, w.note, w.created_at, t.tmdb_id, t.title, t.year,
+    for r in con.execute("""SELECT w.title_id, w.wanted_format, w.note, w.created_at, w.target_cents, t.tmdb_id, t.title, t.year,
                                    t.poster_file, t.custom_poster_file, t.fetched_at
                             FROM wants w JOIN titles t ON t.id = w.title_id
                             ORDER BY w.created_at DESC, w.title_id DESC"""):
@@ -74,7 +111,8 @@ def list_wants(con, image_url, poster_file_of):
         out.append({"title_id": r["title_id"], "tmdb_id": r["tmdb_id"], "title": r["title"], "year": r["year"],
                     "poster_url": image_url(poster_file_of(r), r["fetched_at"]),
                     "wanted_format": r["wanted_format"], "note": r["note"], "owned_formats": owned,
-                    "pushed_to": pushed, "created_at": r["created_at"]})
+                    "pushed_to": pushed, "created_at": r["created_at"],
+                    "target_price": target_dollars(r["target_cents"])})
     return out
 
 

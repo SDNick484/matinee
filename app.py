@@ -58,6 +58,7 @@ from browse import PEOPLE_PARAMS_PUBLIC_ERROR, people_params_refused, list_title
 from browse import CODE_PARAM_PUBLIC_ERROR, CODE_PARAM_VALUE_ERROR, code_param_refused  # noqa: F401
 from browse import api_locations, collection_stats, recommendations  # noqa: F401
 from wishlist import ALL_FORMATS, want_format_arg, want_note_arg, want_satisfied_by, get_want, wishes_for_title  # noqa: F401
+from wishlist import KEEP_TARGET, want_target_arg, target_dollars  # noqa: F401
 from wishlist import list_wants, want_query, wish_item, wishlist_call, wishlist_available  # noqa: F401
 from export import (EXPORT_COLUMNS, FORMULA_LEAD, TITLE_EXPORT_COLUMNS, InventoryError, copy_inventory, csv_cell,  # noqa: F401
                     dollars, export_csv, export_rows, title_rows)
@@ -1420,16 +1421,25 @@ def api_wants():
 @editor_required
 def set_want():
     """Want a title, by `title_id` or `tmdb_id` (a title not in Matinee is created with no copies). One want per
-    title: a second call replaces the format and note. 201 for a new want, 200 for a replaced one."""
+    title: a second call replaces the format and note. 201 for a new want, 200 for a replaced one. `target_price`
+    (dollars, shipping included) is kept when the key is absent and cleared by an explicit null; a format that is
+    not physical clears it, and a number with one is a 400 (spec 2026-11-27-wishlist-price-watch-design §6)."""
     data = request.get_json(silent=True) or {}
     fmt = want_format_arg(data.get("format"))     # all validated before TMDB is asked or anything is written
     note = want_note_arg(data.get("note"))
+    target = want_target_arg(data["target_price"], fmt) if "target_price" in data else KEEP_TARGET
     con = db()
     title_id = ensure_title(con, data)
-    existed = bool(get_want(con, title_id))
-    con.execute("INSERT INTO wants(title_id, wanted_format, note) VALUES (?,?,?) "
-                "ON CONFLICT(title_id) DO UPDATE SET wanted_format=excluded.wanted_format, note=excluded.note",
-                (title_id, fmt, note))
+    kept = con.execute("SELECT target_cents FROM wants WHERE title_id=?", (title_id,)).fetchone()
+    existed = kept is not None
+    if fmt not in FORMATS["physical"]:
+        target = None
+    elif target is KEEP_TARGET:
+        target = kept["target_cents"] if existed else None
+    con.execute("INSERT INTO wants(title_id, wanted_format, note, target_cents) VALUES (?,?,?,?) "
+                "ON CONFLICT(title_id) DO UPDATE SET wanted_format=excluded.wanted_format, note=excluded.note, "
+                "target_cents=excluded.target_cents",
+                (title_id, fmt, note, target))
     con.commit()
     return jsonify(title_detail(title_id, True)), 200 if existed else 201
 
