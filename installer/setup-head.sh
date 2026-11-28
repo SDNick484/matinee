@@ -144,6 +144,12 @@ TMP=$(mktemp -d /tmp/matinee-tmp.XXXXXX 2>/dev/null || mktemp -d -t matinee-tmp.
 sed -n '/^__PAYLOAD_BELOW__$/,$p' "$0" | tail -n +2 | base64 -d | ( cd "$TMP" && tar -xzf - )
 rm -rf "$APP_DIR.new" && mv "$TMP/matinee" "$APP_DIR.new"
 rm -rf "$TMP"; TMP=""
+commit_label() {  # commit_label DIR -> the commit DIR/COMMIT names (line 1, "-dirty" when line 4 says so), or unknown
+  _c=$(sed -n 1p "$1/COMMIT" 2>/dev/null || true)
+  if [ "$(sed -n 4p "$1/COMMIT" 2>/dev/null || true)" = dirty ]; then _c="$_c-dirty"; fi
+  echo "${_c:-unknown}"
+}
+if [ "$HAD_APP" = 1 ]; then echo "    upgrading $(commit_label "$APP_DIR") → $(commit_label "$APP_DIR.new")"; fi
 chown -R root:root "$APP_DIR.new"
 chown -R "$SVC_USER:$SVC_USER" "$DATA_DIR"
 chmod 750 "$DATA_DIR"
@@ -406,6 +412,10 @@ until wget -qO- "http://127.0.0.1:$PORT/healthz" >/dev/null 2>&1; do
 done
 # The new version answers: the upgrade is done and a later failure no longer rolls it back.
 GUARD=0
+# matinee-mcp reads the same COMMIT file from beside its venv (MCP_COMMIT_FILE empty). Copied only now, once the new
+# version answers, so a rollback leaves the old copy in place; a payload without one clears a stale copy.
+mkdir -p /opt/matinee-mcp
+if [ -f "$APP_DIR/COMMIT" ]; then cp "$APP_DIR/COMMIT" /opt/matinee-mcp/COMMIT; else rm -f /opt/matinee-mcp/COMMIT; fi
 
 # ---------------------------------------------------------------- backups & maintenance
 echo "==> Installing nightly backup and refresh jobs and the weekly restore test"

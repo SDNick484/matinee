@@ -22,6 +22,7 @@ def test_mcp_remote_copy_is_unmodified():
 
 # ------------------------------------------------------------------ harness
 import json
+import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -334,6 +335,25 @@ def test_health_ok_without_auth(client):
     r = client.get("/healthz")
     assert r.status_code == 200
     assert r.json() == {"status": "ok"}
+
+
+def test_health_names_the_commit_from_the_commit_file(client, tmp_path, monkeypatch):
+    f = tmp_path / "COMMIT"
+    f.write_text("63ff0bc\nSDNick484/matinee\n2026-11-26\ndirty\n", encoding="utf-8")
+    monkeypatch.setenv("MCP_COMMIT_FILE", str(f))
+    assert client.get("/healthz").json() == {"status": "ok", "commit": "63ff0bc", "repo": "SDNick484/matinee"}
+
+
+def test_running_commit_defaults_to_the_commit_file_beside_the_venv(tmp_path, monkeypatch):
+    # the installer's layout: the venv is /opt/matinee-mcp/venv and its COMMIT is /opt/matinee-mcp/COMMIT
+    (tmp_path / "matinee-mcp").mkdir()
+    (tmp_path / "matinee-mcp" / "COMMIT").write_text("63ff0bc\n\n2026-11-26\n", encoding="utf-8")
+    monkeypatch.setattr(sys, "prefix", str(tmp_path / "matinee-mcp" / "venv"))
+    assert mcp_remote.running_commit({}) == {"commit": "63ff0bc"}
+
+
+def test_running_commit_is_empty_without_a_commit_file(tmp_path):
+    assert mcp_remote.running_commit({"MCP_COMMIT_FILE": str(tmp_path / "COMMIT")}) == {}
 
 
 def test_health_503_when_matinee_down(client, fake_matinee):

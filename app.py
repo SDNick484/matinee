@@ -17,7 +17,7 @@ Editors: /admin            same UI with editing; put this path behind Cloudflare
                            MATINEE_READ_KEY may GET it but not write
                            GET /admin/api/export.csv is the whole collection, one row per copy (or per title);
                            GET /api/copies and /admin/api/copies list copies, filtered
-Health:  /healthz          {ok, titles, copies}
+Health:  /healthz          {ok, titles, copies, commit}
 
 Environment (see /etc/conf.d/matinee and .env.example):
   PORT, DATA_DIR, CF_TEAM_DOMAIN, CF_AUD, ADMIN_EMAILS, LAN_EDIT, LAN_HOSTS, PUBLIC_VIEW, TMDB_READ_TOKEN, MATINEE_API_KEY,
@@ -439,13 +439,36 @@ def image_files(p):
     return send_from_directory(IMAGE_DIR, p, max_age=30 * 86400)
 
 
+COMMIT_RE = re.compile(r"[0-9a-f]{7,40}")
+
+
+def read_commit(path):
+    """The short commit hash on line 1 of the COMMIT file installer/build.sh writes beside app.py, else None.
+
+    Read once at import (COMMIT below). Absent, unreadable, oversized or not a hash: None, so a development tree
+    answers null. The hash is public (it names a commit of a public repository); nothing else is read from it.
+    """
+    try:
+        with open(path, "rb") as f:
+            raw = f.read(513)
+    except OSError:
+        return None
+    if len(raw) > 512:
+        return None
+    first = raw.split(b"\n", 1)[0].decode("ascii", "replace")
+    return first if COMMIT_RE.fullmatch(first) else None
+
+
+COMMIT = read_commit(APP_DIR / "COMMIT")
+
+
 @app.get("/healthz")
 def healthz():
     con = connect()
     t = con.execute("SELECT count(*) FROM titles").fetchone()[0]
     c = con.execute("SELECT count(*) FROM copies").fetchone()[0]
     con.close()
-    return {"ok": True, "titles": t, "copies": c}
+    return {"ok": True, "titles": t, "copies": c, "commit": COMMIT}
 
 
 # ============================================================================== tmdb
