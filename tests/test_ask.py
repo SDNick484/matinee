@@ -199,7 +199,7 @@ def seeded(client):
 def test_tool_defs_read_only():
     import ask
     names = [d["name"] for d in ask.tool_defs()]
-    assert names == ["search_collection", "get_movie", "where_is", "get_recommendations",
+    assert names == ["search_collection", "get_movie", "where_is", "get_recommendations", "watch_calendar",
                      "get_collection_stats", "list_people", "show_results"]
     blob = json.dumps(ask.tool_defs()) + ask.SYSTEM
     assert not any(x in blob for x in EXCLUDED)
@@ -372,7 +372,7 @@ def test_happy_path_hydrates_from_db(lib):
     assert "is_error" not in msgs[2]["content"][0]
     b0 = fake.bodies[0]
     import ask
-    assert b0["model"] == ask.SEARCH_MODEL and b0["max_tokens"] == 2048 and b0["system"] == ask.SYSTEM
+    assert b0["model"] == ask.SEARCH_MODEL and b0["max_tokens"] == 2048 and b0["system"].startswith(ask.SYSTEM)
     assert b0["tools"] == ask.tool_defs() and b0["tool_choice"] == {"type": "auto"}
     assert fake.timeouts[0] <= 25
     assert log_rows()[0]["status"] == "ok"
@@ -634,3 +634,209 @@ def test_run_tool_missing_required_args_is_clean(client, monkeypatch):
         assert ask.run_tool(lc, name, {}) == (None, f"{name}: missing or invalid arguments")
     assert calls == []
     assert len(warnings) == 2 and all(k.get("exc_info") for _, k in warnings)
+
+
+# ---- attendance questions, stop reasons, the daily-cap reservation ----
+FIXTURES_ASK = __import__("pathlib").Path(__file__).parent / "fixtures" / "ask"
+
+
+def recorded(name):
+    return json.loads((FIXTURES_ASK / f"{name}.json").read_text())
+
+
+SPIRITED_NOTE = "Paige fell asleep before the bathhouse."
+
+
+@pytest.fixture
+def spirited(lib):
+    """Spirited Away watched on 2026-10-17 by Alice and Paige, with a watch note; The Dark Knight watched 2026-11-03."""
+    from conftest import seed_people
+    with app.app_context():
+        con = db()
+        p = seed_people(con)
+        sid = seed_title(con, 129, copies=("Blu-ray",))
+        wid = con.execute("INSERT INTO watches (title_id, watched_date, notes) VALUES (?, '2026-10-17', ?)",
+                          (sid, SPIRITED_NOTE)).lastrowid
+        for name in ("Alice", "Paige"):
+            con.execute("INSERT INTO watch_people (watch_id, person_id) VALUES (?, ?)", (wid, p[name]))
+        con.execute("INSERT INTO watches (title_id, watched_date) VALUES (?, '2026-11-03')", (lib.ids["dark_knight"],))
+        con.commit()
+    lib.spirited = sid
+    return lib
+
+
+def test_database_mode_carries_dates_attendees_and_notes(spirited):
+    """Ask runs on database mode and sends tool results to Anthropic. The owner wants watch dates, attendee names
+    and watch notes there (attendance questions need them), so this pins them: change it on purpose, not by
+    accident. The editor-only copy fields (code status, purchase date, price) are the ones that stay out."""
+    import ask
+    with app.app_context():
+        movie, err = ask.run_tool(ask.LocalClient(), "get_movie", {"title_id": spirited.spirited})
+    assert err is None
+    (w,) = movie["watches"]
+    assert w["watched_date"] == "2026-10-17" and w["notes"] == SPIRITED_NOTE
+    assert sorted(w["attendees"]) == ["Alice", "Paige"]
+    assert sorted(movie["seen_by"]) == ["Alice", "Paige"] and "Nick" in movie["not_seen_by"]
+    assert not {"code_status", "purchased_on", "price_cents"} & {k for c in movie["copies"] for k in c}
+
+
+def test_who_watched_spirited_away_with_us(spirited):
+    sid = spirited.spirited
+    fake = spirited.script(
+        resp(tool_use("search_collection", {"query": "spirited away"}, "toolu_a")),
+        resp(tool_use("get_movie", {"title_id": sid}, "toolu_b")),
+        resp(show("Alice and Paige watched Spirited Away with you on 2026-10-17.", [sid])))
+    r = post(spirited.client, [{"q": "who watched Spirited Away with us"}])
+    body = r.get_json()
+    assert r.status_code == 200 and "Alice" in body["answer"] and "Paige" in body["answer"]
+    assert [i["id"] for i in body["items"]] == [sid]
+    movie = fake.bodies[2]["messages"][-1]["content"][0]["content"]  # what the model was shown for get_movie
+    for needle in ("2026-10-17", "Alice", "Paige", SPIRITED_NOTE):
+        assert needle in movie
+    assert "Today is" in fake.bodies[0]["system"]  # so "last October" has a year
+
+
+def test_what_did_we_watch_in_october(spirited):
+    sid = spirited.spirited
+    fake = spirited.script(
+        resp(tool_use("watch_calendar", {"month": "2026-10"})),
+        resp(show("Spirited Away, on 17 October.", [sid, 424242])))
+    body = post(spirited.client, [{"q": "what did we watch in October"}]).get_json()
+    shown = fake.bodies[1]["messages"][-1]["content"][0]
+    assert "is_error" not in shown and "2026-10-17" in shown["content"] and "Spirited Away" in shown["content"]
+    assert "Alice" not in shown["content"] and SPIRITED_NOTE not in shown["content"]  # the calendar is titles and dates
+    assert [i["id"] for i in body["items"]] == [sid]  # an id the model invented (424242) is dropped
+    bad = ask_run("watch_calendar", {"month": "October"})
+    assert bad[0] is None and "month must look like" in bad[1]
+
+
+def ask_run(name, args):
+    import ask
+    with app.app_context():
+        return ask.run_tool(ask.LocalClient(), name, args)
+
+
+def test_unseen_by_and_system_prompt_cover_attendance_questions(spirited):
+    import ask
+    for needle in ("get_movie", "attendees", "unseen_by", "watch_calendar"):
+        assert needle in ask.SYSTEM
+    result, err = ask_run("search_collection", {"unseen_by": "Alice"})
+    assert err is None and "Spirited Away" not in json.dumps(result) and "Inside Out" in json.dumps(result)
+
+
+def test_where_is_lookup_miss_reaches_model(lib):
+    fake = lib.script(resp(tool_use("where_is", {"title": "Nonexistent Movie 9"})), resp(show("Not in the collection.")))
+    r = post(lib.client, [{"q": "where is Nonexistent Movie 9"}])
+    assert r.status_code == 200
+    assert "not currently in the collection" in fake.bodies[1]["messages"][-1]["content"][0]["content"]
+
+
+def test_max_tokens_retried_with_a_larger_budget(lib):
+    import ask
+    fake = lib.script(recorded("max_tokens"), resp(show("Done.")))
+    r = post(lib.client, [{"q": "everything we watched this year"}])
+    assert r.status_code == 200 and r.get_json()["answer"] == "Done."
+    assert [b["max_tokens"] for b in fake.bodies] == [ask.MAX_TOKENS, ask.RETRY_MAX_TOKENS]
+    assert ask.RETRY_MAX_TOKENS > ask.MAX_TOKENS
+    row = log_rows()[0]
+    assert row["status"] == "ok" and row["rounds"] == 1 and row["output_tokens"] == 2048 + 5  # both calls are billed
+
+
+def test_max_tokens_twice_says_the_question_was_too_big(lib):
+    import ask
+    fake = lib.script(recorded("max_tokens"), recorded("max_tokens"), resp(show("never")))
+    r = post(lib.client, [{"q": "everything we watched this year"}])
+    body = r.get_json()
+    assert r.status_code == 200 and body["answer"] == ask.TOO_BIG and body["items"] == [] and len(fake.bodies) == 2
+    assert log_rows()[0]["status"] == "max_tokens"
+
+
+def test_refusal_says_the_model_declined(lib):
+    import ask
+    lib.script(recorded("refusal"))
+    r = post(lib.client, [{"q": "something"}])
+    body = r.get_json()
+    assert r.status_code == 200 and body["answer"] == ask.DECLINED and body["items"] == []
+    assert log_rows()[0]["status"] == "refused"
+
+
+def last_round_script(lib, last):
+    stats = [resp(tool_use("get_collection_stats", {}, f"toolu_{i}")) for i in range(4)]
+    return lib.script(*stats, *last)
+
+
+def test_forced_tool_choice_rejected_falls_back_to_auto(lib):
+    import ask
+    sid = lib.ids["inside_out"]
+    fake = last_round_script(lib, [ask.ClaudeAPIError(400, json.dumps(recorded("forced_tool_choice_400"))),
+                                   resp(show("Inside Out.", [sid]))])
+    r = post(lib.client, [{"q": "how many"}])
+    assert r.status_code == 200 and r.get_json()["answer"] == "Inside Out."
+    forced, retry = fake.bodies[4], fake.bodies[5]
+    assert forced["tool_choice"] == {"type": "tool", "name": "show_results"} and forced["system"].count("last step") == 0
+    assert retry["tool_choice"] == {"type": "auto"} and "last step" in retry["system"]
+    assert retry["messages"] == forced["messages"]
+    assert log_rows()[0]["rounds"] == 5 and log_rows()[0]["status"] == "ok"
+
+
+def test_other_400_on_the_last_round_is_still_a_502(lib):
+    import ask
+    last_round_script(lib, [ask.ClaudeAPIError(400, '{"error": {"message": "prompt is too long"}}')])
+    r = post(lib.client, [{"q": "how many"}])
+    assert r.status_code == 502 and log_rows()[0]["status"] == "api_error"
+
+
+def test_last_round_without_show_results_is_a_plain_answer(lib):
+    import ask
+    fake = last_round_script(lib, [ask.ClaudeAPIError(400, json.dumps(recorded("forced_tool_choice_400"))),
+                                   resp(text("You own three movies."))])
+    body = post(lib.client, [{"q": "how many"}]).get_json()
+    assert body["answer"] == "You own three movies." and body["items"] == []
+    assert len(fake.bodies) == 6
+
+
+def test_rate_limit_and_overload_on_the_last_round(lib):
+    import ask
+    sid = lib.ids["inside_out"]
+    last_round_script(lib, [ask.ClaudeAPIError(429, ""), resp(show("ok", [sid]))])
+    assert post(lib.client, [{"q": "x"}]).status_code == 200 and lib.sleeps == [2]
+    last_round_script(lib, [ask.ClaudeAPIError(529, ""), ask.ClaudeAPIError(529, "")])
+    assert post(lib.client, [{"q": "x"}]).status_code == 502 and log_rows()[-1]["status"] == "api_error"
+
+
+def test_question_is_reserved_against_the_cap_before_the_call(lib):
+    class Peek(Script):
+        def __call__(self, body, key, timeout):
+            self.rows = log_rows()  # read from another connection, mid-question
+            return super().__call__(body, key, timeout)
+    fake = lib.script(resp(show("ok")), cls=Peek)
+    assert post(lib.client, [{"q": "x"}]).status_code == 200
+    assert [(r["status"], r["editor"]) for r in fake.rows] == [("pending", "lan")]
+    rows = log_rows()
+    assert len(rows) == 1 and rows[0]["status"] == "ok"  # the same row, finished
+
+
+def test_reserved_questions_count_toward_the_cap(client, monkeypatch):
+    """A question that is still waiting on the model already holds its slot."""
+    import ask
+    monkeypatch.setattr(ask, "DAILY_LIMIT", 2)
+    with app.app_context():
+        first, second = ask.reserve("lan"), ask.reserve("lan")
+        assert first and second and ask.reserve("lan") is None
+        assert ask.asked_today(db()) == 2
+        ask.finish_log(first, {"rounds": 2, "input_tokens": 7, "output_tokens": 3, "status": "ok"})
+        assert ask.reserve("lan") is None  # finishing a question does not free its slot
+    assert [(r["status"], r["rounds"], r["input_tokens"]) for r in log_rows()] == [("ok", 2, 7), ("pending", 0, 0)]
+
+
+def test_a_logging_failure_never_replaces_the_answer(lib, monkeypatch, caplog):
+    import ask
+    lib.script(resp(show("Inside Out.", [lib.ids["inside_out"]])))
+
+    def boom(*a, **kw):
+        raise sqlite3.OperationalError("database is locked")
+    monkeypatch.setattr(ask, "finish_log", boom)
+    with caplog.at_level(logging.WARNING):
+        r = post(lib.client, [{"q": "x"}])
+    assert r.status_code == 200 and r.get_json()["answer"] == "Inside Out."
+    assert "database is locked" in caplog.text

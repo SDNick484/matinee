@@ -1,0 +1,4 @@
+{"id": "msg_01Truncated", "type": "message", "role": "assistant", "model": "claude-haiku-5-5",
+ "content": [{"type": "text", "text": "Let me look through every movie we watched this year, starting with"}],
+ "stop_reason": "max_tokens", "stop_sequence": null,
+ "usage": {"input_tokens": 2400, "output_tokens": 2048}}

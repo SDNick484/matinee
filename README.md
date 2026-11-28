@@ -292,6 +292,8 @@ Not built yet: an "owned on DVD or VHS only" upgrade report, per-person wants in
 
 **Ask** lets signed-in editors question the collection in plain language ("Which 4K discs do we own that nobody has watched?") at `https://movies.example.com/admin#/ask`. It is editor-only and stays off until an API key is set. Headless callers using `MATINEE_API_KEY` or `MATINEE_READ_KEY` are refused.
 
+**What Ask sends to Anthropic.** Ask sends watch dates, who attended and your watch notes to the Anthropic API along with the question, because it answers from them. It does not send copy prices, purchase dates or code status. The model's answer is limited to titles the tools returned for that question. Example attendance questions: "Who watched Spirited Away with us?", "What haven't the kids seen yet?", "What did we watch in October?". A watch logged only as a rough time ("1-2 Years ago") carries an estimated date, not a real one.
+
 **Setup**
 
 1. In the Anthropic Console, create an API key, ideally in its own workspace with a monthly spend limit.

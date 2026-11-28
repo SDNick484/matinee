@@ -297,9 +297,14 @@ class MatineeClient:
     @staticmethod
     def _edition_col(con) -> str:
         """`edition` for the copies SELECT, or `NULL AS edition` on a database older than schema v10: this server
-        opens the file read-only and may start before the app has migrated it. Only the public edition is read here;
-        the editor-only code status, purchase date and price stay out of direct-SQLite mode (Ask runs on it and
-        sends the results to Anthropic's API) and come only through the keyed /admin/api path."""
+        opens the file read-only and may start before the app has migrated it.
+
+        What direct-SQLite mode exposes (Ask runs on it and sends every tool result to Anthropic's API): the public
+        edition, plus the editor-only watch history that attendance questions ("who watched Spirited Away with us",
+        "what did we watch in October") need: `get_movie` returns each watch's date, its attendee names and its notes.
+        That is deliberate, because Ask is editor-only and the owner wants those answers (tests/test_ask.py pins it).
+        The copy's code status, purchase date and price are the editor-only fields that stay out: they come only
+        through the keyed /admin/api path."""
         has = any(r[1] == "edition" for r in con.execute("PRAGMA table_info(copies)"))
         return "edition" if has else "NULL AS edition"
 
