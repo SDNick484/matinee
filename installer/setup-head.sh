@@ -99,6 +99,8 @@ PORT=$PORT
 DATA_DIR=$DATA_DIR
 EOF
 fi
+add_setting "$CONF" PORT "$PORT" "Port gunicorn listens on (each app on the host needs its own)"
+add_setting "$CONF" DATA_DIR "$DATA_DIR" "Where matinee.db and images/ live"
 add_setting "$CONF" CF_TEAM_DOMAIN "" "Cloudflare Access team domain, e.g. yourteam.cloudflareaccess.com"
 add_setting "$CONF" CF_AUD "" "AUD tag of the Matinee Access application (path: admin)"
 add_setting "$CONF" ADMIN_EMAILS "" "Only these emails may edit (comma separated); empty = anyone the Access policy lets in"
@@ -128,6 +130,10 @@ add_setting "$CONF" MCP_PUBLIC_HOSTS "" "Public hostname(s) of the tunnel, e.g. 
 add_setting "$CONF" CF_ACCESS_AUD "" "AUD tag of the Access application that fronts mcp.<your-domain> (required)"
 add_setting "$CONF" MCP_ALLOWED_EMAILS "" "Only these Access emails may use the MCP tools (comma separated); empty = anyone Access lets in"
 add_setting "$CONF" MCP_ALLOWED_SERVICE_TOKENS "" "Access service-token client IDs (comma separated) that may use the read tools, e.g. a monitor; empty = none"
+add_setting "$CONF" MATINEE_URL "" "Where matinee-mcp reaches the Matinee app; empty = http://127.0.0.1 on PORT"
+add_setting "$CONF" MATINEE_DB_PATH "" "Path of matinee.db for matinee-mcp's direct read mode; empty = REST only (the remote service always uses REST)"
+add_setting "$CONF" MCP_AUTOMATION_TIERS "read,power-off" "Tiers an Access service token may use at the MCP endpoint, comma separated; never costly"
+add_setting "$CONF" MCP_COMMIT_FILE "" "File naming the running commit (line 1 commit, line 2 repo); empty = COMMIT beside the matinee-mcp venv"
 # Holds API keys, so root only: OpenRC and the cron jobs run as root; services get what they need from the environment.
 chmod 600 "$CONF"; chown root:root "$CONF"
 
@@ -210,7 +216,7 @@ case "$(mcp_level "${MATINEE_MCP_READONLY:-}" "${MATINEE_MCP_WRITES:-}")" in
   none) unset MATINEE_API_KEY; export MATINEE_READ_KEY ;;
   *) unset MATINEE_READ_KEY; export MATINEE_API_KEY ;;
 esac
-export MATINEE_URL MATINEE_MCP_READONLY MATINEE_MCP_WRITES MCP_HTTP_BIND MCP_HTTP_PORT MCP_HTTP_PATH MCP_PUBLIC_HOSTS CF_ACCESS_TEAM_DOMAIN CF_ACCESS_AUD MCP_ALLOWED_EMAILS MCP_ALLOWED_SERVICE_TOKENS CF_TEAM_DOMAIN
+export MATINEE_URL MATINEE_MCP_READONLY MATINEE_MCP_WRITES MCP_HTTP_BIND MCP_HTTP_PORT MCP_HTTP_PATH MCP_PUBLIC_HOSTS CF_ACCESS_TEAM_DOMAIN CF_ACCESS_AUD MCP_ALLOWED_EMAILS MCP_ALLOWED_SERVICE_TOKENS CF_TEAM_DOMAIN MATINEE_DB_PATH MCP_AUTOMATION_TIERS MCP_COMMIT_FILE
 supervisor="supervise-daemon"
 respawn_delay=5
 respawn_max=10
