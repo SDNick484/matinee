@@ -3,6 +3,7 @@ import { api, esc, FORMATS, getChipClass, isAdmin, state, toast } from "./core.j
 import { getChipIcon } from "./icons.js";
 import { navigate } from "./router.js";
 import { closeModal } from "./forms.js";
+import { openModal } from "./modal.js";
 
   // ================================================================= Wish list
   const WANT_NOTE_MAX = 140;   // db.NOTE_MAX: the server answers 400 past it
@@ -62,20 +63,12 @@ import { closeModal } from "./forms.js";
   // The want form: a format (or Any) and an optional note. `movie` names the title by title_id, or by tmdb_id when
   // Matinee doesn't have it yet (the server then creates it with no copies). onSaved(response) runs after a save.
   function openWantModal(movie) {
-    const modalRoot = document.getElementById("modal-root");
-    if (!modalRoot) return;
     const formats = [...FORMATS.physical, ...FORMATS.digital];
     let format = movie.want ? movie.want.wanted_format : null;
-    modalRoot.innerHTML = `
-      <div class="modal-overlay" id="modal-overlay">
-        <div class="modal-dialog">
-          <div class="modal-header">
-            <div>
-              <div class="modal-title">Want to buy</div>
-              <div style="font-size:var(--fs-xs);color:var(--ink-3)">${esc(movie.title)}${movie.year ? ` (${esc(movie.year)})` : ""}</div>
-            </div>
-            <button type="button" class="btn-close" id="btn-modal-close" aria-label="Close">✕</button>
-          </div>
+    if (!openModal({
+      title: "Want to buy",
+      subtitle: `${movie.title}${movie.year ? ` (${movie.year})` : ""}`,
+      content: `
           <form id="want-form" style="display:flex;flex-direction:column;gap:var(--s4)">
             <div class="form-group">
               <label class="form-label">Format</label>
@@ -88,12 +81,11 @@ import { closeModal } from "./forms.js";
                      placeholder="The Studio Ghibli box, a steelbook…" value="${esc(movie.want ? movie.want.note || "" : "")}">
             </div>
             <div class="form-actions">
-              <button type="button" class="btn btn-ghost" id="btn-want-cancel">Cancel</button>
+              <button type="button" class="btn btn-ghost" id="btn-want-cancel" data-modal-close>Cancel</button>
               <button type="submit" class="btn" id="btn-want-save">Save want</button>
             </div>
-          </form>
-        </div>
-      </div>`;
+          </form>`,
+    })) return;
 
     const grid = document.getElementById("want-format-grid");
     function drawFormats() {
@@ -109,11 +101,6 @@ import { closeModal } from "./forms.js";
     }
     drawFormats();
 
-    document.getElementById("btn-modal-close")?.addEventListener("click", closeModal);
-    document.getElementById("btn-want-cancel")?.addEventListener("click", closeModal);
-    document.getElementById("modal-overlay")?.addEventListener("click", (e) => {
-      if (e.target.id === "modal-overlay") closeModal();
-    });
     document.getElementById("want-form")?.addEventListener("submit", async (e) => {
       e.preventDefault();
       const save = document.getElementById("btn-want-save");
@@ -143,19 +130,11 @@ import { closeModal } from "./forms.js";
       toast(err.message || "The wish list app isn't answering");
       return;
     }
-    const modalRoot = document.getElementById("modal-root");
-    if (!modalRoot) return;
     const dot = (c) => (/^#[0-9a-f]{3,8}$/i.test(c || "") ? `<span class="wish-dot" style="background:${esc(c)}"></span>` : "");
-    modalRoot.innerHTML = `
-      <div class="modal-overlay" id="modal-overlay">
-        <div class="modal-dialog">
-          <div class="modal-header">
-            <div>
-              <div class="modal-title">Add to a wish list</div>
-              <div style="font-size:var(--fs-xs);color:var(--ink-3)">${esc(title.title)}${title.want && title.want.wanted_format ? ` · ${esc(title.want.wanted_format)}` : ""}</div>
-            </div>
-            <button type="button" class="btn-close" id="btn-modal-close" aria-label="Close">✕</button>
-          </div>
+    if (!openModal({
+      title: "Add to a wish list",
+      subtitle: `${title.title}${title.want && title.want.wanted_format ? ` · ${title.want.wanted_format}` : ""}`,
+      content: `
           <form id="wish-form" style="display:flex;flex-direction:column;gap:var(--s4)">
             <p class="form-hint" style="margin:0;font-size:var(--fs-xs);color:var(--ink-3)">It goes on that person's list with a shopping link for the title, year and format.</p>
             <div class="wish-people" role="radiogroup" aria-label="Whose wish list">
@@ -168,17 +147,11 @@ import { closeModal } from "./forms.js";
                 <select id="wish-priority" class="form-select"><option value="1">High</option><option value="2" selected>Normal</option><option value="3">Low</option></select></div>
             </div>
             <div class="form-actions">
-              <button type="button" class="btn btn-ghost" id="btn-wish-cancel">Cancel</button>
+              <button type="button" class="btn btn-ghost" id="btn-wish-cancel" data-modal-close>Cancel</button>
               <button type="submit" class="btn" id="btn-wish-add">Add</button>
             </div>
-          </form>
-        </div>
-      </div>`;
-    document.getElementById("btn-modal-close")?.addEventListener("click", closeModal);
-    document.getElementById("btn-wish-cancel")?.addEventListener("click", closeModal);
-    document.getElementById("modal-overlay")?.addEventListener("click", (e) => {
-      if (e.target.id === "modal-overlay") closeModal();
-    });
+          </form>`,
+    })) return;
     document.getElementById("wish-form")?.addEventListener("submit", async (e) => {
       e.preventDefault();
       const add = document.getElementById("btn-wish-add");

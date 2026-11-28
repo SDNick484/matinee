@@ -2,6 +2,7 @@
 import { api, esc, isAdmin, state } from "./core.js";
 import { icon } from "./icons.js";
 import { closeModal } from "./forms.js";
+import { openModal } from "./modal.js";
 import { activePeople, personDotsHTML, personTogglesHTML, readToggles } from "./people.js";
 import { playBarHtml, wirePlay } from "./play.js";
 
@@ -70,13 +71,11 @@ import { playBarHtml, wirePlay } from "./play.js";
     }
 
     function renderModalSkeleton() {
-      modalRoot.innerHTML = `
-        <div class="modal-overlay" id="modal-overlay">
-          <div class="modal-dialog movie-night-dialog">
-            <div class="modal-header">
-              <h2>${icon("dice")} Movie Night Picker</h2>
-              <button class="btn-close" id="btn-movie-night-close" aria-label="Close">&times;</button>
-            </div>
+      openModal({
+        title: "Movie Night Picker",
+        iconHTML: icon("dice"),
+        className: "movie-night-dialog",
+        content: `
             <div class="movie-night-tabs" role="tablist" aria-label="Pick mode">
               <button type="button" role="tab" aria-selected="${currentMode === "forgotten_gems"}" class="movie-night-tab ${currentMode === "forgotten_gems" ? "active" : ""}" data-mode="forgotten_gems">Forgotten Gems</button>
               <button type="button" role="tab" aria-selected="${currentMode === "quick_picks"}" class="movie-night-tab ${currentMode === "quick_picks" ? "active" : ""}" data-mode="quick_picks">Quick Picks</button>
@@ -99,11 +98,10 @@ import { playBarHtml, wirePlay } from "./play.js";
             <div class="modal-actions movie-night-actions">
               <button type="button" class="btn btn-secondary" id="btn-movie-night-roll">${icon("dice")} Roll Again</button>
               <button type="button" class="btn btn-primary" id="btn-movie-night-view" disabled>Open Movie</button>
-              <button type="button" class="btn btn-ghost" id="btn-movie-night-cancel">Close</button>
+              <button type="button" class="btn btn-ghost" id="btn-movie-night-cancel" data-modal-close>Close</button>
             </div>
-          </div>
-        </div>
-      `;
+        `,
+      });
 
       modalRoot.querySelectorAll(".movie-night-tab").forEach(tab => {
         tab.addEventListener("click", () => {
@@ -154,11 +152,6 @@ import { playBarHtml, wirePlay } from "./play.js";
       // The play buttons under the pick (editors only): the content box stays while the pick inside it changes.
       if (isAdmin) wirePlay(document.getElementById("movie-night-content"), () => currentPick, () => pickAudienceIds);
 
-      document.getElementById("btn-movie-night-close")?.addEventListener("click", closeModal);
-      document.getElementById("btn-movie-night-cancel")?.addEventListener("click", closeModal);
-      document.getElementById("modal-overlay")?.addEventListener("click", (e) => {
-        if (e.target.id === "modal-overlay") closeModal();
-      });
       document.getElementById("btn-movie-night-roll")?.addEventListener("click", () => fetchPick());
       document.getElementById("btn-movie-night-view")?.addEventListener("click", () => {
         if (currentPick) {

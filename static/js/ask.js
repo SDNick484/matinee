@@ -123,7 +123,7 @@ import { getChipIcon, icon } from "./icons.js";
       if (state.ask === st && state.route.path === "/ask") {
         renderAskThread();
         const qs = document.querySelectorAll("#ask-thread .ask-q");
-        qs[qs.length - 1]?.scrollIntoView({ block: "start", behavior: "smooth" });
+        qs[qs.length - 1]?.scrollIntoView({ block: "start", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
       }
     }
   }

@@ -75,7 +75,15 @@
       .replace(/"/g, "&quot;")
       .replace(/'/g, "&#39;");
   }
-  const escapeHtml = esc;
+
+  // Closes every open filter popover (and forgets which one was open, so a rebuilt toolbar does not reopen it).
+  function closeFilterPopovers() {
+    state.openPopoverId = null;
+    document.querySelectorAll(".filter-popover.open").forEach((p) => {
+      p.classList.remove("open");
+      p.querySelector(".filter-btn")?.setAttribute("aria-expanded", "false");
+    });
+  }
 
   // Inline handlers are not used (they would evaluate title text as script). Markup carries data attributes instead,
   // and one capture-phase listener on the document handles them (an <img> error does not bubble).
@@ -259,6 +267,6 @@
   }
 
 export {
-  api, centsToDollars, certSlotHtml, dollarsToCents, esc, exportHref, formatRuntime, FORMATS, getChipClass, isAdmin, SERVICES, state,
+  api, centsToDollars, certSlotHtml, closeFilterPopovers, dollarsToCents, esc, exportHref, formatRuntime, FORMATS, getChipClass, isAdmin, SERVICES, state,
   redrawIfCurrent, TMDB_IMG_THUMB, toast, whileBusy, writeThenRedraw
 };

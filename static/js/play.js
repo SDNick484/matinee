@@ -7,6 +7,7 @@
 // draws nothing for a title without a way.
 import { api, esc, toast } from "./core.js";
 import { icon } from "./icons.js";
+import { openModal } from "./modal.js";
 
   const FAILED = "Couldn't send that. Check the connection and try again.";
   const CONTROLS = "[data-play-title], [data-play-mode], .play-sheet button";
@@ -120,46 +121,41 @@ import { icon } from "./icons.js";
     }
   }
 
+  let playSheet = null;   // the open chooser (modal.js's handle)
+
   function closeSheet() {
-    document.getElementById("play-sheet-overlay")?.remove();
-    document.removeEventListener("keydown", onSheetKey, true);
+    if (playSheet) playSheet.close();
+    playSheet = null;
   }
 
-  function onSheetKey(e) {
-    if (e.key !== "Escape") return;
-    e.stopPropagation();   // forms.js closes any modal (Movie Night) on window; only the sheet closes here
-    closeSheet();
-  }
-
-  // The chooser for a title with YouTube and a disc and no Fandango link. Choosing one closes it and sends.
+  // The chooser for a title with YouTube and a disc and no Fandango link. Choosing one closes it and sends. It is a
+  // stacked modal: Escape closes only the sheet (Movie Night stays under it) and focus goes back to the button pressed.
   function openPlaySheet(title, attendees, onDone) {
     if (requestOut || oneTapWays(title).length < 2) return;
     closeSheet();
-    const overlay = document.createElement("div");
-    overlay.className = "modal-overlay play-sheet-overlay";
-    overlay.id = "play-sheet-overlay";
-    overlay.innerHTML = `
-      <div class="modal-dialog play-sheet" role="dialog" aria-modal="true" aria-label="Play ${esc(title.title)}">
-        <h2 class="modal-title">${esc(title.title)}</h2>
+    const modal = openModal({
+      title: title.title,
+      bare: true,
+      stacked: true,
+      className: "play-sheet",
+      overlayClass: "play-sheet-overlay",
+      initialFocus: '[data-way="youtube"]',
+      onClose: () => { if (playSheet === modal) playSheet = null; },
+      content: `
         <button type="button" class="btn play-sheet-btn" data-way="youtube">${icon("play")}<span>Play on YouTube</span></button>
         <button type="button" class="btn play-sheet-btn" data-way="disc">${icon("disc")}<span>Start the disc</span></button>
         ${linesHTML(discLines(title))}
-        <button type="button" class="btn btn-ghost play-sheet-cancel">Cancel</button>
-      </div>`;
-    overlay.addEventListener("click", async (e) => {
-      if (e.target === overlay || e.target.closest(".play-sheet-cancel")) {
-        closeSheet();
-        return;
-      }
+        <button type="button" class="btn btn-ghost play-sheet-cancel" data-modal-close>Cancel</button>`,
+    });
+    if (!modal) return;
+    playSheet = modal;
+    modal.overlay.addEventListener("click", async (e) => {
       const way = e.target.closest("[data-way]");
       if (!way || way.disabled) return;
       closeSheet();
       const res = await startPlay(title, way.dataset.way, attendees);
       if (res && onDone) onDone(res, title);
     });
-    document.body.appendChild(overlay);
-    document.addEventListener("keydown", onSheetKey, true);
-    overlay.querySelector('[data-way="youtube"]').focus();
   }
 
   // Delegated clicks for every [data-play-title] inside `root`. lookup(id) returns the title object. A button with a
