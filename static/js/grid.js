@@ -32,24 +32,23 @@ import { playButtonHtml, wirePlay } from "./play.js";
   }
 
   // ================================================================= 7.2 Poster Grid
-  async function renderGrid(container, { retried = false } = {}) {
-    const seq = state.routeSeq;   // see core.js
-    // A visitor cannot use the editor filters (an editor's shared link, or Public View from a filtered grid):
-    // drop them rather than let /api answer 400 with no way back.
-    if (!isAdmin && hasEditorFilter(state.route.query)) dropEditorFilters();
-    const q = state.route.query.get("q") || "";
-    const mediumStr = state.route.query.get("medium") || "";
-    const qualityStr = state.route.query.get("quality") || "";
-    const genreStr = state.route.query.get("genre") || "";
-    const rating = state.route.query.get("rating") || "";
-    const score = state.route.query.get("score") || "";
-    const watched = state.route.query.get("watched") || "";
-    const kind = state.route.query.get("kind") || "";
-    const both = state.route.query.get("both") || "";
-    const format = state.route.query.get("format") || "";
-    const service = state.route.query.get("service") || "";
-    const sort = state.route.query.get("sort") || "title";
-    const locationId = (state.route.query.get("location_id") || state.route.query.get("location") || "").trim();
+  // The toolbar (search box, filter bar, sort menu) is built once per visit to the grid. A filter, sort or search
+  // change then re-renders only the filter bar's labels and the results, so the search box keeps its focus and a
+  // phone's keyboard stays open. The facets do not depend on the filters and are fetched once per visit.
+  let gridReq = 0;      // the newest results request: an older, slower answer never renders over it
+  let searchTimer = 0;  // the search debounce
+  let drawnBarKey = null;   // the filters the filter bar was last drawn for
+
+  // The query in the address bar, parsed into state.grid.
+  function syncGridState() {
+    const get = (k) => state.route.query.get(k) || "";
+    const mediumStr = get("medium");
+    const qualityStr = get("quality");
+    const genreStr = get("genre");
+    const both = get("both");
+    const kind = get("kind");
+    const format = get("format");
+    const locationId = (get("location_id") || get("location")).trim();
 
     const medium = mediumStr ? mediumStr.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean) : [];
     if (!medium.length) {
@@ -67,31 +66,36 @@ import { playButtonHtml, wirePlay } from "./play.js";
 
     const genre = genreStr ? genreStr.split(",").map((s) => s.trim()).filter(Boolean) : [];
 
-    state.grid.q = q;
+    state.grid.q = get("q");
     state.grid.medium = medium;
     state.grid.quality = quality;
     state.grid.genre = genre;
-    state.grid.rating = rating;
-    state.grid.score = score;
-    state.grid.watched = watched;
-    state.grid.unseen_by = state.route.query.get("unseen_by") || "";
-    state.grid.attendance = state.route.query.get("attendance") || "";
-    state.grid.code = state.route.query.get("code") || "";
+    state.grid.rating = get("rating");
+    state.grid.score = get("score");
+    state.grid.watched = get("watched");
+    state.grid.unseen_by = get("unseen_by");
+    state.grid.attendance = get("attendance");
+    state.grid.code = get("code");
     state.grid.location_id = locationId;
     state.grid.kind = kind;
     state.grid.both = both;
     state.grid.format = format;
-    state.grid.service = service;
-    state.grid.sort = sort;
+    state.grid.service = get("service");
+    state.grid.sort = get("sort") || "title";
+  }
 
+  // The toolbar and the empty results slot, drawn once per visit.
+  function buildToolbar(container) {
+    clearTimeout(searchTimer);   // a pause from an earlier visit must not search this one
+    drawnBarKey = null;
     container.innerHTML = `
       <div class="toolbar">
         <div class="search-wrap">
           <span class="search-icon">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
           </span>
-          <input type="text" id="grid-search" class="search-input" placeholder="Search collection…" value="${esc(q)}" autocomplete="off" autocorrect="off">
-          ${q ? `<button type="button" id="grid-clear-search" class="clear-btn" aria-label="Clear search">✕</button>` : ""}
+          <input type="text" id="grid-search" class="search-input" placeholder="Search collection…" value="" autocomplete="off" autocorrect="off">
+          <button type="button" id="grid-clear-search" class="clear-btn" aria-label="Clear search" style="display:none">✕</button>
         </div>
 
         <div class="filter-row">
@@ -100,13 +104,13 @@ import { playButtonHtml, wirePlay } from "./play.js";
           </div>
           <div>
             <select id="grid-sort" class="sort-select" aria-label="Sort by">
-              <option value="title" ${sort === "title" ? "selected" : ""}>Title (A–Z)</option>
-              <option value="added" ${sort === "added" ? "selected" : ""}>Recently Added</option>
-              <option value="year" ${sort === "year" ? "selected" : ""}>Release Year</option>
-              <option value="rating" ${sort === "rating" ? "selected" : ""}>Highest Rated</option>
-              <option value="unrated" ${sort === "unrated" ? "selected" : ""}>Unrated</option>
-              <option value="last_watched" ${sort === "last_watched" ? "selected" : ""}>Last Watched</option>
-              <option value="least_watched" ${sort === "least_watched" ? "selected" : ""}>Least Recently / Never Watched</option>
+              <option value="title">Title (A–Z)</option>
+              <option value="added">Recently Added</option>
+              <option value="year">Release Year</option>
+              <option value="rating">Highest Rated</option>
+              <option value="unrated">Unrated</option>
+              <option value="last_watched">Last Watched</option>
+              <option value="least_watched">Least Recently / Never Watched</option>
             </select>
           </div>
         </div>
@@ -119,52 +123,110 @@ import { playButtonHtml, wirePlay } from "./play.js";
       </div>
     `;
 
-    // Bind search and sort events
     const searchInput = document.getElementById("grid-search");
-    const clearBtn = document.getElementById("grid-clear-search");
-    const sortSelect = document.getElementById("grid-sort");
-
-    let searchTimeout;
-    searchInput?.addEventListener("input", (e) => {
-      clearTimeout(searchTimeout);
-      searchTimeout = setTimeout(() => {
-        applyGridParam("q", e.target.value.trim());
-      }, 350);
+    searchInput.addEventListener("input", (e) => {
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(() => searchGrid(e.target.value), 350);
+      document.getElementById("grid-clear-search").style.display = e.target.value ? "" : "none";
     });
-
-    clearBtn?.addEventListener("click", () => {
-      applyGridParam("q", "");
+    searchInput.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter") return;
+      clearTimeout(searchTimer);   // Enter searches now, without waiting out the pause
+      searchGrid(e.target.value);
     });
-
-    sortSelect?.addEventListener("change", (e) => {
+    document.getElementById("grid-clear-search").addEventListener("click", () => {
+      clearTimeout(searchTimer);
+      searchInput.value = "";
+      searchGrid("");
+    });
+    document.getElementById("grid-sort").addEventListener("change", (e) => {
       applyGridParam("sort", e.target.value);
     });
+  }
 
-    // Load facets and titles in parallel
+  // Bring the toolbar in line with the address bar (a filter, a sort, or a hash typed or pasted by hand). The search
+  // box is left alone while it already says the same thing, so a word being typed is never overwritten.
+  function syncToolbar() {
+    const input = document.getElementById("grid-search");
+    const q = state.grid.q;
+    if (input && input.value.trim() !== q) input.value = q;
+    const clearBtn = document.getElementById("grid-clear-search");
+    if (clearBtn) clearBtn.style.display = q || (input && input.value) ? "" : "none";
+    const sortSelect = document.getElementById("grid-sort");
+    if (sortSelect) sortSelect.value = state.grid.sort;
+  }
+
+  // A search typed in the box: put it in the address bar with replaceState (no hashchange and no history entry per
+  // pause), then refresh just the results.
+  function searchGrid(value) {
+    if (state.route.path !== "/" || !document.getElementById("grid-search")) return;   // the user has left the grid
+    const q = new URLSearchParams(state.route.query);
+    const text = String(value || "").trim();
+    if (text) q.set("q", text);
+    else q.delete("q");
+    if (q.toString() === state.route.query.toString()) return;
+    const qStr = q.toString();
+    const hash = qStr ? `#/?${qStr}` : "#/";
+    history.replaceState(history.state, "", hash);
+    state.route.query = q;
+    state.grid.lastHash = hash;
+    window.dispatchEvent(new Event("matinee:hashreplaced"));   // the router refreshes the header's sign-in link
+    syncGridState();
+    syncToolbar();
+    const container = document.getElementById("view");
+    if (container) loadGrid(container, { seq: state.routeSeq, fresh: false });
+  }
+
+  async function renderGrid(container, { retried = false } = {}) {
+    const seq = state.routeSeq;   // see core.js
+    // A visitor cannot use the editor filters (an editor's shared link, or Public View from a filtered grid):
+    // drop them rather than let /api answer 400 with no way back.
+    if (!isAdmin && hasEditorFilter(state.route.query)) dropEditorFilters();
+    syncGridState();
+
+    // The toolbar survives a filter, sort or search change; any other page replaced it, so a visit starts afresh.
+    const fresh = !container.querySelector("#grid-search");
+    if (fresh) buildToolbar(container);
+    syncToolbar();
+    await loadGrid(container, { seq, fresh, retried });
+  }
+
+  // Fetch and draw the results (and, on a fresh visit, the facets).
+  async function loadGrid(container, { seq, fresh, retried = false }) {
+    const mine = ++gridReq;
+    const needFacets = fresh || !state.grid.facets;
     const apiPrefix = isAdmin ? "/admin/api" : "/api";
     try {
       const [facetsData, titlesData] = await Promise.all([
-        api(`${apiPrefix}/facets`),
+        needFacets ? api(`${apiPrefix}/facets`) : state.grid.facets,
         api(`${apiPrefix}/titles?${state.route.query.toString()}`),
       ]);
 
       if (isAdmin && state.peopleReady) await state.peopleReady;   // the Watched popover names people
-      if (seq !== state.routeSeq) return;   // the user left the grid while it loaded
+      if (seq !== state.routeSeq || mine !== gridReq) return;   // the user left the grid, or a newer search is on its way
       state.grid.facets = facetsData;
       state.grid.titles = titlesData.titles;
 
-      renderFilterBar();
+      // The filter bar only depends on the filters, never on the search text.
+      const barKey = [...state.route.query].filter(([k]) => k !== "q" && k !== "sort").map((kv) => kv.join("=")).join("&");
+      if (barKey !== drawnBarKey) {
+        drawnBarKey = barKey;
+        renderFilterBar();
+      }
       renderExportBar();
       renderGridContent();
       // The ▶ on a playable poster (editors only): one listener on the grid, which is drawn afresh on every visit.
-      if (isAdmin) wirePlay(document.getElementById("grid-container"), (id) => (state.grid.titles || []).find((t) => t.id === id));
+      if (isAdmin && fresh) wirePlay(document.getElementById("grid-container"), (id) => (state.grid.titles || []).find((t) => t.id === id));
 
-      // Restore scroll position if returning from a detail view
-      if (state.grid.scrollY > 0) {
+      if (fresh && state.grid.scrollY > 0) {
+        // Back from a title (or another page): restore the scroll position, once.
         window.scrollTo({ top: state.grid.scrollY, behavior: "instant" });
+      } else if (!fresh && window.scrollY > 0) {
+        window.scrollTo({ top: 0, behavior: "instant" });   // a new filter, sort or search starts at the top
       }
+      if (fresh) state.grid.scrollY = 0;
     } catch (err) {
-      if (seq !== state.routeSeq) return;
+      if (seq !== state.routeSeq || mine !== gridReq) return;
       // An editor's filter the server rejects (a deleted person, nobody set up, or a code value it doesn't know):
       // retry once without it.
       if (isAdmin && !retried && err.status === 400 && hasEditorFilter(state.route.query)) {
