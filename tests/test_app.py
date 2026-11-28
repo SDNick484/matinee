@@ -1026,7 +1026,7 @@ def test_unversioned_module_is_revalidated():
     assert again.status_code == 304
     versioned = c.get("/static/js/core.js?v=3fa1c09b2e")
     assert "max-age=31536000" in versioned.headers["Cache-Control"]
-    assert "max-age=60" in c.get("/static/tmdb.svg").headers["Cache-Control"]   # other files: unchanged
+    assert "max-age=86400" in c.get("/static/tmdb.svg").headers["Cache-Control"]   # unversioned: a day, then ETag
 
 
 def test_static_app_js_no_undefined_escapeHtml():
