@@ -77,9 +77,39 @@ def grid(**q):
 
 # ------------------------------------------------------------------- 1.2 skeleton
 def test_healthz_counts():
-    assert c.get("/healthz").get_json() == {"ok": True, "titles": 0, "copies": 0}
+    assert c.get("/healthz").get_json() == {"ok": True, "titles": 0, "copies": 0, "commit": None}
     add(129)
-    assert c.get("/healthz").get_json() == {"ok": True, "titles": 1, "copies": 1}
+    assert c.get("/healthz").get_json() == {"ok": True, "titles": 1, "copies": 1, "commit": None}
+
+
+def test_healthz_names_the_stamped_commit(monkeypatch):
+    monkeypatch.setattr(matinee, "COMMIT", "63ff0bc")
+    assert c.get("/healthz").get_json()["commit"] == "63ff0bc"
+
+
+def test_healthz_commit_is_null_without_the_commit_file():
+    assert not (matinee.APP_DIR / "COMMIT").exists()      # the development tree
+    assert c.get("/healthz").get_json()["commit"] is None
+
+
+@pytest.mark.parametrize("body,expected", [
+    ("63ff0bc\n", "63ff0bc"),
+    ("63ff0bc3f2a1d0e9b8c7a6f5e4d3c2b1a0998877\nSDNick484/matinee\n2026-11-26\ndirty\n",
+     "63ff0bc3f2a1d0e9b8c7a6f5e4d3c2b1a0998877"),
+    ("63ff0bc-dirty\n", None),       # the dirty mark is its own line, never part of the hash
+    ("not a commit\n", None),
+    ("", None),
+    ("\n63ff0bc\n", None),
+    ("63ff0bc" + "0" * 600 + "\n", None),   # bigger than any COMMIT file is
+])
+def test_read_commit_takes_line_one_only_when_it_is_a_hash(tmp_path, body, expected):
+    f = tmp_path / "COMMIT"
+    f.write_text(body, encoding="utf-8")
+    assert matinee.read_commit(f) == expected
+
+
+def test_read_commit_is_none_when_the_file_is_absent(tmp_path):
+    assert matinee.read_commit(tmp_path / "COMMIT") is None
 
 
 def test_env_example_lists_every_documented_variable():
@@ -377,7 +407,7 @@ def test_add_creates_title_then_reuses_it(monkeypatch):
     monkeypatch.setattr(matinee, "tmdb_get", boom)
     t2 = add(155, "digital", "Digital HD", "Apple TV")
     assert len(t2["copies"]) == 2
-    assert c.get("/healthz").get_json() == {"ok": True, "titles": 2, "copies": 3}
+    assert c.get("/healthz").get_json() == {"ok": True, "titles": 2, "copies": 3, "commit": None}
 
 
 def test_add_fails_cleanly_on_tmdb_errors(monkeypatch):
@@ -394,7 +424,7 @@ def test_add_fails_cleanly_on_tmdb_errors(monkeypatch):
     monkeypatch.setattr(matinee, "tmdb_get", REAL_TMDB_GET)
     r = c.post("/admin/api/copies", json={"tmdb_id": 771, "kind": "physical", "format": "DVD"})
     assert r.status_code == 503 and r.get_json()["reason"] == "not_configured"
-    assert c.get("/healthz").get_json() == {"ok": True, "titles": 0, "copies": 0}
+    assert c.get("/healthz").get_json() == {"ok": True, "titles": 0, "copies": 0, "commit": None}
 
 
 def test_remakes_are_separate_titles():

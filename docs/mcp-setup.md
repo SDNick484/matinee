@@ -191,7 +191,7 @@ curl -si -X POST https://mcp.example.com/matinee/mcp \
 # expect: HTTP 401 with a www-authenticate header from Access. Any 200 is a failure.
 ```
 
-Straight to the origin (no Access header) the service answers `403 {"error": "forbidden"}`, and `GET /healthz` answers `{"status": "ok"}` only while Matinee itself is healthy.
+Straight to the origin (no Access header) the service answers `403 {"error": "forbidden"}`, and `GET /healthz` answers `{"status": "ok"}` only while Matinee itself is healthy. When the installer has written a COMMIT file beside the venv, the body also carries `commit` and `repo` (what is running).
 
 ### 4.4 Turning on write tools
 

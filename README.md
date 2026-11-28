@@ -195,7 +195,7 @@ everything behind `/admin`.
 - **Weekly Restore Test**: `ops/matinee-restore-test` in `/etc/periodic/weekly` unpacks the newest backup into a temp file, runs `PRAGMA integrity_check`, counts titles and copies, and logs the result to `/var/log/ops.log`. A missing, stale, corrupt or empty backup also calls `ops-notify`. How to restore for real: [docs/restore.md](docs/restore.md).
 - **TMDB Refresh**: the nightly `ops/matinee-refresh` also runs `ops/refresh_titles.py`, which re-fetches up to 25 titles a night whose cached TMDB data is over 180 days old (oldest first). Uploaded covers and certification overrides are kept; a TMDB 404 or 429 changes nothing and ends cleanly.
 - **Log Rotation**: if `logrotate` is already installed and no config names them, the installer adds `/etc/logrotate.d/matinee` for `/var/log/matinee.log` and `/var/log/matinee-mcp.log` (weekly, keep 8, `copytruncate`). It is never installed as a dependency.
-- **Health Check Endpoint**: `/healthz` returns `{"ok": true, "titles": N, "copies": N}`.
+- **Health Check Endpoint**: `/healthz` returns `{"ok": true, "titles": N, "copies": N, "commit": "<short hash>"}`; `commit` is `null` outside a build from git. It is public: a commit hash of the public repository, nothing else. The About page shows it to editors.
 - Can be monitored by any periodic ops health monitor.
 
 ---

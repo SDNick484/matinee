@@ -1,6 +1,23 @@
 // Matinee — about and not-found views.
 import { state } from "./core.js";
 
+  // The commit the server runs, from /healthz (public). Only an editor (state.me is set on admin pages) sees it.
+  async function showCommit(container) {
+    try {
+      const res = await fetch("/healthz", { headers: { Accept: "application/json" } });
+      const { commit } = await res.json();
+      const view = container.querySelector(".about-view");
+      if (!commit || !view) return;
+      const p = document.createElement("p");
+      p.className = "about-commit";
+      p.style.cssText = "font-size:var(--fs-sm);color:var(--ink-2);margin-top:var(--s2)";
+      p.textContent = `Running commit ${commit}`;
+      view.appendChild(p);
+    } catch {
+      // the page works without the line
+    }
+  }
+
   // ================================================================= 9.1 About View
   function renderAbout(container) {
     container.innerHTML = `
@@ -27,6 +44,7 @@ import { state } from "./core.js";
         </div>
       </div>
     `;
+    if (state.me && state.me.editor) showCommit(container);
   }
 
   // 404 View
