@@ -304,7 +304,7 @@ def migrate(con):
       rounds INTEGER NOT NULL,
       input_tokens INTEGER NOT NULL DEFAULT 0,
       output_tokens INTEGER NOT NULL DEFAULT 0,
-      status TEXT NOT NULL              -- ok | capped | api_error | timeout | error
+      status TEXT NOT NULL              -- pending | ok | capped | api_error | timeout | error | max_tokens | refused
     );
     CREATE INDEX IF NOT EXISTS ask_log_ts ON ask_log(ts);
     """)
