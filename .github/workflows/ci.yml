@@ -18,6 +18,7 @@ jobs:
   lint:
     name: Lint (shellcheck + ruff)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     steps:
       - name: Check out code
@@ -45,6 +46,7 @@ jobs:
   ui-smoke:
     name: UI smoke (Playwright + Chromium, 412 px)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - name: Check out code
@@ -57,7 +59,7 @@ jobs:
           cache: "pip"
           cache-dependency-path: "requirements-dev.txt"
 
-      # Playwright is installed here only: the Python matrix and the Alpine job skip tests/test_ask_ui.py, tests/test_people_ui.py, tests/test_wishlist_ui.py, tests/test_lists_ui.py, tests/test_stats_ui.py, tests/test_calendar_ui.py, tests/test_settings_ui.py, tests/test_youtube_link_ui.py and tests/test_play_ui.py.
+      # Playwright is installed here only: the Python matrix and the Alpine job skip every tests/*_ui.py.
       - name: Install dependencies and Chromium
         run: |
           python -m pip install --upgrade pip
@@ -66,7 +68,7 @@ jobs:
 
       - name: Run the UI smoke tests
         run: |
-          python -m pytest -v -rs --junitxml=ui-smoke.xml tests/test_ask_ui.py tests/test_people_ui.py tests/test_wishlist_ui.py tests/test_lists_ui.py tests/test_stats_ui.py tests/test_calendar_ui.py tests/test_settings_ui.py tests/test_youtube_link_ui.py tests/test_play_ui.py
+          python -m pytest -v -rs --junitxml=ui-smoke.xml tests/*_ui.py
 
       # importorskip and the "Chromium won't launch" skip would otherwise let this job pass without rendering anything.
       - name: Fail if any smoke test was skipped
@@ -80,16 +82,17 @@ jobs:
           tests, skipped = int(suite.get("tests")), int(suite.get("skipped"))
           print(f"tests={tests} skipped={skipped}")
           if tests == 0 or skipped:
-              sys.exit("ui-smoke must run every test in tests/test_ask_ui.py, tests/test_people_ui.py, tests/test_wishlist_ui.py, tests/test_lists_ui.py, tests/test_stats_ui.py, tests/test_calendar_ui.py, tests/test_settings_ui.py, tests/test_youtube_link_ui.py and tests/test_play_ui.py; none may be skipped")
+              sys.exit("ui-smoke must run every test in tests/*_ui.py; none may be skipped")
           PY
 
   test-python:
     name: Python ${{ matrix.python-version }} on Ubuntu
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12", "3.13"]
+        python-version: ["3.12", "3.13", "3.14"]
 
     steps:
       - name: Check out code
@@ -109,7 +112,22 @@ jobs:
 
       - name: Run pytest test suite
         run: |
-          python -m pytest -v
+          python -m pytest -v --junitxml=pytest.xml
+
+      # importorskip would let the MCP tests skip silently in this job; a skip here fails the job.
+      - name: Fail if an MCP test was skipped
+        run: |
+          python - <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+
+          cases = [c for c in ET.parse("pytest.xml").getroot().iter("testcase")
+                   if "test_mcp_http" in c.get("classname", "") or "test_mcp_server" in c.get("classname", "")]
+          skipped = [c.get("name") for c in cases if c.find("skipped") is not None]
+          print(f"mcp tests={len(cases)} skipped={len(skipped)}")
+          if not cases or skipped:
+              sys.exit(f"tests/test_mcp_http.py and tests/test_mcp_server.py must run without skips: {skipped}")
+          PY
 
       - name: Verify JavaScript syntax (every ES module in static/js/)
         run: |
@@ -124,6 +142,7 @@ jobs:
   test-alpine:
     name: Alpine Linux Container (production parity)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     container:
       image: alpine:latest
 
@@ -147,7 +166,7 @@ jobs:
 
       - name: Install FastMCP and the HTTP MCP stack for Python
         run: |
-          python3 -m pip install --no-cache-dir --break-system-packages "mcp>=2.3,<3" "uvicorn>=0.31" "pyjwt[crypto]>=2.10" anyio httpx
+          python3 -m pip install --no-cache-dir --break-system-packages -r requirements-mcp.txt anyio httpx
 
       - name: Run pytest under Alpine (musl libc + apk packages)
         run: |
