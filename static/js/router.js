@@ -196,6 +196,7 @@ import { renderSettings } from "./settings.js";
     const prevRoute = state.route;
     state.route = parseHash(location.hash);
     state.routeSeq += 1;
+    document.title = "Matinee";   // a title page sets its own once it has loaded
     const seq = state.routeSeq;
     await meReady;
     if (seq !== state.routeSeq) return;   // a newer hashchange already took over

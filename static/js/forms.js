@@ -1,5 +1,5 @@
 // Matinee — copy form modal, custom covers, closeModal and global key/click handlers.
-import { api, centsToDollars, dollarsToCents, esc, FORMATS, SERVICES, state, toast } from "./core.js";
+import { api, centsToDollars, dollarsToCents, esc, FORMATS, redrawIfCurrent, SERVICES, state, toast } from "./core.js";
 import { icon } from "./icons.js";
 import { navigate } from "./router.js";
 import { renderDetail } from "./detail.js";
@@ -371,9 +371,29 @@ import { openWantModal } from "./wishlist.js";
       openWantModal({ tmdb_id: movie.tmdb_id, title: movie.title, year: movie.year });
     });
 
+    // Bind the form's handlers now, before any request: a tap on Save Copy before the owned-copies answer arrives
+    // would otherwise be a native form submit (the page reloads and nothing is saved).
+    // Modal close & click outside
+    document.getElementById("btn-modal-close")?.addEventListener("click", closeModal);
+    document.getElementById("btn-modal-cancel")?.addEventListener("click", closeModal);
+    document.getElementById("modal-overlay")?.addEventListener("click", (e) => {
+      if (e.target.id === "modal-overlay") closeModal();
+    });
+
+    document.getElementById("copy-form")?.addEventListener("submit", (e) => {
+      e.preventDefault();
+      submitCopy(false);
+    });
+
+    document.getElementById("btn-save-add-another")?.addEventListener("click", () => {
+      submitCopy(true);
+    });
+
     // Check what is already owned from TMDB API
+    const overlay = document.getElementById("modal-overlay");
     try {
       const owned = await api(`/admin/api/tmdb/${movie.tmdb_id}/owned`);
+      if (!overlay?.isConnected) return;   // the form was closed (or saved) before the answer came
       formState.ownedCopies = owned.copies || [];
       showWantButton(owned);
       const statusBox = document.getElementById("modal-owned-status");
@@ -398,13 +418,6 @@ import { openWantModal } from "./wishlist.js";
       if (statusBox && !prefill.duplicateNotice) statusBox.innerHTML = ``;
     }
 
-    // Modal close & click outside
-    document.getElementById("btn-modal-close")?.addEventListener("click", closeModal);
-    document.getElementById("btn-modal-cancel")?.addEventListener("click", closeModal);
-    document.getElementById("modal-overlay")?.addEventListener("click", (e) => {
-      if (e.target.id === "modal-overlay") closeModal();
-    });
-
     // Form submission
     async function submitCopy(andAddAnother = false) {
       const locSelect = document.getElementById("select-copy-location");
@@ -421,8 +434,10 @@ import { openWantModal } from "./wishlist.js";
         ...readCopyLinks("add-", formState.kind),
       };
 
+      const seq = state.routeSeq;
       const saveBtn = document.getElementById("btn-save-copy");
       const addAnotherBtn = document.getElementById("btn-save-add-another");
+      if (saveBtn?.disabled) return;   // a save is already out
       if (saveBtn) saveBtn.disabled = true;
       if (addAnotherBtn) addAnotherBtn.disabled = true;
 
@@ -463,7 +478,7 @@ import { openWantModal } from "./wishlist.js";
             // already on this title (Add copy from its page): setting the same hash fires no hashchange, so the
             // page would keep showing the old copies and want. Redraw it.
             const view = document.getElementById("view");
-            if (view) renderDetail(view, targetId);
+            if (view) redrawIfCurrent(seq, () => renderDetail(view, targetId));
           } else if (targetId) {
             navigate(`#/t/${targetId}`);
           } else {
@@ -477,15 +492,6 @@ import { openWantModal } from "./wishlist.js";
         if (addAnotherBtn) addAnotherBtn.disabled = false;
       }
     }
-
-    document.getElementById("copy-form")?.addEventListener("submit", (e) => {
-      e.preventDefault();
-      submitCopy(false);
-    });
-
-    document.getElementById("btn-save-add-another")?.addEventListener("click", () => {
-      submitCopy(true);
-    });
   }
 
   // Modal for editing an existing copy
@@ -658,6 +664,7 @@ import { openWantModal } from "./wishlist.js";
       }
       // Like the three details above: a copy that arrived without an id is saved without touching it.
       const links = readCopyLinks("edit-", formState.kind, copy);
+      const seq = state.routeSeq;
       try {
         await api(`/admin/api/copies/${copy.id}`, {
           method: "PUT",
@@ -673,7 +680,7 @@ import { openWantModal } from "./wishlist.js";
         toast("Copy updated");
         closeModal();
         const view = document.getElementById("view");
-        if (view) renderDetail(view, title.id);
+        if (view) redrawIfCurrent(seq, () => renderDetail(view, title.id));
       } catch (err) {
         if (!showLinkError("edit-", err)) toast(err.message || "Failed to update copy");
       }
