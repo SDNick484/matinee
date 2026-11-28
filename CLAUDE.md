@@ -2,7 +2,7 @@
 
 Self-hosted, phone-first movie collection tracker (physical discs + digital libraries). A Flask app (`app.py`:
 the Flask object, auth, pages and every route) with route-free code in sibling modules (`settings.py`,
-`common.py`, `db.py`, `clients.py`, `images.py`, `people.py`, `browse.py`, `export.py`, `wishlist.py`), SQLite, vanilla-JS SPA
+`common.py`, `db.py`, `clients.py`, `images.py`, `people.py`, `browse.py`, `export.py`, `wishlist.py`, `lists.py`, `recommend.py`, `watched_days.py`, `youtube.py`, `fandango.py`, `play.py`), SQLite, vanilla-JS SPA
 (`static/`, native ES modules in `static/js/`), a FastMCP server (`mcp_server.py`, `mcp_http.py`), an Ask
 feature (`ask.py`), and an Alpine/OpenRC installer (`installer/`). Read the code before proposing changes; trust
 the code over any doc that disagrees.

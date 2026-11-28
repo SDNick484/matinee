@@ -110,7 +110,7 @@ With `LAN_EDIT=1` (the default), a browser on your home network can edit at `htt
 without signing in. Two checks keep that from being usable by other websites:
 
 - **Host check.** A request only counts as a LAN editor when its `Host` header is an IP address
-  (`192.168.1.50:8771`, `[fd00::50]:8771`), `localhost`, or a name listed in `LAN_HOSTS`. This blocks DNS
+  (`192.168.1.100:8771`), `localhost`, or a name listed in `LAN_HOSTS`. This blocks DNS
   rebinding: a page on `evil.example.com` that re-points its own name at your server still sends
   `Host: evil.example.com` and is treated as "not an editor" (401).
 - **Cross-site check.** Every editor route (`/admin/api/...`) refuses a browser request whose `Origin` is a
