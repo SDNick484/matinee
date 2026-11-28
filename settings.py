@@ -27,6 +27,13 @@ def _load_env():
                             v = v[1:-1]
                         if k and k not in os.environ:
                             os.environ[k] = v
+            except PermissionError as exc:
+                # The installed layout: the file is root-only, OpenRC reads it as root and exports every setting, and
+                # the app runs as its own user. The init script says it did so; the environment is then complete.
+                if os.environ.get("MATINEE_CONF_EXPORTED") == "1":
+                    continue
+                raise SystemExit(f"Matinee won't start: cannot read config file {conf_file} "
+                                 f"({exc.strerror or exc}). Fix its owner and mode, or remove it.")
             except (OSError, ValueError) as exc:
                 # A config that exists but cannot be read must not start the app on the open defaults (LAN_EDIT=1,
                 # PUBLIC_VIEW=1): every LAN client would be an editor. A missing file is still fine (development).

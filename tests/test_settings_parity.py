@@ -11,8 +11,10 @@ ROOT = Path(matinee.APP_DIR)
 SETUP = ROOT / "installer" / "setup-head.sh"
 
 # Names the code reads from the environment that are not Matinee settings (the process's own, not ours to
-# document). Empty today: a real setting belongs in all three places instead.
-NOT_SETTINGS = {}
+# document). A real setting belongs in all three places instead.
+# MATINEE_CONF_EXPORTED: set by the matinee init script itself, never by a person; it tells settings.py that the
+# root-only config file it cannot read was exported into the environment.
+NOT_SETTINGS = {"MATINEE_CONF_EXPORTED"}
 # Settings exempt from the .env.example and add_setting checks (still checked for an export line). The repo keeps
 # one team-domain key, CF_TEAM_DOMAIN, which matinee-mcp falls back to; tests/test_installer_static.py::
 # test_team_domain_is_one_setting pins that and forbids both the add_setting line and a .env.example line.

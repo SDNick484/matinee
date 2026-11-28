@@ -81,3 +81,30 @@ def test_valid_lan_hosts_entries_do_not_warn(tmp_path):
     proc, _ = run_settings(tmp_path, env_extra={"LAN_HOSTS": "Matinee.LAN, movies.home.arpa, pi-4b.lan"})
     assert proc.returncode == 0, proc.stderr
     assert proc.stderr == ""
+
+
+@pytest.mark.skipif(ROOT_CAN_READ_ANYTHING, reason="root reads a chmod 000 file, so it cannot be made unreadable")
+def test_an_unreadable_config_file_is_fine_when_the_service_exported_it(tmp_path):
+    """The installed layout: /etc/conf.d/matinee is root-only, OpenRC reads it as root and exports the settings,
+    and gunicorn runs as the matinee user, which cannot read the file. The init script says so with
+    MATINEE_CONF_EXPORTED=1, and the settings then come from the environment."""
+    proc, env_file = run_settings(tmp_path, env_text="PUBLIC_VIEW=0\n")
+    env_file.chmod(0)
+    try:
+        shutil.copy(SETTINGS, tmp_path / "settings.py")
+        env = dict(os.environ, MATINEE_CONF_EXPORTED="1", PUBLIC_VIEW="0", LAN_EDIT="0")
+        proc = subprocess.run([sys.executable, "-c", "import settings; print(settings.PUBLIC_VIEW, settings.LAN_EDIT)"],
+                              cwd=tmp_path, env=env, capture_output=True, text=True, timeout=60)
+    finally:
+        env_file.chmod(0o600)
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.split() == ["False", "False"]
+
+
+@pytest.mark.skipif(ROOT_CAN_READ_ANYTHING, reason="root reads a chmod 000 file, so it cannot be made unreadable")
+def test_the_marker_does_not_excuse_a_file_that_is_readable_but_broken(tmp_path):
+    shutil.copy(SETTINGS, tmp_path / "settings.py")
+    (tmp_path / ".env").write_bytes(b"PORT=8771\n\xff\xfe\x00garbage\n")
+    proc = subprocess.run([sys.executable, "-c", "import settings"], cwd=tmp_path,
+                          env=dict(os.environ, MATINEE_CONF_EXPORTED="1"), capture_output=True, text=True, timeout=60)
+    assert proc.returncode != 0
