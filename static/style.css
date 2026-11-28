@@ -2931,7 +2931,41 @@ main#view {
 .wish-person input:checked + span { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
 .wish-person input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
 .wish-dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
-.wanted-row { text-decoration: none; color: inherit; }
+/* The Wanted row is one tap target: the title link is stretched over the whole card, and anything that must be
+   tapped on its own (the price box's button and, later, its listing link) sits above it. */
+.wanted-row { color: inherit; }
+.wanted-link { color: inherit; text-decoration: none; }
+.wanted-link::after { content: ""; position: absolute; inset: 0; border-radius: var(--r-card); }
+.wanted-link:focus-visible { outline: none; }
+.wanted-link:focus-visible::after { outline: 2px solid var(--focus); outline-offset: 2px; }
+.want-target-group[hidden] { display: none; }
+/* The price box (wishlist.js priceBoxHTML), on the Wanted row and in the title page's want block. data-status picks
+   the look; more states (found, at or under target) are added as attribute selectors on the same element. */
+.price-box {
+  position: relative;       /* above the stretched title link, so its buttons and links take their own taps */
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: var(--s2);
+  min-width: 0;
+  font-size: var(--fs-sm);
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+.price-box .price-line { pointer-events: none; }   /* plain text: a tap goes through to the row's link */
+.price-box[data-status="target"] .price-line { color: var(--ink); font-weight: 700; }
+.price-box-set {
+  min-height: 44px;
+  padding: 0 var(--s3);
+  margin-left: calc(-1 * var(--s3));
+  background: none;
+  border: 0;
+  color: var(--accent-text);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+.price-box-set:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; border-radius: var(--r-card); }
 
 /* Lists (spec 2026-11-12-lists-design §5): chips on the title page, the list sheet, the membership sheet. */
 .list-chips {

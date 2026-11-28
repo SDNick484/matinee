@@ -1223,7 +1223,8 @@ class MatineeClient:
         wants = self._api_request("GET", "/admin/api/wants").get("wants", [])
         return [{"id": w.get("title_id"), "title": w.get("title"), "year": w.get("year"),
                  "wanted_format": w.get("wanted_format"), "owned_formats": w.get("owned_formats") or [],
-                 "note": w.get("note"), "pushed_to": w.get("pushed_to") or []} for w in wants]
+                 "note": w.get("note"), "pushed_to": w.get("pushed_to") or [],
+                 "target_price": w.get("target_price")} for w in wants]
 
     def want_movie(
         self,
@@ -1231,8 +1232,10 @@ class MatineeClient:
         tmdb_id: Optional[int] = None,
         format: Optional[str] = None,
         note: Optional[str] = None,
+        target_price: Optional[float] = None,
     ) -> Dict[str, Any]:
-        """Put a movie on the wish list (a title not in Matinee is created with no copies)."""
+        """Put a movie on the wish list (a title not in Matinee is created with no copies). target_price is left out
+        of the request when None, so the server keeps whatever target is stored."""
         if (title_id is None) == (tmdb_id is None):
             raise MatineeError("Pass exactly one of title_id or tmdb_id.")
         payload: Dict[str, Any] = {"title_id": title_id} if title_id is not None else {"tmdb_id": tmdb_id}
@@ -1240,13 +1243,17 @@ class MatineeClient:
             payload["format"] = format
         if note:
             payload["note"] = note
+        if target_price is not None:
+            payload["target_price"] = target_price
         d = self._api_request("POST", "/admin/api/wants", payload)
         want = d.get("want") or {}
         year = f" ({d.get('year')})" if d.get("year") else ""
         wanted = want.get("wanted_format")
+        target = want.get("target_price")
+        watching = f", with a target price of ${target:,.2f} shipping included" if target is not None else ""
         return {"id": d.get("id"), "title": d.get("title"), "year": d.get("year"), "owned": d.get("owned"),
-                "wanted_format": wanted, "note": want.get("note"),
-                "summary": f"{d.get('title')}{year} is on the wish list for {wanted or 'any format'}."}
+                "wanted_format": wanted, "note": want.get("note"), "target_price": target,
+                "summary": f"{d.get('title')}{year} is on the wish list for {wanted or 'any format'}{watching}."}
 
 
 # The one line that names play_on_tv: only the `all` level registers it, so the other levels drop it.
@@ -1564,8 +1571,9 @@ def add_movie(
 
 def get_wishlist() -> List[Dict[str, Any]]:
     """List the movies the family wants to buy (the wish list), newest first: title, year, the format wanted
-    (null = any copy), the formats already owned, a note, and the names of whose Wish Lists app list it was
-    pushed to. Needs a Matinee key; a want is private to the family."""
+    (null = any copy), the formats already owned, a note, the names of whose Wish Lists app list it was
+    pushed to, and the target price in dollars with shipping included (null = no target set). Needs a Matinee key;
+    a want is private to the family."""
     return _default_client.get_wishlist()
 
 
@@ -1575,12 +1583,17 @@ def want_movie(
     format: Optional[Literal["4K UHD", "Blu-ray", "3D Blu-ray", "DVD", "VHS", "Digital 4K", "Digital HD",
                               "Digital SD"]] = None,
     note: Optional[str] = None,
+    target_price: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Put a movie on the wish list. Pass exactly one of title_id (a movie Matinee already has) or tmdb_id (from
     search_tmdb; the title is created with no copies). format is the format wanted; leave it out for any copy.
-    note is up to 140 characters. A title has one want: calling again replaces it. Adding a copy of that format
-    later ends the want. Pushing it to a person's list in the Wish Lists app is done in the Matinee app."""
-    return _default_client.want_movie(title_id=title_id, tmdb_id=tmdb_id, format=format, note=note)
+    note is up to 140 characters. target_price is the most the family will pay, in dollars with shipping included
+    (more than 0, at most 999.99, two decimals); it needs a physical format (not Digital, not leaving format out),
+    and leaving it out keeps the target already stored. A title has one want: calling again replaces it. Adding a
+    copy of that format later ends the want. Pushing it to a person's list in the Wish Lists app is done in the
+    Matinee app."""
+    return _default_client.want_movie(title_id=title_id, tmdb_id=tmdb_id, format=format, note=note,
+                                      target_price=target_price)
 
 
 def resource_stats() -> str:

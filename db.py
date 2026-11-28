@@ -105,7 +105,7 @@ CREATE TABLE IF NOT EXISTS omdb_ratings (
 );
 CREATE INDEX IF NOT EXISTS omdb_ratings_fetched ON omdb_ratings(fetched_at);
 """
-SCHEMA_VERSION = "14"
+SCHEMA_VERSION = "15"
 
 # v10 copy details. The limits mirror the CHECKs on `copies`; the app validates first and answers 400 with a sentence.
 CODE_STATUSES = ("none", "unredeemed", "redeemed", "expired")   # a physical copy's digital code; digital copies stay "none"
@@ -377,6 +377,13 @@ def migrate(con):
     if copy_cols:
         con.execute("CREATE UNIQUE INDEX IF NOT EXISTS copies_fandango_id ON copies(fandango_id) "
                     "WHERE fandango_id IS NOT NULL")
+
+    # v15: a target price on a want, in cents, shipping included (spec 2026-11-27-wishlist-price-watch-design §6).
+    # NULL means the want is not watched. Editor-only like the want. The CHECK mirrors the app's 0.01 to 999.99.
+    want_cols = {r[1] for r in con.execute("PRAGMA table_info(wants)")}
+    if "target_cents" not in want_cols:
+        con.execute("ALTER TABLE wants ADD COLUMN target_cents INTEGER "
+                    "CHECK (target_cents IS NULL OR (target_cents >= 1 AND target_cents <= 99999))")
 
 
 def init_db():

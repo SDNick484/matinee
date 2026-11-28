@@ -57,8 +57,8 @@ def v13_database(path):
 def test_new_database_has_fandango_id_last(fresh):
     cols = [r[1] for r in table_info(fresh)]
     assert cols[-2:] == ["youtube_id", "fandango_id"]
-    assert fresh.execute("SELECT v FROM meta WHERE k='schema'").fetchone()[0] == "14"
-    assert matinee.SCHEMA_VERSION == "14"
+    assert fresh.execute("SELECT v FROM meta WHERE k='schema'").fetchone()[0] == matinee.SCHEMA_VERSION
+    assert int(matinee.SCHEMA_VERSION) >= 14        # the Fandango id arrived in v14; later versions keep it
 
 
 @pytest.mark.parametrize("version", [1, 13])
@@ -72,7 +72,7 @@ def test_migrates_from_v1_and_v13(tmp_path, monkeypatch, fresh, version):
     matinee.init_db()
     matinee.init_db()                                   # a restart on the migrated file
     con = matinee.connect()
-    assert con.execute("SELECT v FROM meta WHERE k='schema'").fetchone()[0] == "14"
+    assert con.execute("SELECT v FROM meta WHERE k='schema'").fetchone()[0] == matinee.SCHEMA_VERSION
     assert table_info(con) == table_info(fresh)         # same columns, same order, as a new database
     copies = con.execute("SELECT id, kind, youtube_id, fandango_id FROM copies ORDER BY id").fetchall()
     assert [tuple(c) for c in copies] == [(1, "physical", None, None),

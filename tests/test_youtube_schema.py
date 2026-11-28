@@ -60,8 +60,8 @@ def v12_database(path):
 
 def test_new_database_has_youtube_id(fresh):
     assert [r[1] for r in table_info(fresh)][-2] == "youtube_id"      # v14 adds fandango_id after it
-    assert fresh.execute("SELECT v FROM meta WHERE k='schema'").fetchone()[0] == "14"
-    assert matinee.SCHEMA_VERSION == "14"
+    assert fresh.execute("SELECT v FROM meta WHERE k='schema'").fetchone()[0] == matinee.SCHEMA_VERSION
+    assert int(matinee.SCHEMA_VERSION) >= 14        # v14 added the Fandango id; later versions keep it
 
 
 @pytest.mark.parametrize("version", [1, 12])
@@ -75,7 +75,7 @@ def test_migrates_from_v1_and_v12(tmp_path, monkeypatch, fresh, version):
     matinee.init_db()
     matinee.init_db()                                   # a restart on the migrated file
     con = matinee.connect()
-    assert con.execute("SELECT v FROM meta WHERE k='schema'").fetchone()[0] == "14"
+    assert con.execute("SELECT v FROM meta WHERE k='schema'").fetchone()[0] == matinee.SCHEMA_VERSION
     assert table_info(con) == table_info(fresh)         # same columns, same order, as a new database
     copies = con.execute("SELECT id, title_id, kind, format, youtube_id FROM copies ORDER BY id").fetchall()
     assert [tuple(c) for c in copies] == [(1, 1, "physical", "4K UHD", None), (2, 1, "digital", "Digital HD", None)]

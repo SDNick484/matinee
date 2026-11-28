@@ -1391,9 +1391,10 @@ def test_ask_cannot_see_the_editor_fields(steelbook_env):
 WANTS = {"wants": [
     {"title_id": 12, "tmdb_id": 155, "title": "The Dark Knight", "year": 2008, "poster_url": "/images/155-p342.jpg",
      "wanted_format": "4K UHD", "note": "steelbook if they have it", "owned_formats": ["Digital HD"],
-     "pushed_to": ["Lauren"], "created_at": "2026-11-12 18:04:11"},
+     "pushed_to": ["Lauren"], "created_at": "2026-11-12 18:04:11", "target_price": 15.0},
     {"title_id": 14, "tmdb_id": 129, "title": "Spirited Away", "year": 2001, "poster_url": None,
-     "wanted_format": None, "note": None, "owned_formats": [], "pushed_to": [], "created_at": "2026-11-01 10:00:00"}]}
+     "wanted_format": None, "note": None, "owned_formats": [], "pushed_to": [], "created_at": "2026-11-01 10:00:00",
+     "target_price": None}]}
 
 
 def test_get_wishlist_reads_the_keyed_admin_api(monkeypatch):
@@ -1403,9 +1404,12 @@ def test_get_wishlist_reads_the_keyed_admin_api(monkeypatch):
     out = client.get_wishlist()
     assert seen == [("GET", "/admin/api/wants")]
     assert out[0] == {"id": 12, "title": "The Dark Knight", "year": 2008, "wanted_format": "4K UHD",
-                      "owned_formats": ["Digital HD"], "note": "steelbook if they have it", "pushed_to": ["Lauren"]}
+                      "owned_formats": ["Digital HD"], "note": "steelbook if they have it", "pushed_to": ["Lauren"],
+                      "target_price": 15.0}
     assert out[1]["wanted_format"] is None and out[1]["pushed_to"] == []   # "any format" stays null
-    assert set(out[0]) == {"id", "title", "year", "wanted_format", "owned_formats", "note", "pushed_to"}
+    assert out[1]["target_price"] is None                                  # not watched stays null
+    assert set(out[0]) == {"id", "title", "year", "wanted_format", "owned_formats", "note", "pushed_to",
+                           "target_price"}
 
 
 def test_get_wishlist_needs_a_key_and_never_reads_sqlite(test_env, monkeypatch):
@@ -1427,15 +1431,37 @@ def test_want_movie_posts_a_title_or_a_tmdb_id(monkeypatch):
     client = mcp_server.MatineeClient(api_url="http://fake-host", api_key="wk", db_path="")
     sent = []
     detail = {"id": 14, "title": "Spirited Away", "year": 2001, "owned": False, "copies": [],
-              "want": {"wanted_format": "4K UHD", "note": None, "created_at": "2026-11-12 18:04:11"}}
+              "want": {"wanted_format": "4K UHD", "note": None, "created_at": "2026-11-12 18:04:11",
+                       "target_price": None}}
     monkeypatch.setattr(client, "_api_request", lambda m, p, d=None: sent.append((m, p, d)) or detail)
     out = client.want_movie(tmdb_id=129, format="4K UHD")
     assert sent == [("POST", "/admin/api/wants", {"tmdb_id": 129, "format": "4K UHD"})]
     assert out == {"id": 14, "title": "Spirited Away", "year": 2001, "owned": False, "wanted_format": "4K UHD",
-                   "note": None, "summary": "Spirited Away (2001) is on the wish list for 4K UHD."}
+                   "note": None, "target_price": None, "summary": "Spirited Away (2001) is on the wish list for 4K UHD."}
     sent.clear()
     client.want_movie(title_id=12, note="steelbook")
     assert sent == [("POST", "/admin/api/wants", {"title_id": 12, "note": "steelbook"})]   # no format = any copy
+
+
+def test_want_movie_sends_a_target_price_only_when_given(monkeypatch):
+    client = mcp_server.MatineeClient(api_url="http://fake-host", api_key="wk", db_path="")
+    sent = []
+    detail = {"id": 12, "title": "Heat", "year": 1995, "owned": False, "copies": [],
+              "want": {"wanted_format": "4K UHD", "note": None, "target_price": 15.0}}
+    monkeypatch.setattr(client, "_api_request", lambda m, p, d=None: sent.append((m, p, d)) or detail)
+    out = client.want_movie(title_id=12, format="4K UHD", target_price=15)
+    assert sent == [("POST", "/admin/api/wants", {"title_id": 12, "format": "4K UHD", "target_price": 15})]
+    assert out["target_price"] == 15.0
+    assert out["summary"] == "Heat (1995) is on the wish list for 4K UHD, with a target price of $15.00 shipping included."
+    sent.clear()
+    client.want_movie(title_id=12, format="4K UHD")
+    assert "target_price" not in sent[0][2]          # left out: the server keeps the stored target
+
+
+def test_the_wish_tools_name_the_target_price():
+    assert "target_price" in inspect.signature(mcp_server.want_movie).parameters
+    assert "target_price" in mcp_server.want_movie.__doc__
+    assert "target price" in mcp_server.get_wishlist.__doc__.lower()
 
 
 def test_want_movie_needs_exactly_one_title(monkeypatch):

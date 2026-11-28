@@ -15,6 +15,24 @@ import { openModal } from "./modal.js";
       : `<span class="chip k-any">Any format</span>`;
   }
 
+  // 15 -> "$15", 12.5 -> "$12.50": whole dollars read without cents, anything else with two decimals.
+  function dollarsLabel(n) {
+    return Number.isInteger(n) ? `$${n}` : `$${n.toFixed(2)}`;
+  }
+
+  // The price box (spec 2026-11-27-wishlist-price-watch-design §3.2, §3.3), shared by the Wanted row and the title
+  // page's want block. data-status names what it shows. Only a want with a physical format has one: "none" (no target
+  // yet, with a button that opens the want form) and "target". Later states (a listing found, at or under target,
+  // nothing found, not checked yet) are further branches here, each filling the same .price-box element.
+  function priceBoxHTML(want) {
+    if (!FORMATS.physical.includes(want.wanted_format)) return "";
+    if (want.target_price == null) {
+      return `<div class="price-box" data-status="none"><span class="price-line">No target price set ·</span>
+        <button type="button" class="price-box-set" data-price-set>Set one ›</button></div>`;
+    }
+    return `<div class="price-box" data-status="target"><span class="price-line">Target ${esc(dollarsLabel(want.target_price))}</span></div>`;
+  }
+
   function pushedNames(wishes) {
     return [...new Set((wishes || []).map((w) => w.person_name).filter(Boolean))];
   }
@@ -35,6 +53,7 @@ import { openModal } from "./modal.js";
     return `<div class="want-block has-want" id="want-block">
       <div class="want-row"><span class="want-label">${label}</span>${title.owned ? "" : wantChipHTML(want.wanted_format)}</div>
       ${want.note ? `<div class="want-note">${esc(want.note)}</div>` : ""}
+      ${priceBoxHTML(want)}
       ${pushed}
       <div class="want-actions">
         <button type="button" class="btn btn-sm btn-ghost" id="btn-want">Want…</button>
@@ -45,9 +64,9 @@ import { openModal } from "./modal.js";
 
   // Wire the block's buttons; `refresh` redraws the title page after a change.
   function bindWantSection(title, refresh) {
-    document.getElementById("btn-want")?.addEventListener("click", () => {
-      openWantModal({ title_id: title.id, title: title.title, year: title.year, want: title.want, onSaved: refresh });
-    });
+    const openForm = () => openWantModal({ title_id: title.id, title: title.title, year: title.year, want: title.want, onSaved: refresh });
+    document.getElementById("btn-want")?.addEventListener("click", openForm);
+    document.querySelector("#want-block [data-price-set]")?.addEventListener("click", openForm);
     document.getElementById("btn-wish")?.addEventListener("click", () => openWishlistModal(title, refresh));
     document.getElementById("btn-want-remove")?.addEventListener("click", async () => {
       try {
@@ -60,11 +79,12 @@ import { openModal } from "./modal.js";
     });
   }
 
-  // The want form: a format (or Any) and an optional note. `movie` names the title by title_id, or by tmdb_id when
+  // The want form: a format (or Any), a target price while the format is physical, and an optional note. `movie` names the title by title_id, or by tmdb_id when
   // Matinee doesn't have it yet (the server then creates it with no copies). onSaved(response) runs after a save.
   function openWantModal(movie) {
     const formats = [...FORMATS.physical, ...FORMATS.digital];
     let format = movie.want ? movie.want.wanted_format : null;
+    const target = movie.want && movie.want.target_price != null ? movie.want.target_price : null;
     if (!openModal({
       title: "Want to buy",
       subtitle: `${movie.title}${movie.year ? ` (${movie.year})` : ""}`,
@@ -74,6 +94,12 @@ import { openModal } from "./modal.js";
               <label class="form-label">Format</label>
               <div class="chip-select-grid" id="want-format-grid"></div>
               <div class="form-hint" style="font-size:var(--fs-xs);color:var(--ink-3)">Any means the first copy you add, in any format, ends the want.</div>
+            </div>
+            <div class="form-group want-target-group" hidden>
+              <label class="form-label" for="want-target">Target price, with shipping</label>
+              <input type="text" id="want-target" class="form-input" inputmode="decimal" autocomplete="off"
+                     placeholder="15" value="${target === null ? "" : Number.isInteger(target) ? target : target.toFixed(2)}">
+              <div class="form-hint" style="font-size:var(--fs-xs);color:var(--ink-3)">Leave blank to keep it on the list without watching the price.</div>
             </div>
             <div class="form-group">
               <label class="form-label" for="want-note">Note</label>
@@ -88,7 +114,11 @@ import { openModal } from "./modal.js";
     })) return;
 
     const grid = document.getElementById("want-format-grid");
+    const targetGroup = document.querySelector(".want-target-group");
+    const targetInput = document.getElementById("want-target");
     function drawFormats() {
+      targetGroup.hidden = !FORMATS.physical.includes(format);     // Any and digital formats cannot be watched
+      if (targetGroup.hidden) targetInput.value = "";
       grid.innerHTML = [[null, "Any"], ...formats.map((f) => [f, f])]
         .map(([f, label]) => `<button type="button" class="select-chip ${f === format ? "active" : ""}" data-fmt="${esc(f || "")}" aria-pressed="${f === format}">${esc(label)}</button>`)
         .join("");
@@ -105,7 +135,11 @@ import { openModal } from "./modal.js";
       e.preventDefault();
       const save = document.getElementById("btn-want-save");
       if (save) save.disabled = true;
-      const body = { format, note: document.getElementById("want-note").value.trim() || null };
+      const body = {
+        format,
+        note: document.getElementById("want-note").value.trim() || null,
+        target_price: FORMATS.physical.includes(format) ? targetInput.value.trim() || null : null,   // blank clears it
+      };
       if (movie.title_id) body.title_id = movie.title_id;
       else body.tmdb_id = movie.tmdb_id;
       try {
@@ -206,18 +240,26 @@ import { openModal } from "./modal.js";
               const thumb = w.poster_url
                 ? `<img class="result-thumb" src="${esc(w.poster_url)}" loading="lazy" alt="" data-hide-on-error>`
                 : `<div class="result-thumb poster-ph" style="font-size:10px">${esc(w.title)}</div>`;
-              return `<a class="result-card wanted-row" href="#/t/${w.title_id}" data-title-id="${w.title_id}">
+              return `<div class="result-card wanted-row" data-title-id="${w.title_id}">
                 ${thumb}
                 <div class="result-info">
-                  <div class="result-title">${esc(w.title)}</div>
+                  <a class="result-title wanted-link" href="#/t/${w.title_id}">${esc(w.title)}</a>
                   <div class="result-year">${w.year ? esc(w.year) : ""}</div>
                   <div>${wantChipHTML(w.wanted_format)}</div>
                   ${w.note ? `<div class="want-note">${esc(w.note)}</div>` : ""}
+                  ${priceBoxHTML(w)}
                   ${w.owned_formats.length ? `<div class="want-pushed">Owned: ${esc(w.owned_formats.join(", "))}</div>` : ""}
                   ${w.pushed_to.length ? `<div class="want-pushed">On ${w.pushed_to.map((n) => esc(n) + "’s").join(", ")} wish list</div>` : ""}
-                </div></a>`;
+                </div></div>`;
             }).join("")}</div>`}
       </div>`;
+    // "Set one ›" sits on top of the row's stretched title link (see .wanted-link), so it opens the form, not the title.
+    container.querySelector("#wanted-list")?.addEventListener("click", (e) => {
+      const set = e.target.closest("[data-price-set]");
+      const w = set && wants.find((x) => x.title_id === Number(set.closest(".wanted-row").dataset.titleId));
+      if (!w) return;
+      openWantModal({ title_id: w.title_id, title: w.title, year: w.year, want: w, onSaved: () => renderWanted(container) });
+    });
   }
 
 export { bindWantSection, openWantModal, renderWanted, wantSectionHTML };

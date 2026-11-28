@@ -19,7 +19,7 @@ from conftest import FIXTURES_TMDB, seed_title
 from test_copy_details import old_database, point_app_at, rows_of
 
 API_KEY = "test-write-key-0123456789"
-WANT_COLUMNS = ["title_id", "wanted_format", "note", "created_at"]
+WANT_COLUMNS = ["title_id", "wanted_format", "note", "created_at", "target_cents"]
 WISH_COLUMNS = ["id", "title_id", "person_id", "person_name", "item_id", "wanted_format", "created_at"]
 
 
@@ -153,6 +153,44 @@ def test_every_earlier_version_migrates_and_keeps_everything(tmp_path, monkeypat
         assert con.execute("SELECT count(*) FROM watch_people").fetchone()[0] == 2
     assert con.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
     assert con.execute("PRAGMA foreign_key_check").fetchall() == []
+    con.close()
+
+
+def test_every_database_from_v14_gets_the_target_column_and_keeps_its_wants(tmp_path, monkeypatch):
+    """v15: wants.target_cents. A v14 file has the wants table without it; the rows stay and the target is empty."""
+    path = tmp_path / "v14.db"
+    seed = sqlite3.connect(path)
+    seed.executescript(matinee.SCHEMA)
+    matinee.migrate(seed)
+    seed.execute("DROP TABLE wants")      # the v11 table as v14 left it: no target column
+    seed.execute("""CREATE TABLE wants (
+      title_id      INTEGER PRIMARY KEY REFERENCES titles(id) ON DELETE CASCADE,
+      wanted_format TEXT,
+      note          TEXT CHECK (note IS NULL OR length(note) <= 140),
+      created_at    TEXT DEFAULT CURRENT_TIMESTAMP
+    )""")
+    seed.execute("""INSERT INTO titles (id, tmdb_id, imdb_id, title, sort_title, search_text, year, fetched_at)
+                    VALUES (1, 155, 'tt0468569', 'The Dark Knight', 'dark knight', 'the dark knight', 2008, '2026-01-01')""")
+    seed.execute("INSERT INTO wants (title_id, wanted_format, note) VALUES (1, '4K UHD', 'steelbook')")
+    seed.execute("INSERT OR REPLACE INTO meta VALUES ('schema', '14')")
+    seed.commit()
+    seed.close()
+    point_app_at(monkeypatch, tmp_path, path)
+    matinee.init_db()
+    matinee.init_db()                     # a restart on the migrated file
+    con = matinee.connect()
+    matinee.migrate(con)
+    assert con.execute("SELECT v FROM meta WHERE k='schema'").fetchone()[0] == matinee.SCHEMA_VERSION
+    assert [r[1] for r in con.execute("PRAGMA table_info(wants)")] == WANT_COLUMNS
+    assert [tuple(r) for r in con.execute("SELECT title_id, wanted_format, note, target_cents FROM wants")] == [
+        (1, "4K UHD", "steelbook", None)]
+    with pytest.raises(sqlite3.IntegrityError):       # whatever wrote it: no zero, no negative, no more than $999.99
+        con.execute("UPDATE wants SET target_cents = 0")
+    con.rollback()
+    with pytest.raises(sqlite3.IntegrityError):
+        con.execute("UPDATE wants SET target_cents = 100000")
+    con.rollback()
+    con.execute("UPDATE wants SET target_cents = 99999")
     con.close()
 
 
@@ -578,3 +616,121 @@ def test_the_defaults_are_localhost_and_an_amazon_search():
     import settings
     assert settings.DEFAULT_WISHLIST_URL == "http://127.0.0.1:8766"
     assert settings.DEFAULT_WISHLIST_MOVIE_URL == "https://www.amazon.com/s?k={q}"
+
+
+# ============================================================================== target price (schema v15)
+def wanted(client, tid):
+    """The want as the title page and the Wanted list both carry it: (title page, list row)."""
+    page = editor_title(client, tid)["want"]
+    row = next(w for w in client.get("/admin/api/wants", headers=bearer()).get_json()["wants"] if w["title_id"] == tid)
+    return page, row
+
+
+def test_a_target_price_is_saved_and_shown_in_dollars(client, paddington):
+    res = want(client, title_id=paddington, format="4K UHD", target_price=15)
+    assert res.status_code == 201 and res.get_json()["want"]["target_price"] == 15
+    assert db().execute("SELECT target_cents FROM wants").fetchone()[0] == 1500
+    page, row = wanted(client, paddington)
+    assert page["target_price"] == 15 and row["target_price"] == 15
+
+
+@pytest.mark.parametrize("sent, cents", [(15, 1500), (12.5, 1250), ("12.50", 1250), ("12", 1200), (" 12 ", 1200),
+                                         ("$13.48", 1348), (".5", 50), (0.01, 1), ("999.99", 99999), (999.99, 99999),
+                                         (10.1, 1010), (0.07, 7)])
+def test_accepted_target_prices(client, paddington, sent, cents):
+    assert want(client, title_id=paddington, format="Blu-ray", target_price=sent).status_code == 201
+    assert db().execute("SELECT target_cents FROM wants").fetchone()[0] == cents
+
+
+@pytest.mark.parametrize("sent", [0, "0", "0.00", -5, "-5", 1000, "999.995", "1000", 12.345, "12.345", "abc", "1e2",
+                                  "12,50", "1 2", "$", "12.", 10**30, 1e30, "1" + "0" * 40, 0.001, True, False, [], {}, float("nan"), float("inf")])
+def test_bad_target_prices_are_400_and_change_nothing(client, paddington, sent):
+    res = want(client, title_id=paddington, format="4K UHD", target_price=sent)
+    assert res.status_code == 400 and "Target price" in res.get_json()["error"], res.get_json()
+    assert db().execute("SELECT count(*) FROM wants").fetchone()[0] == 0
+
+
+def test_a_target_price_needs_a_physical_format(client, paddington):
+    for fmt in (None, "Digital HD", "Digital 4K"):
+        res = want(client, title_id=paddington, format=fmt, target_price=15)
+        assert res.status_code == 400 and "physical format" in res.get_json()["error"]
+    assert db().execute("SELECT count(*) FROM wants").fetchone()[0] == 0
+    for fmt in ("4K UHD", "Blu-ray", "3D Blu-ray", "DVD", "VHS"):
+        assert want(client, title_id=paddington, format=fmt, target_price=15).status_code in (200, 201)
+
+
+def test_a_null_or_blank_target_with_any_format_is_fine(client, paddington):
+    assert want(client, title_id=paddington, target_price=None).status_code == 201
+    assert want(client, title_id=paddington, format="Digital HD", target_price="").status_code == 200
+    assert wanted(client, paddington)[0]["target_price"] is None
+
+
+def test_a_bad_target_never_creates_a_title_or_asks_tmdb(client):
+    res = want(client, tmdb_id=129, format="4K UHD", target_price=0)
+    assert res.status_code == 400
+    assert db().execute("SELECT count(*) FROM titles").fetchone()[0] == 0
+    assert matinee.tmdb_get.calls == []
+
+
+def test_a_body_without_the_key_keeps_the_target(client, paddington):
+    want(client, title_id=paddington, format="4K UHD", target_price=15)
+    res = want(client, title_id=paddington, format="4K UHD", note="steelbook")     # no target_price key at all
+    assert res.status_code == 200 and res.get_json()["want"]["target_price"] == 15
+    assert res.get_json()["want"]["note"] == "steelbook"
+    assert db().execute("SELECT target_cents FROM wants").fetchone()[0] == 1500
+
+
+def test_only_an_explicit_null_clears_the_target(client, paddington):
+    want(client, title_id=paddington, format="4K UHD", target_price=15)
+    res = want(client, title_id=paddington, format="4K UHD", target_price=None)
+    assert res.status_code == 200 and res.get_json()["want"]["target_price"] is None
+    assert db().execute("SELECT target_cents FROM wants").fetchone()[0] is None
+
+
+def test_a_new_target_replaces_the_old_one(client, paddington):
+    want(client, title_id=paddington, format="4K UHD", target_price=15)
+    assert want(client, title_id=paddington, format="4K UHD", target_price="12.25").get_json()["want"]["target_price"] == 12.25
+
+
+def test_physical_to_physical_keeps_the_target(client, paddington):
+    want(client, title_id=paddington, format="4K UHD", target_price=15)
+    res = want(client, title_id=paddington, format="Blu-ray")
+    assert res.get_json()["want"]["wanted_format"] == "Blu-ray" and res.get_json()["want"]["target_price"] == 15
+
+
+@pytest.mark.parametrize("fmt", [None, "Digital HD"])
+def test_a_format_that_is_not_physical_clears_the_target(client, paddington, fmt):
+    want(client, title_id=paddington, format="4K UHD", target_price=15)
+    res = want(client, title_id=paddington, format=fmt)
+    assert res.status_code == 200 and res.get_json()["want"]["target_price"] is None
+    assert db().execute("SELECT target_cents FROM wants").fetchone()[0] is None
+    back = want(client, title_id=paddington, format="4K UHD")        # and it does not come back by itself
+    assert back.get_json()["want"]["target_price"] is None
+
+
+def test_a_want_without_a_target_says_null(client, paddington):
+    want(client, title_id=paddington, format="4K UHD")
+    page, row = wanted(client, paddington)
+    assert page["target_price"] is None and row["target_price"] is None
+
+
+def test_removing_the_want_removes_the_target(client, paddington):
+    want(client, title_id=paddington, format="4K UHD", target_price=15)
+    client.delete(f"/admin/api/titles/{paddington}/want", headers=bearer())
+    want(client, title_id=paddington, format="4K UHD")
+    assert wanted(client, paddington)[0]["target_price"] is None
+
+
+def test_a_copy_in_the_format_wanted_ends_the_want_and_its_target(client, paddington):
+    want(client, title_id=paddington, format="Blu-ray", target_price=15)
+    assert add_copy(client, paddington, fmt="Blu-ray").status_code == 201
+    assert db().execute("SELECT count(*) FROM wants").fetchone()[0] == 0
+
+
+def test_the_target_price_is_editor_only(client, paddington):
+    want(client, title_id=paddington, format="4K UHD", target_price=13.48)
+    for url in (f"/api/titles/{paddington}", "/api/titles", "/api/stats", "/api/search?q=paddington"):
+        text = client.get(url).get_data(as_text=True)
+        assert "target" not in text.lower() and "13.48" not in text and "1348" not in text, url
+    assert client.get("/admin/api/wants").status_code == 401                 # no key, no editor session
+    assert client.get("/admin/api/wants", headers=bearer()).get_json()["wants"][0]["target_price"] == 13.48
