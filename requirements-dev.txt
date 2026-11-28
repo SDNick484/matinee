@@ -2,9 +2,7 @@ Flask>=3.0.0
 PyJWT>=2.8.0
 cryptography>=42.0.0
 pytest>=8.0.0
-mcp>=1.0.0
-# Remote MCP service (mcp_http.py) and its tests
-uvicorn>=0.31
-pyjwt[crypto]>=2.10
+# The MCP stack (FastMCP, uvicorn, PyJWT[crypto]), pinned as production installs it
+-r requirements-mcp.txt
 anyio
 httpx

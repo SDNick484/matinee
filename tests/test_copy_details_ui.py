@@ -333,6 +333,8 @@ def test_reset_clears_the_code_filter_with_the_others(server, browser, two_title
     page.wait_for_selector("#filter-code-btn")
     page.click("#filter-reset-btn")
     page.wait_for_function("!location.hash.includes('code=') && !location.hash.includes('watched=')")
+    # The hash changes at once, but the router re-renders the bar a moment later: wait for the chip to go.
+    page.wait_for_selector("#filter-code-btn", state="detached")
     assert page.locator("#filter-code-btn").count() == 0
 
 

@@ -26,7 +26,7 @@ each module that holds `X`. A new module goes in `_SPLIT_MODULES` and in `instal
    in `SCHEMA`. No manual DB step on the host, ever.
 3. **Tests.** pytest with recorded fixtures (`tests/fixtures/tmdb/`) and no live network. Add a fixture rather
    than calling an API; external-API features test a lookup miss and quota/HTTP errors.
-4. **CI** must stay green: Python 3.10–3.13 on Ubuntu, the Alpine container job, the lint and UI smoke jobs,
+4. **CI** must stay green: Python 3.12–3.14 on Ubuntu, the Alpine container job, the lint and UI smoke jobs,
    and `node --check` on every `static/js/*.js`. `static/js/package.json` (`{"type": "module"}`) is what makes
    Node parse them as modules; without it a broken file passes.
 5. **Auth.** Writes live under `/admin/api/` with `@editor_required`. Reads live under `/api/` and respect
@@ -69,10 +69,10 @@ shellcheck -s sh installer/setup-head.sh installer/build.sh ops/matinee-backup o
 sh installer/build.sh && sh -n dist/setup-matinee.sh
 ```
 
-`tests/test_ask_ui.py`, `tests/test_people_ui.py`, `tests/test_wishlist_ui.py`, `tests/test_lists_ui.py`, `tests/test_stats_ui.py`, `tests/test_calendar_ui.py`, `tests/test_settings_ui.py`, `tests/test_youtube_link_ui.py` and `tests/test_play_ui.py` need Playwright and Chromium
+Every `tests/*_ui.py` needs Playwright and Chromium
 (`pip install playwright && python -m playwright install chromium`); without them they skip locally, but the UI
 smoke job fails on any skip.
 
-Then push the branch, open a PR against `main` (do not merge it), and wait for CI: all seven jobs must finish
-green — Lint (shellcheck + ruff), UI smoke (Playwright + Chromium, 412 px), Python 3.10, 3.11, 3.12 and 3.13 on
+Then push the branch, open a PR against `main` (do not merge it), and wait for CI: all six jobs must finish
+green — Lint (shellcheck + ruff), UI smoke (Playwright + Chromium, 412 px), Python 3.12, 3.13 and 3.14 on
 Ubuntu, and Alpine. If one fails, fix it, push, and wait again.

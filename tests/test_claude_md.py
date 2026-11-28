@@ -15,9 +15,9 @@ def test_every_ci_job_is_named():
     jobs = re.findall(r"^  ([a-z][a-z0-9-]*):\s*$", CI.split("\njobs:", 1)[1], flags=re.M)
     assert set(jobs) == {"lint", "ui-smoke", "test-python", "test-alpine"}, jobs
     done = done_section()
-    for name in ("Lint (shellcheck + ruff)", "UI smoke", "Python 3.10", "3.11", "3.12", "3.13", "Alpine"):
+    for name in ("Lint (shellcheck + ruff)", "UI smoke", "Python 3.12", "3.13", "3.14", "Alpine"):
         assert name in done, name
-    assert "seven" in done
+    assert "six" in done and "seven" not in done
 
 
 def test_lint_commands_are_listed():
