@@ -24,7 +24,7 @@ Environment (see /etc/conf.d/matinee and .env.example):
   MATINEE_READ_KEY,
   ANTHROPIC_SEARCH_KEY, ANTHROPIC_SEARCH_MODEL, ASK_DAILY_LIMIT, WISHLIST_URL, WISHLIST_MOVIE_URL
 """
-import datetime as dt, hashlib, hmac, ipaddress, json, os, re, sys, threading, time, types
+import datetime as dt, gzip, hashlib, hmac, ipaddress, json, os, re, sys, threading, time, types
 import urllib.error, urllib.parse, urllib.request
 import sqlite3
 from functools import wraps
@@ -285,6 +285,34 @@ def admin_api_no_store(resp):
     return resp
 
 
+GZIP_MIN = 1024  # smaller answers cost more to unpack than they save
+GZIP_TYPES = {"application/json", "application/javascript", "text/javascript", "text/css", "text/html",
+              "text/plain", "image/svg+xml"}
+_gzip_cache = {}  # path -> (identity ETag, gzipped bytes): a static file is compressed once per version
+
+
+def _wants_gzip():
+    return request.accept_encodings.quality("gzip") > 0
+
+
+@app.after_request
+def gzip_text(resp):
+    """gzip for text answers over GZIP_MIN bytes when the client sends Accept-Encoding: gzip. Runs first of the
+    after_request steps (last registered), so the headers the others set are already on the response it returns.
+    Streamed responses (direct_passthrough, i.e. send_file) are left to static_files, which compresses them itself."""
+    if resp.mimetype not in GZIP_TYPES:
+        return resp
+    resp.vary.add("Accept-Encoding")
+    if (resp.direct_passthrough or not resp.is_sequence or resp.status_code in (204, 304)
+            or "Content-Encoding" in resp.headers or not _wants_gzip()):
+        return resp
+    body = resp.get_data()
+    if len(body) >= GZIP_MIN:
+        resp.set_data(gzip.compress(body, 6))
+        resp.headers["Content-Encoding"] = "gzip"
+    return resp
+
+
 def who():
     e = getattr(g, "editor", None)
     return None if e in (None, "access-user") else e  # 'lan' is kept: the spec records LAN adds as such
@@ -367,14 +395,41 @@ def admin_index():
 @app.get("/static/<path:p>")
 def static_files(p):
     if request.args.get("v"):
-        return send_from_directory(APP_DIR / "static", p, max_age=31536000)
-    if p.startswith("js/"):
+        resp = send_from_directory(APP_DIR / "static", p, max_age=31536000)
+        if asset_versions().get(p) == request.args.get("v"):  # the current hash: this URL never changes content
+            resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    elif p.startswith("js/"):
         # Only a browser without import maps asks for a module with no ?v=. Revalidate every time (ETag, 304)
         # so it can never run an old module beside a new one.
         resp = send_from_directory(APP_DIR / "static", p, max_age=0)
         resp.cache_control.no_cache = True
-        return resp
-    return send_from_directory(APP_DIR / "static", p, max_age=60)
+    elif p.startswith("fonts/") or p == "tmdb.svg":  # not versioned: a day, revalidated by ETag after that
+        resp = send_from_directory(APP_DIR / "static", p, max_age=86400)
+    else:
+        resp = send_from_directory(APP_DIR / "static", p, max_age=60)
+    if resp.mimetype in GZIP_TYPES:
+        resp.vary.add("Accept-Encoding")
+        if resp.status_code == 200 and _wants_gzip() and int(resp.headers.get("Content-Length", 0)) >= GZIP_MIN:
+            _gzip_static(resp, APP_DIR / "static" / p)
+    return resp
+
+
+def _gzip_static(resp, path):
+    """Swap a 200 send_file response for its gzipped bytes. The ETag is the identity one with a suffix, so a 304 is
+    still decided by make_conditional. Range requests come back as 206 from send_file and never reach here."""
+    identity = resp.get_etag()[0]
+    if identity is None:
+        return
+    cached = _gzip_cache.get(str(path))
+    if cached is None or cached[0] != identity:
+        cached = (identity, gzip.compress(path.read_bytes(), 6))
+        _gzip_cache[str(path)] = cached
+    resp.close()
+    resp.direct_passthrough = False
+    resp.set_data(cached[1])
+    resp.headers["Content-Encoding"] = "gzip"
+    resp.set_etag(identity + "-gzip")
+    resp.make_conditional(request)
 
 
 @app.get("/images/<path:p>")
