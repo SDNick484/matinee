@@ -324,7 +324,7 @@ def test_the_price_box_without_a_target_opens_the_form(server, browser, dark_kni
     assert page.locator("#want-target").is_visible()
     page.fill("#want-target", "$24.99")
     page.click("#btn-want-save")
-    page.wait_for_function("document.querySelector('#want-block .price-box').dataset.status === 'target'")
+    page.wait_for_function("document.querySelector('#want-block .price-box')?.dataset.status === 'target'")
     assert page.locator("#want-block .price-box").inner_text().strip() == "Target $24.99"
     assert _rows("SELECT target_cents FROM wants") == [(2499,)]
     assert errors == []
