@@ -92,7 +92,8 @@ rm /tmp/restore.db
 
 Then `rc-service matinee start`. The copy has the schema of the release you upgraded from, and the app upgrades it
 again on start (`migrate()`), so a migration that failed halfway starts again from clean data. To go back to the previous
-release as well, install that release's `setup-matinee.sh` over this one before starting.
+release as well, install that release's `setup-matinee.sh` over this one before starting, or swap back the previous
+app directory the installer keeps as `/opt/matinee.old` until the next upgrade (commands in the README's upgrade section).
 
 ## Restore uploaded covers
 

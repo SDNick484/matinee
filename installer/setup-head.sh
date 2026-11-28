@@ -3,9 +3,14 @@
 # Re-runnable: upgrades the app in place; never touches existing data, and only *adds*
 # missing settings to existing config files.
 #
+# An upgrade does the slow work (unpack, venv refresh) and takes a "matinee-backup pre-upgrade" copy while the old
+# version is still serving; only then does it stop the services, swap the directories (the old one stays in
+# /opt/matinee.old until the next upgrade), start and poll /healthz. Any failure after the stop puts the old
+# directory back and starts the services again.
+#
 #   sh setup-matinee.sh               install / upgrade
 #   MATINEE_PORT=8771 sh setup-matinee.sh
-#   sh setup-matinee.sh --uninstall   remove app + service (keeps /var/lib/matinee and backups)
+#   sh setup-matinee.sh --uninstall   remove app, service, users, log rotation and health checks (keeps /var/lib/matinee and backups)
 set -eu
 APP_DIR=/opt/matinee
 DATA_DIR=/var/lib/matinee
@@ -19,14 +24,52 @@ PORT="${MATINEE_PORT:-8771}"
 if [ "$(id -u)" != 0 ]; then echo "Run as root"; exit 1; fi
 command -v apk >/dev/null || { echo "This installer is for Alpine (apk)."; exit 1; }
 
+remove_health_check() {  # remove_health_check SERVICE — drop that service's entry from HEALTH_CHECKS in $OPS_CONF
+  [ -f "$OPS_CONF" ] || return 0
+  grep -Eq "\|$1([^-A-Za-z0-9_]|\$)" "$OPS_CONF" || return 0
+  # an entry is name|url|service on a line of its own; the last one of the value also carries its closing quote
+  awk -v svc="$1" '
+    { line[NR] = $0 }
+    END {
+      m = 0
+      for (i = 1; i <= NR; i++) {
+        e = line[i]; pre = ""; post = ""
+        if (e ~ /^HEALTH_CHECKS="/) { pre = "HEALTH_CHECKS=\""; e = substr(e, 16) }
+        if (e ~ /"[ \t]*$/) { sub(/"[ \t]*$/, "", e); post = "\"" }
+        t = e; gsub(/^[ \t]+|[ \t]+$/, "", t)
+        n = split(t, f, "|")
+        if (n == 3 && f[3] == svc) {
+          if (pre != "") out[++m] = pre post              # keep the start of the value (and its closing quote)
+          else if (post != "" && m > 0) out[m] = out[m] post   # the closing quote moves to the line before
+        } else out[++m] = line[i]
+      }
+      for (i = 1; i <= m; i++) print out[i]
+    }' "$OPS_CONF" > "$OPS_CONF.new"
+  if ! grep -Eq "\|$1([^-A-Za-z0-9_]|\$)" "$OPS_CONF.new" && sh -n "$OPS_CONF.new" 2>/dev/null; then
+    cat "$OPS_CONF.new" > "$OPS_CONF"
+  else
+    echo "    Couldn't edit HEALTH_CHECKS in $OPS_CONF: remove the $1 line yourself."
+  fi
+  rm -f "$OPS_CONF.new"
+}
+
 if [ "${1:-}" = "--uninstall" ]; then
   rc-service matinee-mcp stop 2>/dev/null || true
   rc-update del matinee-mcp default 2>/dev/null || true
   rc-service matinee stop 2>/dev/null || true
   rc-update del matinee default 2>/dev/null || true
   rm -f /etc/init.d/matinee /etc/init.d/matinee-mcp /etc/periodic/daily/matinee-backup /etc/periodic/daily/matinee-refresh /etc/periodic/weekly/matinee-restore-test
-  rm -rf "$APP_DIR" /opt/matinee-mcp
-  echo "Removed app, service and backup, refresh and restore-test jobs. Data kept in $DATA_DIR, config in $CONF, backups in /var/backups/matinee."
+  rm -rf "$APP_DIR" "$APP_DIR.old" "$APP_DIR.new" "$APP_DIR.failed" /opt/matinee-mcp
+  # the logrotate file this installer wrote (a hand-made one is left alone), the health checks it added, and its users
+  lr="${LOGROTATE_D:-/etc/logrotate.d}/matinee"
+  [ "$(head -n 1 "$lr" 2>/dev/null)" = '/var/log/matinee.log /var/log/matinee-mcp.log {' ] && rm -f "$lr"
+  remove_health_check matinee
+  remove_health_check matinee-mcp
+  deluser "$SVC_USER" >/dev/null 2>&1 || true
+  deluser "$MCP_USER" >/dev/null 2>&1 || true
+  delgroup "$SVC_USER" >/dev/null 2>&1 || true
+  delgroup "$MCP_USER" >/dev/null 2>&1 || true
+  echo "Removed app, service, users, log rotation, health checks and the backup, refresh and restore-test jobs. Data kept in $DATA_DIR, config in $CONF, backups in /var/backups/matinee."
   exit 0
 fi
 
@@ -34,15 +77,52 @@ fi
 [ -f "$CONF" ] && PORT=$(sed -n 's/^PORT=//p' "$CONF" | head -n1) && PORT=${PORT:-8771}
 
 echo "==> Installing packages"
-apk add --no-cache python3 py3-flask py3-gunicorn py3-jwt py3-cryptography sqlite >/dev/null
+apk add --no-cache python3 py3-flask py3-gunicorn py3-jwt py3-cryptography sqlite logrotate >/dev/null
 
-[ -x /etc/init.d/matinee-mcp ] && rc-service matinee-mcp stop >/dev/null 2>&1 || true
-[ -x /etc/init.d/matinee ] && rc-service matinee stop >/dev/null 2>&1 || true
-IP=$(ip -4 -o addr show scope global | awk '{print $4}' | cut -d/ -f1 | head -n1)
-IP=${IP:-127.0.0.1}
-if netstat -ltn 2>/dev/null | awk '{print $4}' | grep -q ":$PORT\$"; then
-  echo "Port $PORT is already in use by something else. Re-run with MATINEE_PORT=<free port>."; exit 1
-fi
+# ---------------------------------------------------------------- safety net
+# Nothing below changes the running install until GUARD=1. From then on any failure (set -e, a failed health check,
+# Ctrl-C) runs rollback: put the previous app directory back if the swap happened, and start the services again.
+GUARD=0 SWAP=0 HAD_APP=0 WAS_UP_APP=0 WAS_UP_MCP=0 UPGRADE=0 TMP=""
+[ -d "$APP_DIR" ] && HAD_APP=1
+# shellcheck disable=SC2329  # runs from the EXIT trap
+rollback() {
+  echo "==> The upgrade failed: putting the previous version back and starting the services" >&2
+  rc-service matinee-mcp stop >/dev/null 2>&1 || true
+  rc-service matinee stop >/dev/null 2>&1 || true
+  if [ "$SWAP" = 1 ] && [ "$HAD_APP" = 1 ] && [ -d "$APP_DIR.old" ]; then
+    rm -rf "$APP_DIR.failed"
+    if [ -d "$APP_DIR" ]; then mv "$APP_DIR" "$APP_DIR.failed" || true; fi
+    mv "$APP_DIR.old" "$APP_DIR" || true
+  fi
+  if [ "$WAS_UP_APP" = 1 ]; then
+    rc-service matinee start >/dev/null 2>&1 || echo "    Could not start matinee: see /var/log/matinee.log" >&2
+    ok=0; n=0
+    while [ "$n" -lt 15 ]; do
+      wget -qO- "http://127.0.0.1:$PORT/healthz" >/dev/null 2>&1 && { ok=1; break; }
+      n=$((n+1)); sleep 1
+    done
+    if [ "$ok" = 1 ]; then echo "    The previous version is running again on port $PORT." >&2
+    else echo "    The previous version did not answer /healthz either: see /var/log/matinee.log" >&2; fi
+  fi
+  if [ "$WAS_UP_MCP" = 1 ]; then rc-service matinee-mcp start >/dev/null 2>&1 || true; fi
+  if [ "$UPGRADE" = 1 ]; then
+    echo "    The database was not touched by the rollback. If it looks wrong, a pre-upgrade copy was taken first: docs/restore.md, 'Restore a pre-upgrade copy'." >&2
+  fi
+}
+# shellcheck disable=SC2329  # the EXIT trap
+on_exit() {
+  rc=$?
+  set +e
+  trap - EXIT INT TERM HUP
+  if [ -n "$TMP" ]; then rm -rf "$TMP"; fi
+  if [ "$rc" != 0 ]; then
+    rm -rf "$APP_DIR.new"
+    if [ "$GUARD" = 1 ]; then rollback; fi
+  fi
+  exit "$rc"
+}
+trap on_exit EXIT
+trap 'exit 1' INT TERM HUP
 
 echo "==> Creating user and folders"
 # BusyBox adduser -S puts a new user in "nogroup" unless told otherwise, so make the app's own group first.
@@ -55,17 +135,75 @@ fi
 # The MCP HTTP service gets its own user: no database access, no home.
 grep -q "^$MCP_USER:" /etc/group || addgroup -S "$MCP_USER"
 id "$MCP_USER" >/dev/null 2>&1 || adduser -S -D -H -h /nonexistent -s /sbin/nologin -G "$MCP_USER" "$MCP_USER"
-mkdir -p "$APP_DIR" "$DATA_DIR/images" /var/backups/matinee
+mkdir -p "$DATA_DIR/images" /var/backups/matinee
 
+# The slow work happens now, while the installed version is still serving: unpack the new app beside the old one
+# and refresh the MCP venv from the new requirements. Downtime is then the swap and the restart only.
 echo "==> Unpacking app"
 TMP=$(mktemp -d /tmp/matinee-tmp.XXXXXX 2>/dev/null || mktemp -d -t matinee-tmp.XXXXXX 2>/dev/null || mktemp -d)
 sed -n '/^__PAYLOAD_BELOW__$/,$p' "$0" | tail -n +2 | base64 -d | ( cd "$TMP" && tar -xzf - )
 rm -rf "$APP_DIR.new" && mv "$TMP/matinee" "$APP_DIR.new"
-rm -rf "$APP_DIR.old"; [ -d "$APP_DIR" ] && mv "$APP_DIR" "$APP_DIR.old"
-mv "$APP_DIR.new" "$APP_DIR"; rm -rf "$APP_DIR.old" "$TMP"
-chown -R root:root "$APP_DIR"
+rm -rf "$TMP"; TMP=""
+chown -R root:root "$APP_DIR.new"
 chown -R "$SVC_USER:$SVC_USER" "$DATA_DIR"
 chmod 750 "$DATA_DIR"
+
+# The MCP stack is not packaged for Alpine (no py3-mcp), so this one service gets a pip venv.
+# A pip or network failure only skips matinee-mcp; the main app still installs and starts. An existing venv that
+# cannot be refreshed (PyPI unreachable) is kept and still used. The venv is refreshed in place: pip does not
+# disturb the running matinee-mcp, and this step is not undone by a rollback.
+echo "==> Installing MCP HTTP service (pip venv)"
+MCP_OK=0 MCP_REFRESH_FAILED=0 MCP_HAD_VENV=0
+[ -x "$MCP_VENV/bin/pip" ] && MCP_HAD_VENV=1
+# shellcheck disable=SC2015  # deliberate: any failure in the chain (including MCP_OK=1) falls through to the warning branch
+apk add --no-cache py3-pip >/dev/null 2>&1 && { [ -x "$MCP_VENV/bin/python" ] || python3 -m venv "$MCP_VENV"; } && "$MCP_VENV/bin/pip" install --no-cache-dir --upgrade -q -r "$APP_DIR.new/requirements-mcp.txt" && MCP_OK=1 || MCP_REFRESH_FAILED=1
+if [ "$MCP_REFRESH_FAILED" = 1 ]; then
+  if [ "$MCP_HAD_VENV" = 1 ]; then
+    MCP_OK=1
+    echo "    WARNING: could not refresh the MCP venv (needs PyPI access); keeping the installed one. Re-run this installer to retry."
+  else
+    echo "    WARNING: could not set up the MCP venv (needs PyPI access); matinee-mcp will not start. Re-run this installer to retry."
+  fi
+fi
+
+# An upgrade is any run that finds a database. Take the labelled copy now, before anything is stopped or changed,
+# with the NEW matinee-backup from the payload: the script already installed on the host may be an older one that
+# ignores the label and overwrites the day's scheduled copy. Any failure aborts, with the old version untouched.
+DB_DIR=$(sed -n 's/^DATA_DIR=//p' "$CONF" 2>/dev/null | tail -n 1 | tr -d "\"'")
+DB_DIR=${DB_DIR:-$DATA_DIR}
+if [ -f "$DB_DIR/matinee.db" ]; then
+  UPGRADE=1
+  echo "==> Taking the pre-upgrade backup"
+  if ! sh "$APP_DIR.new/ops/matinee-backup" pre-upgrade; then
+    echo "The pre-upgrade backup failed, so nothing was changed and the running version was left alone."
+    echo "See /var/log/ops.log, fix the cause (disk space? a damaged $DB_DIR/matinee.db?), then re-run this installer."
+    exit 1
+  fi
+fi
+latest_pre_upgrade() {  # path of the newest pre-upgrade copy, or nothing
+  _ld=$(sed -n 's/^LOCAL_DIR=//p' "$OPS_CONF" 2>/dev/null | tail -n 1 | tr -d "\"'")
+  # shellcheck disable=SC2012  # newest by mtime; the names are ours (matinee-matinee-pre-upgrade-<HHMMSS>.db.gz)
+  ls -t "${_ld:-/var/backups/matinee}"/*/matinee-matinee-pre-upgrade-*.db.gz 2>/dev/null | head -n 1
+}
+
+# ---------------------------------------------------------------- the swap (downtime starts here)
+# What was running is what a rollback starts again.
+[ -x /etc/init.d/matinee-mcp ] && rc-service matinee-mcp status >/dev/null 2>&1 && WAS_UP_MCP=1 || true
+[ -x /etc/init.d/matinee ] && rc-service matinee status >/dev/null 2>&1 && WAS_UP_APP=1 || true
+GUARD=1
+[ -x /etc/init.d/matinee-mcp ] && rc-service matinee-mcp stop >/dev/null 2>&1 || true
+[ -x /etc/init.d/matinee ] && rc-service matinee stop >/dev/null 2>&1 || true
+IP=$(ip -4 -o addr show scope global | awk '{print $4}' | cut -d/ -f1 | head -n1)
+IP=${IP:-127.0.0.1}
+if netstat -ltn 2>/dev/null | awk '{print $4}' | grep -q ":$PORT\$"; then
+  echo "Port $PORT is already in use by something else. Re-run with MATINEE_PORT=<free port>."; exit 1
+fi
+
+echo "==> Swapping in the new version"
+SWAP=1
+rm -rf "$APP_DIR.failed" "$APP_DIR.old"   # only now: until here the previous upgrade's copy was still there
+if [ "$HAD_APP" = 1 ]; then mv "$APP_DIR" "$APP_DIR.old"; fi
+mv "$APP_DIR.new" "$APP_DIR"
 
 # ---------------------------------------------------------------- config
 add_setting() {  # add_setting FILE KEY VALUE COMMENT — only if KEY isn't there yet
@@ -93,12 +231,18 @@ mcp_level() {  # mcp_level READONLY WRITES -> none, log or all; mirrors mcp_http
 
 if [ ! -f "$CONF" ]; then
   echo "==> Writing $CONF"
-  cat > "$CONF" <<EOF
+  # It will hold API keys, so root only from its first byte (the subshell keeps the umask to this one file).
+  (
+    umask 077
+    cat > "$CONF" <<EOF
 # Matinee (movie collection) configuration — after editing: rc-service matinee restart
 PORT=$PORT
 DATA_DIR=$DATA_DIR
 EOF
+  )
 fi
+# an existing file from an older run may be wider: close it before the generated read key is appended
+chmod 600 "$CONF"; chown root:root "$CONF"
 add_setting "$CONF" PORT "$PORT" "Port gunicorn listens on (each app on the host needs its own)"
 add_setting "$CONF" DATA_DIR "$DATA_DIR" "Where matinee.db and images/ live"
 add_setting "$CONF" CF_TEAM_DOMAIN "" "Cloudflare Access team domain, e.g. yourteam.cloudflareaccess.com"
@@ -134,8 +278,7 @@ add_setting "$CONF" MATINEE_URL "" "Where matinee-mcp reaches the Matinee app; e
 add_setting "$CONF" MATINEE_DB_PATH "" "Path of matinee.db for matinee-mcp's direct read mode; empty = REST only (the remote service always uses REST)"
 add_setting "$CONF" MCP_AUTOMATION_TIERS "read,power-off" "Tiers an Access service token may use at the MCP endpoint, comma separated; never costly"
 add_setting "$CONF" MCP_COMMIT_FILE "" "File naming the running commit (line 1 commit, line 2 repo); empty = COMMIT beside the matinee-mcp venv"
-# Holds API keys, so root only: OpenRC and the cron jobs run as root; services get what they need from the environment.
-chmod 600 "$CONF"; chown root:root "$CONF"
+# Root only (see above): OpenRC and the cron jobs run as root; services get what they need from the environment.
 
 # health checks: add Matinee and Matinee MCP to HEALTH_CHECKS if the ops config exists
 add_health_check() {  # add_health_check "Name|url|service" service  (sets HC_ADDED / HC_MANUAL)
@@ -184,7 +327,7 @@ command="/usr/bin/gunicorn"
 command_args="--preload --workers 2 --threads 4 --timeout 60 --bind 0.0.0.0:${PORT} --chdir /opt/matinee --access-logfile /var/log/matinee.log --error-logfile /var/log/matinee.log app:app"
 command_user="matinee"
 depend() { need net; after firewall; }
-start_pre() { checkpath -f -o matinee /var/log/matinee.log; }
+start_pre() { checkpath -f -m 0640 -o matinee:matinee /var/log/matinee.log; }
 EOF
 chmod +x /etc/init.d/matinee
 
@@ -232,24 +375,9 @@ start_pre() { checkpath -f -m 0640 -o matinee-mcp:matinee-mcp /var/log/matinee-m
 EOF
 chmod +x /etc/init.d/matinee-mcp
 
-# The MCP stack is not packaged for Alpine (no py3-mcp), so this one service gets a pip venv.
-# A pip or network failure only skips matinee-mcp; the main app still installs and starts.
-echo "==> Installing MCP HTTP service (pip venv)"
-# shellcheck disable=SC2015  # deliberate: any failure in the chain (including MCP_OK=1) falls through to the warning branch
-apk add --no-cache py3-pip >/dev/null 2>&1 && python3 -m venv "$MCP_VENV" && "$MCP_VENV/bin/pip" install --no-cache-dir -q -r "$APP_DIR/requirements-mcp.txt" && MCP_OK=1 || { MCP_OK=0; echo "    WARNING: could not set up the MCP venv (needs PyPI access); matinee-mcp will not start. Re-run this installer to retry."; }
-
-# ---------------------------------------------------------------- backups & maintenance
-echo "==> Installing nightly backup and refresh jobs and the weekly restore test"
-mkdir -p /etc/periodic/daily /etc/periodic/weekly
-install -m 755 "$APP_DIR/ops/matinee-backup" /etc/periodic/daily/matinee-backup
-install -m 755 "$APP_DIR/ops/matinee-refresh" /etc/periodic/daily/matinee-refresh
-install -m 755 "$APP_DIR/ops/matinee-restore-test" /etc/periodic/weekly/matinee-restore-test
-rc-update add crond default >/dev/null 2>&1 || true
-rc-service crond start >/dev/null 2>&1 || true
-
 # ---------------------------------------------------------------- log rotation
-# Optional: logrotate is not a required package, so this only acts when it is already installed. It also steps aside
-# when any existing logrotate config (a hand-made rule, or the file an earlier run wrote) already names these logs.
+# logrotate is installed with the other packages, so rotation is always set up. It steps aside only when an existing
+# logrotate config (a hand-made rule, or the file an earlier run wrote) already names these logs.
 # LOGROTATE_CONF and LOGROTATE_D exist so the tests can point it at a temp folder.
 install_logrotate() {
   command -v logrotate >/dev/null 2>&1 || return 0
@@ -263,20 +391,42 @@ install_logrotate() {
     > "$lr_dir/matinee"
   echo "    Added $lr_dir/matinee (weekly, keep 8)"
 }
-echo "==> Checking log rotation"
-install_logrotate
 
 echo "==> Starting service"
+# 640 and owned by the service user from the first byte (the init script keeps it so at every start)
+touch /var/log/matinee.log
+chown "$SVC_USER:$SVC_USER" /var/log/matinee.log
+chmod 640 /var/log/matinee.log
 rc-update add matinee default >/dev/null 2>&1 || true
 rc-service matinee start
 i=0
 until wget -qO- "http://127.0.0.1:$PORT/healthz" >/dev/null 2>&1; do
-  i=$((i+1)); [ $i -gt 25 ] && { echo "Service didn't come up; see /var/log/matinee.log"; tail -n 20 /var/log/matinee.log; exit 1; }
+  i=$((i+1)); [ $i -gt 25 ] && { echo "Service didn't come up (the previous version is put back); see /var/log/matinee.log"; tail -n 20 /var/log/matinee.log; exit 1; }
   sleep 1
 done
+# The new version answers: the upgrade is done and a later failure no longer rolls it back.
+GUARD=0
 
-echo "==> Taking a first backup"
-/etc/periodic/daily/matinee-backup || echo "    (backup reported a problem; see /var/log/ops.log)"
+# ---------------------------------------------------------------- backups & maintenance
+echo "==> Installing nightly backup and refresh jobs and the weekly restore test"
+mkdir -p /etc/periodic/daily /etc/periodic/weekly
+install -m 755 "$APP_DIR/ops/matinee-backup" /etc/periodic/daily/matinee-backup
+install -m 755 "$APP_DIR/ops/matinee-refresh" /etc/periodic/daily/matinee-refresh
+install -m 755 "$APP_DIR/ops/matinee-restore-test" /etc/periodic/weekly/matinee-restore-test
+rc-update add crond default >/dev/null 2>&1 || true
+rc-service crond start >/dev/null 2>&1 || true
+
+echo "==> Checking log rotation"
+install_logrotate
+
+# The nightly job's plain copy is only for a fresh install: after an upgrade it would overwrite tonight's copy with
+# the migrated database, and the pre-upgrade copy above is the one to go back to.
+if [ "$UPGRADE" = 1 ]; then
+  echo "==> Pre-upgrade backup taken before the swap: $(latest_pre_upgrade)"
+else
+  echo "==> Taking a first backup"
+  /etc/periodic/daily/matinee-backup || echo "    (backup reported a problem; see /var/log/ops.log)"
+fi
 
 mcp_key_name() {  # the key matinee-mcp needs at its write level (same rule as its init script)
   case "$(mcp_level "$(conf_val MATINEE_MCP_READONLY)" "$(conf_val MATINEE_MCP_WRITES)")" in
@@ -330,5 +480,18 @@ case "$MCP_STATE" in
 esac
 [ -n "$(conf_val MCP_ALLOWED_EMAILS)" ] || echo "  - MCP_ALLOWED_EMAILS is empty: anyone the Access policy admits can read the collection. Set it in $CONF, then rc-service matinee-mcp restart"
 echo "  - MCP tunnel route: mcp.<your-domain>, path ^/matinee/ -> http://$(conf_val MCP_HTTP_BIND):$(conf_val MCP_HTTP_PORT) (leave the Host header override unset)"
+if [ "$HAD_APP" = 1 ] && [ -d "$APP_DIR.old" ]; then
+  echo
+  echo "The previous version is kept in $APP_DIR.old until the next upgrade. To go back to it:"
+  echo "  rc-service matinee-mcp stop; rc-service matinee stop"
+  echo "  mv $APP_DIR $APP_DIR.swap && mv $APP_DIR.old $APP_DIR && mv $APP_DIR.swap $APP_DIR.old"
+  if [ "$UPGRADE" = 1 ] && [ -n "$(latest_pre_upgrade)" ]; then
+    echo "  # only if the data looks wrong too, put the pre-upgrade copy back first (docs/restore.md, 'Restore a pre-upgrade copy'):"
+    echo "  gunzip -c $(latest_pre_upgrade) > /tmp/restore.db && sqlite3 /tmp/restore.db 'PRAGMA integrity_check;'   # must print: ok"
+    echo "  mkdir -p $DB_DIR/restore-aside && mv $DB_DIR/matinee.db* $DB_DIR/restore-aside/"
+    echo "  cp /tmp/restore.db $DB_DIR/matinee.db && chown $SVC_USER:$SVC_USER $DB_DIR/matinee.db && rm /tmp/restore.db"
+  fi
+  echo "  rc-service matinee restart; rc-service matinee-mcp restart"
+fi
 echo "Config: $CONF   Data: $DATA_DIR   Logs: /var/log/matinee.log, /var/log/matinee-mcp.log, /var/log/ops.log"
 exit 0
