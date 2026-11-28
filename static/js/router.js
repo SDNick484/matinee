@@ -121,6 +121,14 @@ import { renderSettings } from "./settings.js";
     if (activeBtn) activeBtn.setAttribute("aria-current", "page");
     bindScrollRow(nav, activeBtn);
 
+    updateFooterLinks();
+  }
+
+  // The links that carry the current hash: the footer's, and the header's Sign In (a visitor). Searching rewrites the
+  // hash without a hashchange, so the grid asks for them to be refreshed.
+  function updateFooterLinks() {
+    const signIn = document.getElementById("btn-header-signin");
+    if (signIn) signIn.href = `/admin${location.hash || ""}`;
     const footerLinks = document.getElementById("footer-links");
     if (footerLinks) {
       if (isAdmin) {
@@ -163,6 +171,8 @@ import { renderSettings } from "./settings.js";
     }
     update();
   }
+
+  window.addEventListener("matinee:hashreplaced", updateFooterLinks);
 
   function navigate(hash) {
     location.hash = hash;
