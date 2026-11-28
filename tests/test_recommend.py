@@ -4,7 +4,7 @@ import sqlite3
 import pytest
 
 import recommend
-from conftest import seed_title
+from conftest import PACIFIC_EVENING_UTC, seed_title
 from conftest import seed_people
 
 
@@ -585,6 +585,14 @@ def test_forgotten_gems_uses_audience_last_watch(con):
     assert kids["results"][0]["last_watched"] == _ago(30)   # the household field is unchanged
     assert _aud(con, "forgotten_gems", "adults")["results"] == []
     assert _aud(con, "forgotten_gems", "Paige")["results"][0]["title"] == "Toy Story"
+
+
+def test_forgotten_gems_months_count_from_the_pacific_day(con, utc_host):
+    # On 27 November in Los Angeles, 3 Nov 2025 is 389 days back (12 months); the UTC host's date is the 28th (13).
+    utc_host(PACIFIC_EVENING_UTC)
+    seed_title(con, 862, watched=("2025-11-03",), rating=9.0)  # Toy Story; the 365-day filter reads the real clock
+    out = recommend.recommend(con, recommend.parse_params({"mode": "forgotten_gems"}))
+    assert [r["reason"] for r in out["results"]] == ["Rated 9.0 ★ · Not watched in 12 months"]
 
 
 def test_forgotten_gems_audience_never_and_dateless(con):
