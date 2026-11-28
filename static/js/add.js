@@ -8,6 +8,7 @@ import { openCopyModal } from "./forms.js";
   let scannerStream = null;
   let scannerAnimId = null;
   let isScannerPaused = false;
+  let scannerSession = 0;   // bumped by every start and stop: a late camera stream from an older start is discarded
 
   function pauseBarcodeScanner() {
     isScannerPaused = true;
@@ -47,6 +48,7 @@ import { openCopyModal } from "./forms.js";
   }
 
   function stopBarcodeScanner() {
+    scannerSession++;
     if (scannerAnimId) {
       cancelAnimationFrame(scannerAnimId);
       scannerAnimId = null;
@@ -62,11 +64,17 @@ import { openCopyModal } from "./forms.js";
     if (!("BarcodeDetector" in window)) {
       return { supported: false };
     }
+    stopBarcodeScanner();                         // a second tap on Scan replaces the first start, not adds to it
+    const session = scannerSession;
     try {
       const detector = new window.BarcodeDetector({ formats: ["upc_a", "upc_e", "ean_13"] });
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: "environment" },
       });
+      if (session !== scannerSession) {           // stopped or restarted while the permission prompt was open
+        stream.getTracks().forEach((track) => track.stop());
+        return { supported: true };
+      }
       scannerStream = stream;
       videoEl.srcObject = stream;
       await videoEl.play();
@@ -75,6 +83,7 @@ import { openCopyModal } from "./forms.js";
       let lastTime = 0;
 
       async function scanLoop() {
+        if (session !== scannerSession) return;   // the stream this loop reads has been stopped
         if (!isScannerPaused && videoEl.readyState >= 2) {
           try {
             const barcodes = await detector.detect(videoEl);
@@ -486,6 +495,7 @@ import { openCopyModal } from "./forms.js";
       document.getElementById("btn-batch-import-all")?.addEventListener("click", async () => {
         const chks = itemsContainer.querySelectorAll(".batch-chk:checked");
         let addedCount = 0;
+        let failedCount = 0;
         const importedUpcs = new Set();
         const btn = document.getElementById("btn-batch-import-all");
         if (btn) btn.disabled = true;
@@ -497,16 +507,18 @@ import { openCopyModal } from "./forms.js";
             try {
               await api("/admin/api/copies", {
                 method: "POST",
-                body: JSON.stringify({
+                body: {
                   tmdb_id: item.data.results[0].tmdb_id,
                   kind: "physical",
                   format: item.data.format_hint,
                   service: null,
-                }),
+                },
               });
               addedCount++;
               importedUpcs.add(item.upc);
-            } catch (err) {}
+            } catch (err) {
+              failedCount++;                        // stays in the queue, and the toast says so
+            }
           }
         }
 
@@ -514,11 +526,10 @@ import { openCopyModal } from "./forms.js";
         setBatchQueue(remaining);
         updateBatchUI();
         modalRoot.innerHTML = "";
-        if (addedCount > 0) {
-          toast(`Successfully added ${addedCount} physical disc copies!`);
-        }
-        if (remaining.length > 0) {
-          toast(`${remaining.length} barcode(s) remaining in queue`);
+        if (failedCount > 0) {
+          toast(`Added ${addedCount}, ${failedCount} failed`);
+        } else if (addedCount > 0) {
+          toast(`Added ${addedCount} physical disc copies`);
         }
         navigate("#/");
       });
@@ -569,8 +580,11 @@ import { openCopyModal } from "./forms.js";
     }
   }
 
+  let tmdbSearchToken = 0;   // a slower answer for an older query must not replace the newer one
+
   async function executeTmdbSearch(query) {
     const container = document.getElementById("tmdb-results-container");
+    const myToken = ++tmdbSearchToken;
     if (!container) return;
 
     if (!query || query.length < 2) {
@@ -582,6 +596,7 @@ import { openCopyModal } from "./forms.js";
 
     try {
       const data = await api(`/admin/api/tmdb/search?q=${encodeURIComponent(query)}`);
+      if (myToken !== tmdbSearchToken) return;
       const results = data.results || [];
       state.add.results = results;
 
@@ -630,6 +645,7 @@ import { openCopyModal } from "./forms.js";
         });
       });
     } catch (err) {
+      if (myToken !== tmdbSearchToken) return;
       let msg = "TMDB lookup failed.";
       if (err.reason === "not_configured" || err.message?.includes("not configured")) {
         msg = "TMDB is not configured.";
