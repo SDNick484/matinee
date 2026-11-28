@@ -24,7 +24,7 @@ Environment (see /etc/conf.d/matinee and .env.example):
   MATINEE_READ_KEY,
   ANTHROPIC_SEARCH_KEY, ANTHROPIC_SEARCH_MODEL, ASK_DAILY_LIMIT, WISHLIST_URL, WISHLIST_MOVIE_URL
 """
-import datetime as dt, gzip, hashlib, hmac, ipaddress, json, os, re, sys, threading, time, types
+import datetime as dt, gzip, hashlib, hmac, ipaddress, json, os, re, secrets, sys, threading, time, types
 import urllib.error, urllib.parse, urllib.request
 import sqlite3
 from functools import wraps
@@ -269,8 +269,8 @@ def editor_required(fn):
 
 @app.after_request
 def security_headers(resp):
-    """Baseline headers on every response. No script-src/style-src policy: static/js/ renders inline
-    onclick/onerror handlers and style="" attributes, which a strict CSP would block."""
+    """Baseline headers on every response. JSON and static answers get only frame-ancestors; the HTML pages
+    set the full policy themselves (page_csp, in render_index), and setdefault leaves it alone."""
     resp.headers.setdefault("X-Content-Type-Options", "nosniff")
     resp.headers.setdefault("Referrer-Policy", "same-origin")
     resp.headers.setdefault("Content-Security-Policy", "frame-ancestors 'self'")
@@ -345,7 +345,18 @@ def asset_versions():
         return {}
 
 
-def _module_tags(versions):
+def page_csp(nonce=None):
+    """The Content-Security-Policy for the HTML pages: scripts run only from this origin, plus the inline import map
+    when it carries this response's nonce. Styles may be inline (style="" is used throughout the SPA). Images come
+    from this origin, TMDB (Add search thumbnails), data: (the select arrow in style.css) and blob: (the cover
+    preview). Nothing else: no eval, no plugins, no <base>, forms post only here."""
+    script = "'self'" + (f" 'nonce-{nonce}'" if nonce else "")
+    return (f"default-src 'self'; script-src {script}; img-src 'self' https://image.tmdb.org data: blob:; "
+            "style-src 'self' 'unsafe-inline'; connect-src 'self'; object-src 'none'; base-uri 'none'; "
+            "form-action 'self'; frame-ancestors 'self'")
+
+
+def _module_tags(versions, nonce=""):
     """The import map, modulepreload links and versioned entry script that replace index.html's
     <script type="module" src="/static/js/main.js">.
 
@@ -355,7 +366,7 @@ def _module_tags(versions):
     module script, or the browser ignores it."""
     url = {k: f"/static/{k}?v={v}" for k, v in sorted(versions.items()) if k.startswith("js/")}
     deps = {f"/static/{k}": u for k, u in url.items() if k != "js/main.js"}
-    tags = ['<script type="importmap">' + json.dumps({"imports": deps}) + "</script>"]
+    tags = [f'<script type="importmap" nonce="{nonce}">' + json.dumps({"imports": deps}) + "</script>"]
     tags += [f'<link rel="modulepreload" href="{u}">' for u in deps.values()]
     tags.append(f'<script type="module" src="{url.get("js/main.js", "/static/js/main.js")}"></script>')
     return "\n  ".join(tags)
@@ -363,20 +374,24 @@ def _module_tags(versions):
 
 def render_index():
     versions = asset_versions()
+    nonce = secrets.token_urlsafe(16)   # fresh per response: the page is no-store, so a nonce is never replayed
     try:
         html = (APP_DIR / "static" / "index.html").read_text(encoding="utf-8")
         html = re.sub(r'href="/static/style\.css(?:\?v=[^"]*)?"',
                       f'href="/static/style.css?v={versions.get("style.css", "1")}"', html)
         html = re.sub(r'<script type="module" src="/static/js/main\.js(?:\?v=[^"]*)?"></script>',
-                      lambda _m: _module_tags(versions), html)
+                      lambda _m: _module_tags(versions, nonce), html)
         resp = make_response(html)
         resp.headers["Content-Type"] = "text/html; charset=utf-8"
         resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
         resp.headers["Pragma"] = "no-cache"
         resp.headers["Expires"] = "0"
+        resp.headers["Content-Security-Policy"] = page_csp(nonce)
         return resp
     except Exception:
-        return send_from_directory(APP_DIR / "static", "index.html", max_age=0)
+        resp = send_from_directory(APP_DIR / "static", "index.html", max_age=0)   # no import map here, so no nonce
+        resp.headers["Content-Security-Policy"] = page_csp()
+        return resp
 
 
 @app.get("/")
