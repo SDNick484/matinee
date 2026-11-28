@@ -224,3 +224,19 @@ def test_backup_target_gets_the_labelled_copy(env, tmp_path):
     assert (target / "db" / DAY / name).exists()
     assert mode(target / "db" / DAY) == 0o700
     assert not list((target / "db" / DAY).glob(".*"))
+
+
+def test_a_config_left_under_an_old_prefixed_name_is_reported(env):
+    (env["tmp"] / "legacy-ops").write_text("KEEP_DAYS=30\n")
+    r = run(env)
+    assert r.returncode == 0
+    assert "legacy-ops is not read any more" in r.stderr
+    assert "WARNING" in env["log"].read_text()
+
+
+def test_no_warning_when_the_config_exists(env):
+    (env["tmp"] / "legacy-ops").write_text("KEEP_DAYS=30\n")
+    conf = env["tmp"] / "ops"
+    conf.write_text("KEEP_DAYS=7\n")
+    r = run(env, OPS_CONF=str(conf))
+    assert r.returncode == 0 and "WARNING" not in r.stderr

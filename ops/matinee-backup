@@ -35,6 +35,16 @@ flog() {
   return 0
 }
 
+# a config kept under an older, prefixed name is no longer read: say so rather than use the defaults in silence
+if [ ! -f "$OPS_CONF" ]; then
+  for old in "$(dirname "$OPS_CONF")"/*-ops; do
+    [ -f "$old" ] || continue
+    log "WARNING: $old is not read any more; move its settings to $OPS_CONF"
+    echo "matinee-backup: WARNING: $old is not read any more; move its settings to $OPS_CONF" >&2
+    break
+  done
+fi
+
 # DATA_DIR from the service's config; the file holds secrets, so read the one key rather than sourcing it
 if [ -n "${MATINEE_DATA:-}" ]; then
   DATA=$MATINEE_DATA
