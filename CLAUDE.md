@@ -64,6 +64,7 @@ Run and report all of these before opening the PR (CI runs the same):
 ```sh
 python -m pytest -q                       # report the skip count and reasons
 for f in static/js/*.js; do node --check "$f"; done
+node --check static/sw.js                 # the service worker: a classic script, outside static/js/
 ruff check
 shellcheck -s sh installer/setup-head.sh installer/build.sh ops/matinee-backup ops/matinee-refresh ops/matinee-restore-test
 sh installer/build.sh && sh -n dist/setup-matinee.sh

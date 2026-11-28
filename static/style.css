@@ -1845,6 +1845,17 @@ main#view {
   width: auto;
 }
 
+/* Offline line (static/js/offline.js): the collection on screen is this phone's saved copy */
+.offline-line {
+  padding: var(--s2) var(--s4);
+  border-bottom: 1px solid var(--line);
+  background: var(--card);
+  color: var(--ink-2);
+  font-size: var(--fs-xs);
+  text-align: center;
+}
+.offline-line[hidden] { display: none; }
+
 /* Site Footer */
 .site-footer {
   margin-top: auto;
