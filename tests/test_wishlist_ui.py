@@ -267,3 +267,146 @@ def test_the_public_pages_know_nothing_about_wants(server, browser, dark_knight)
     assert page.locator("#want-block").count() == 0
     assert page.locator("#btn-header-wanted").count() == 0
     assert errors == []
+
+
+# ============================================================================== target price (schema v15)
+def _open_want_form(page, fmt):
+    page.click("#btn-want")
+    if fmt:
+        page.click(f"#want-format-grid .select-chip[data-fmt='{fmt}']")
+
+
+def test_the_target_field_follows_the_format_and_is_saved(server, browser, dark_knight):
+    page, errors = _page(browser)
+    page.goto(f"{server}/admin#/t/{dark_knight}")
+    _open_want_form(page, None)                                            # Any format: nothing to watch
+    assert not page.locator("#want-target").is_visible()
+    page.click("#want-format-grid .select-chip[data-fmt='4K UHD']")
+    assert page.locator("#want-target").is_visible()
+    assert "Target price, with shipping" in page.locator("label[for='want-target']").inner_text()
+    assert "Leave blank to keep it on the list without watching the price." in page.locator(".want-target-group").inner_text()
+    assert page.locator("#want-target").bounding_box()["height"] >= 44
+    page.fill("#want-target", "12.50")
+    page.click("#want-format-grid .select-chip[data-fmt='Digital HD']")   # digital: hidden and cleared
+    assert not page.locator("#want-target").is_visible()
+    page.click("#want-format-grid .select-chip[data-fmt='Blu-ray']")
+    assert page.locator("#want-target").input_value() == ""
+    page.fill("#want-target", "12.50")
+    _no_sideways_scroll(page)
+    page.click("#btn-want-save")
+    page.wait_for_selector("#want-block .price-box")
+    box = page.locator("#want-block .price-box")
+    assert box.get_attribute("data-status") == "target" and box.inner_text().strip() == "Target $12.50"
+    assert _rows("SELECT wanted_format, target_cents FROM wants") == [("Blu-ray", 1250)]
+    _no_sideways_scroll(page)
+
+    page.click("#btn-want")                                                # the field holds what is stored
+    assert page.locator("#want-target").input_value() == "12.50"
+    page.fill("#want-target", "")                                          # blank: keep it on the list, stop watching
+    page.click("#btn-want-save")
+    page.wait_for_selector("#want-block .price-box[data-status='none']")
+    assert _rows("SELECT target_cents FROM wants") == [(None,)]
+    assert errors == []
+
+
+def test_the_price_box_without_a_target_opens_the_form(server, browser, dark_knight):
+    page, errors = _page(browser)
+    page.goto(f"{server}/admin#/t/{dark_knight}")
+    _open_want_form(page, "4K UHD")
+    page.click("#btn-want-save")
+    page.wait_for_selector("#want-block .price-box")
+    box = page.locator("#want-block .price-box")
+    assert box.get_attribute("data-status") == "none" and "No target price set" in box.inner_text()
+    set_one = box.locator(".price-box-set")
+    assert set_one.inner_text().startswith("Set one") and set_one.bounding_box()["height"] >= 44
+    set_one.click()
+    page.wait_for_selector("#want-target")
+    assert page.locator("#want-target").is_visible()
+    page.fill("#want-target", "$24.99")
+    page.click("#btn-want-save")
+    page.wait_for_function("document.querySelector('#want-block .price-box').dataset.status === 'target'")
+    assert page.locator("#want-block .price-box").inner_text().strip() == "Target $24.99"
+    assert _rows("SELECT target_cents FROM wants") == [(2499,)]
+    assert errors == []
+
+
+def test_no_price_box_for_any_or_a_digital_format(server, browser, dark_knight):
+    page, errors = _page(browser)
+    page.goto(f"{server}/admin#/t/{dark_knight}")
+    _open_want_form(page, None)
+    page.click("#btn-want-save")
+    page.wait_for_selector("#want-block.has-want")
+    assert page.locator(".price-box").count() == 0
+    _open_want_form(page, "Digital 4K")
+    page.click("#btn-want-save")
+    page.wait_for_function("document.querySelector('.want-label')?.innerText === 'Wanted: Digital 4K'")
+    assert page.locator(".price-box").count() == 0
+    assert errors == []
+
+
+def test_a_refused_price_keeps_the_form_and_what_was_typed(server, browser, dark_knight):
+    page, errors = _page(browser)
+    page.goto(f"{server}/admin#/t/{dark_knight}")
+    _open_want_form(page, "4K UHD")
+    page.fill("#want-target", "1000")
+    page.click("#btn-want-save")
+    page.wait_for_selector("#toast.show")
+    assert "999.99" in page.locator("#toast").inner_text()
+    assert page.locator("#want-target").input_value() == "1000" and page.locator("#btn-want-save").is_enabled()
+    assert _rows("SELECT count(*) FROM wants") == [(0,)]
+    assert errors == []
+
+
+def test_the_wanted_view_shows_the_price_box_per_row(server, browser, dark_knight):
+    import app as core
+    con = core.connect()
+    heat = seed_title(con, 129, copies=())
+    con.execute("INSERT INTO wants (title_id, wanted_format, target_cents, created_at) VALUES (?, '4K UHD', 1500, "
+                "'2026-11-01 10:00:00')", (heat,))
+    con.execute("INSERT INTO wants (title_id, wanted_format, created_at) VALUES (?, '4K UHD', '2026-11-12 10:00:00')",
+                (dark_knight,))
+    other = seed_title(con, 346648, copies=())
+    con.execute("INSERT INTO wants (title_id, wanted_format, created_at) VALUES (?, NULL, '2026-11-20 10:00:00')", (other,))
+    con.commit()
+    con.close()
+    page, errors = _page(browser)
+    page.goto(f"{server}/admin#/wanted")
+    page.wait_for_selector("#wanted-list .wanted-row")
+    rows = page.locator(".wanted-row")
+    assert rows.count() == 3
+    assert rows.nth(0).locator(".price-box").count() == 0                   # Any format: no box
+    none_box, target_box = rows.nth(1).locator(".price-box"), rows.nth(2).locator(".price-box")
+    assert none_box.get_attribute("data-status") == "none" and "No target price set" in none_box.inner_text()
+    assert target_box.get_attribute("data-status") == "target" and target_box.inner_text().strip() == "Target $15"
+    for width in (360, 412):
+        page.set_viewport_size({"width": width, "height": 915})
+        _no_sideways_scroll(page)
+
+    rows.nth(1).locator(".price-box-set").click()                          # opens the form, does not open the title
+    page.wait_for_selector("#want-target")
+    assert page.url.endswith("#/wanted")
+    page.fill("#want-target", "19.99")
+    page.click("#btn-want-save")
+    page.wait_for_function("document.querySelectorAll('.wanted-row')[1]?.querySelector('.price-box')?.dataset.status === 'target'")
+    assert page.url.endswith("#/wanted")
+    assert _rows("SELECT target_cents FROM wants WHERE title_id=?", dark_knight) == [(1999,)]
+
+    rows.nth(2).locator(".result-title").click()                           # the title still opens the title page
+    page.wait_for_selector(".detail-view")
+    assert page.locator(".hero-title").inner_text() == "Spirited Away"
+    assert page.locator("#want-block .price-box").inner_text().strip() == "Target $15"
+    assert errors == []
+
+
+def test_the_public_pages_carry_no_target_price(server, browser, dark_knight):
+    import app as core
+    con = core.connect()
+    con.execute("INSERT INTO wants (title_id, wanted_format, target_cents) VALUES (?, '4K UHD', 1348)", (dark_knight,))
+    con.commit()
+    con.close()
+    page, errors = _page(browser)
+    page.goto(f"{server}/#/t/{dark_knight}")
+    page.wait_for_selector(".detail-view")
+    assert page.locator(".price-box").count() == 0
+    assert "13.48" not in page.content() and "target" not in page.locator(".detail-view").inner_text().lower()
+    assert errors == []

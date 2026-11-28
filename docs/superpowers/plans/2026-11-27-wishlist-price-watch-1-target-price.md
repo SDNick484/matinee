@@ -14,7 +14,7 @@ assistant. No eBay call, no `want_offers` table, no `offer` field, no settings, 
   number with such a format is a 400 (decisions 14, 19, 22, 23). Physical to physical keeps it. The "discard the
   stored listing" half of decision 23 has nothing to act on until PR 2.
 - The API speaks dollars (a number, or a numeric string with at most two decimals); the database holds cents.
-- The price box is one function in `wishlist.js` with a `data-state` attribute, so PRs 2 and 3 add states
+- The price box is one function in `wishlist.js` with a `data-status` attribute, so PRs 2 and 3 add states
   (found, at-target, not-yet-checked) without reshaping the markup. This PR draws two: no target, and `Target $12`.
 - The Wanted row becomes a div with a stretched title link (the card stays one tap target), so PR 2 can put a real
   "View on eBay" link inside it; nested anchors would be split apart by the HTML parser.
