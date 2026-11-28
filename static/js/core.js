@@ -221,7 +221,44 @@
     return `${admin}/export.csv?${q.toString()}`;
   }
 
+  // ================================================================= Writes that redraw, buttons that wait
+  // `seq` is state.routeSeq when the view was drawn or the action began. A write that ends by drawing its page again
+  // calls this instead of the draw itself: once the user has moved on, the late answer must not replace what they see.
+  function redrawIfCurrent(seq, redraw) {
+    if (seq === state.routeSeq) return redraw();
+  }
+
+  // Run `write`, then `redraw(result)` only when the route is still the one it started on.
+  async function writeThenRedraw(write, redraw) {
+    const seq = state.routeSeq;
+    const result = await write();
+    await redrawIfCurrent(seq, () => redraw(result));
+    return result;
+  }
+
+  // Disable `buttons` for the life of `fn()` (put the redraw inside it) so a second tap sends nothing: a second tap
+  // on a button that is already busy is ignored. `done` runs when the request ends, to restore any other state.
+  async function whileBusy(buttons, fn, done) {
+    const list = [].concat(buttons).filter(Boolean);
+    if (list.some((b) => b.dataset.busy)) return undefined;
+    list.forEach((b) => {
+      b.dataset.busy = "1";
+      b.disabled = true;
+      b.setAttribute("aria-busy", "true");
+    });
+    try {
+      return await fn();
+    } finally {
+      list.forEach((b) => {
+        delete b.dataset.busy;
+        b.removeAttribute("aria-busy");
+        b.disabled = false;
+      });
+      if (done) done();
+    }
+  }
+
 export {
   api, centsToDollars, certSlotHtml, dollarsToCents, esc, exportHref, formatRuntime, FORMATS, getChipClass, isAdmin, SERVICES, state,
-  TMDB_IMG_THUMB, toast
+  redrawIfCurrent, TMDB_IMG_THUMB, toast, whileBusy, writeThenRedraw
 };

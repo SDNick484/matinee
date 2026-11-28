@@ -1,5 +1,8 @@
 // Matinee — title view: copies, ratings, watches, neighbours (7.3).
-import { api, centsToDollars, certSlotHtml, esc, formatRuntime, getChipClass, isAdmin, state, toast } from "./core.js";
+import {
+  api, centsToDollars, certSlotHtml, esc, formatRuntime, getChipClass, isAdmin, redrawIfCurrent, state, toast, whileBusy,
+  writeThenRedraw
+} from "./core.js";
 import {
   BUCKET_LABELS, formatCopyLabel, formatLastWatched, formatReadableDate, formatRelativeDate, getChipIcon,
   icon
@@ -125,6 +128,7 @@ import { playBarHtml, wirePlay } from "./play.js";
     // "Who watched" (editors only, and only once a person exists): otherwise this view is exactly as before.
     if (isAdmin && state.peopleReady) await state.peopleReady;   // started once by router.js
     if (seq !== state.routeSeq) return;
+    document.title = `${title.title}${title.year ? ` (${title.year})` : ""} · Matinee`;   // router.js resets it elsewhere
     const people = isAdmin ? activePeople() : [];
     const showWho = people.length > 0;
     const whoLabel = "Who watched";
@@ -166,22 +170,14 @@ import { playBarHtml, wirePlay } from "./play.js";
                 </div>
               `;
 
-    // Ensure we have active titles list for adjacent navigation
-    if (!state.grid.titles || !state.grid.titles.length) {
-      try {
-        const titlesData = await api(`${apiPrefix}/titles?sort=title`);
-        state.grid.titles = titlesData.titles || [];
-      } catch (e) {
-        state.grid.titles = [];
-      }
-    }
-    if (seq !== state.routeSeq) return;
-
+    // Prev/Next come from the whole collection, which a deep link has not loaded yet: draw the page now with the arrows
+    // off and fill them in when the list arrives (below, after the page is drawn).
     const titlesList = state.grid.titles || [];
-    const currentId = Number(titleId);
-    const currentIndex = titlesList.findIndex((t) => t.id === currentId);
-    const prevMovie = currentIndex > 0 ? titlesList[currentIndex - 1] : null;
-    const nextMovie = currentIndex >= 0 && currentIndex < titlesList.length - 1 ? titlesList[currentIndex + 1] : null;
+    const adjacentOf = (list) => {
+      const i = list.findIndex((t) => t.id === Number(titleId));
+      return [i > 0 ? list[i - 1] : null, i >= 0 && i < list.length - 1 ? list[i + 1] : null];
+    };
+    const [prevMovie, nextMovie] = adjacentOf(titlesList);
 
     container.innerHTML = `
       <div class="detail-view">
@@ -423,6 +419,27 @@ import { playBarHtml, wirePlay } from "./play.js";
       </div>
     `;
 
+    if (!titlesList.length) {
+      const setArrow = (id, movie, label, key) => {
+        const a = document.getElementById(id);
+        if (!a) return;
+        a.href = movie ? `#/t/${movie.id}` : "#";
+        a.classList.toggle("disabled", !movie);
+        a.title = movie ? `${label}: ${movie.title} (${key})` : `No ${label.toLowerCase()} movie`;
+        if (movie) {
+          a.removeAttribute("aria-disabled");
+          a.removeAttribute("tabindex");
+        }
+      };
+      api(`${apiPrefix}/titles?sort=title`).then((data) => {
+        if (seq !== state.routeSeq) return;   // the user left this title: the grid loads its own list
+        state.grid.titles = data.titles || [];
+        const [prev, next] = adjacentOf(state.grid.titles);
+        setArrow("btn-prev-movie", prev, "Previous", "←");
+        setArrow("btn-next-movie", next, "Next", "→");
+      }).catch(() => {});   // no arrows: the page itself is fine
+    }
+
     // Hook up Back button to maintain scroll and active filters
     document.getElementById("btn-back")?.addEventListener("click", (e) => {
       e.preventDefault();
@@ -431,13 +448,13 @@ import { playBarHtml, wirePlay } from "./play.js";
 
     // List chips (everyone) and the editor's Lists sheet, which re-renders this page after a change.
     bindListChips(container);
-    bindListsButton(container, title, () => renderDetail(container, titleId));
+    bindListsButton(container, title, () => redrawIfCurrent(seq, () => renderDetail(container, titleId)));
 
     // Editor controls (7.4)
     if (isAdmin) {
       // Play on the TV: after a start, draw this page again from the answer so the new watch shows.
       wirePlay(container.querySelector(".detail-view"), () => title, undefined, (res) => {
-        if (seq === state.routeSeq && res.detail) renderDetail(container, titleId, res.detail);
+        if (res.detail) redrawIfCurrent(seq, () => renderDetail(container, titleId, res.detail));
       });
 
       const bindCertOverride = () => {
@@ -468,7 +485,7 @@ import { playBarHtml, wirePlay } from "./play.js";
         openCopyModal({ tmdb_id: title.tmdb_id, title_id: title.id, title: title.title });
       });
 
-      bindWantSection(title, () => renderDetail(container, titleId));
+      bindWantSection(title, () => redrawIfCurrent(seq, () => renderDetail(container, titleId)));
 
       container.querySelectorAll(".btn-edit-copy").forEach((btn) => {
         btn.addEventListener("click", () => {
@@ -481,28 +498,32 @@ import { playBarHtml, wirePlay } from "./play.js";
         btn.addEventListener("click", async () => {
           const copyId = btn.dataset.id;
           if (!confirm("Delete this copy?")) return;
-          try {
-            await api(`/admin/api/copies/${copyId}`, { method: "DELETE" });
-            toast("Copy deleted");
-            await renderDetail(container, titleId);
-          } catch (err) {
-            toast(err.message || "Failed to delete copy");
-          }
+          await whileBusy(btn, async () => {
+            try {
+              await writeThenRedraw(
+                () => api(`/admin/api/copies/${copyId}`, { method: "DELETE" }),
+                () => renderDetail(container, titleId)
+              );
+              toast("Copy deleted");
+            } catch (err) {
+              toast(err.message || "Failed to delete copy");
+            }
+          });
         });
       });
 
       document.getElementById("btn-refresh-tmdb")?.addEventListener("click", async () => {
-        const btn = document.getElementById("btn-refresh-tmdb");
-        if (btn) btn.disabled = true;
-        try {
-          await api(`/admin/api/titles/${titleId}/refresh`, { method: "POST" });
-          toast("Refreshed from TMDB");
-          await renderDetail(container, titleId);
-        } catch (err) {
-          toast(err.message || "Failed to refresh");
-        } finally {
-          if (btn) btn.disabled = false;
-        }
+        await whileBusy(document.getElementById("btn-refresh-tmdb"), async () => {
+          try {
+            await writeThenRedraw(
+              () => api(`/admin/api/titles/${titleId}/refresh`, { method: "POST" }),
+              () => renderDetail(container, titleId)
+            );
+            toast("Refreshed from TMDB");
+          } catch (err) {
+            toast(err.message || "Failed to refresh");
+          }
+        });
       });
 
       const coverInput = document.getElementById("input-cover");
@@ -519,32 +540,40 @@ import { playBarHtml, wirePlay } from "./play.js";
         openCoverPreviewModal(title, blob, async () => {
           const form = new FormData();
           form.append("poster", blob, blob.type === "image/jpeg" ? "cover.jpg" : file.name);
-          await api(`/admin/api/titles/${titleId}/poster`, { method: "POST", body: form });
+          await writeThenRedraw(
+            () => api(`/admin/api/titles/${titleId}/poster`, { method: "POST", body: form }),
+            () => renderDetail(container, titleId)
+          );
           toast("Cover updated");
-          await renderDetail(container, titleId);
         });
       });
 
-      document.getElementById("btn-revert-cover")?.addEventListener("click", async () => {
+      document.getElementById("btn-revert-cover")?.addEventListener("click", async (e) => {
         if (!confirm(`Remove your cover for "${title.title}" and use the TMDB poster again?`)) return;
-        try {
-          await api(`/admin/api/titles/${titleId}/poster`, { method: "DELETE" });
-          toast("Using the TMDB poster");
-          await renderDetail(container, titleId);
-        } catch (err) {
-          toast(err.message || "Failed to remove cover");
-        }
+        await whileBusy(e.currentTarget, async () => {
+          try {
+            await writeThenRedraw(
+              () => api(`/admin/api/titles/${titleId}/poster`, { method: "DELETE" }),
+              () => renderDetail(container, titleId)
+            );
+            toast("Using the TMDB poster");
+          } catch (err) {
+            toast(err.message || "Failed to remove cover");
+          }
+        });
       });
 
-      document.getElementById("btn-delete-title")?.addEventListener("click", async () => {
+      document.getElementById("btn-delete-title")?.addEventListener("click", async (e) => {
         if (!confirm(`Delete "${title.title}" and all its copies from the collection?`)) return;
-        try {
-          await api(`/admin/api/titles/${titleId}`, { method: "DELETE" });
-          toast("Title deleted");
-          navigate("#/");
-        } catch (err) {
-          toast(err.message || "Failed to delete title");
-        }
+        await whileBusy(e.currentTarget, async () => {
+          try {
+            // The user may have moved on while it deleted: then they stay where they are.
+            await writeThenRedraw(() => api(`/admin/api/titles/${titleId}`, { method: "DELETE" }), () => navigate("#/"));
+            toast("Title deleted");
+          } catch (err) {
+            toast(err.message || "Failed to delete title");
+          }
+        });
       });
 
       // Rating control listeners
@@ -619,9 +648,17 @@ import { playBarHtml, wirePlay } from "./play.js";
         ...(whoRow ? [] : container.querySelectorAll(".btn-watch-bucket")),
       ].filter(Boolean);
       // With every "Who watched" toggle off there is nobody to log, so every log button is disabled.
+      let logging = false;   // a watch is being logged: every log button stays off until the answer and the redraw
       const syncLogButtons = () => {
         const none = !!whoRow && readToggles(whoRow).length === 0;
-        logButtons().forEach((b) => { b.disabled = none; });
+        logButtons().forEach((b) => { b.disabled = none || logging; });
+      };
+      // One log request at a time: "+ Watched Today", Log Date and the bucket buttons all add a watch, and the server
+      // does not dedupe, so a second tap while one is out would log twice.
+      const logWhileBusy = async (fn) => {
+        if (logging) return;
+        logging = true;
+        await whileBusy(logButtons(), fn, () => { logging = false; syncLogButtons(); });
       };
       // Who a log records when the page sends no attendees (app.default_attendees): every active person, or only
       // the active adults for a watch over ten years old, the "10+ Years" bucket (ruling R21) or a date before
@@ -657,20 +694,19 @@ import { playBarHtml, wirePlay } from "./play.js";
         syncLogButtons();
       });
 
-      document.getElementById("btn-watched-today")?.addEventListener("click", async () => {
+      document.getElementById("btn-watched-today")?.addEventListener("click", () => logWhileBusy(async () => {
         try {
           const todayIso = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
-          await api(`${apiPrefix}/titles/${titleId}/watches`, {
+          await writeThenRedraw(() => api(`${apiPrefix}/titles/${titleId}/watches`, {
             method: "POST",
             // The live flag is what lets Home Assistant hear about it; Log Date and MCP never send it.
             body: { watched_date: todayIso, live: true, ...attendeesBody({ date: todayIso }) },
-          });
+          }), () => renderDetail(container, titleId));
           toast("Marked as watched today!");
-          await renderDetail(container, titleId);
         } catch (e) {
           toast(e.message || "Failed to mark as watched");
         }
-      });
+      }));
 
       // Picking a date more than ten years back switches the kids off (decision D2); back inside ten years, everyone.
       // The toggles are reset only when that changes, so a correction made for one recent date survives another.
@@ -682,37 +718,37 @@ import { playBarHtml, wirePlay } from "./play.js";
         setToggles(defaultIds({ date: inputWatchDate.value }));
       });
 
-      btnLogWatch?.addEventListener("click", async () => {
+      btnLogWatch?.addEventListener("click", () => {
         const val = inputWatchDate?.value?.trim();
         if (!val) {
           toast("Please choose a date");
           return;
         }
-        try {
-          await api(`${apiPrefix}/titles/${titleId}/watches`, {
-            method: "POST",
-            body: { watched_date: val, ...attendeesBody({ date: val }) },
-          });
-          toast(`Logged watch date: ${val}`);
-          await renderDetail(container, titleId);
-        } catch (e) {
-          toast(e.message || "Failed to log watch date");
-        }
+        logWhileBusy(async () => {
+          try {
+            await writeThenRedraw(() => api(`${apiPrefix}/titles/${titleId}/watches`, {
+              method: "POST",
+              body: { watched_date: val, ...attendeesBody({ date: val }) },
+            }), () => renderDetail(container, titleId));
+            toast(`Logged watch date: ${val}`);
+          } catch (e) {
+            toast(e.message || "Failed to log watch date");
+          }
+        });
       });
 
-      const logBucket = async (bucket) => {
+      const logBucket = (bucket) => logWhileBusy(async () => {
         const label = BUCKET_LABELS[bucket] || bucket;
         try {
-          await api(`${apiPrefix}/titles/${titleId}/watches`, {
+          await writeThenRedraw(() => api(`${apiPrefix}/titles/${titleId}/watches`, {
             method: "POST",
             body: { date_bucket: bucket, ...attendeesBody({ bucket }) },
-          });
+          }), () => renderDetail(container, titleId));
           toast(`Logged watch: ${label}`);
-          await renderDetail(container, titleId);
         } catch (e) {
           toast(e.message || "Failed to log watch");
         }
-      };
+      });
       // Without people a bucket logs on one tap, as before. With the Who watched row a bucket is chosen first: the
       // toggles switch to that bucket's default (kids off for "10+ Years"), the editor can change them, then Log.
       const btnLogBucket = document.getElementById("btn-log-bucket");
@@ -789,13 +825,17 @@ import { playBarHtml, wirePlay } from "./play.js";
         row.querySelector(".btn-delete-watch")?.addEventListener("click", async (e) => {
           const watchId = e.currentTarget.dataset.id;
           if (!confirm("Remove this watch date?")) return;
-          try {
-            await api(`${apiPrefix}/titles/${titleId}/watches/${watchId}`, { method: "DELETE" });
-            toast("Watch entry removed");
-            await renderDetail(container, titleId);
-          } catch (err) {
-            toast(err.message || "Failed to delete watch entry");
-          }
+          await whileBusy(e.currentTarget, async () => {
+            try {
+              await writeThenRedraw(
+                () => api(`${apiPrefix}/titles/${titleId}/watches/${watchId}`, { method: "DELETE" }),
+                () => renderDetail(container, titleId)
+              );
+              toast("Watch entry removed");
+            } catch (err) {
+              toast(err.message || "Failed to delete watch entry");
+            }
+          });
         });
       };
       // Re-render one saved watch in place (after Save or Cancel), keeping its place in the Show-all fold.
