@@ -69,6 +69,7 @@ The installer is idempotent and safe to re-run:
 - Upgrades the app files in `/opt/matinee`.
 - Preserves existing database and images in `/var/lib/matinee`.
 - Automatically preserves existing configuration in `/etc/conf.d/matinee`.
+- Serves text responses gzip-compressed to clients that accept it, and caches the hash-versioned `/static` files for a year, so a returning phone fetches nothing it already has.
 
 **An upgrade can be undone, and the service is down only for the swap.** The installer unpacks the new version beside
 the old one and refreshes the `matinee-mcp` venv first, while the old version keeps serving. It then runs
