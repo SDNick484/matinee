@@ -324,7 +324,10 @@ description="Matinee movie collection"
 : ${PORT:=8771}
 : ${DATA_DIR:=/var/lib/matinee}
 export HOME=/var/lib/matinee  # newer gunicorn keeps a small control socket under $HOME
-export PORT DATA_DIR CF_TEAM_DOMAIN CF_AUD ADMIN_EMAILS LAN_EDIT LAN_HOSTS PUBLIC_VIEW TMDB_READ_TOKEN MATINEE_API_KEY MATINEE_READ_KEY OMDB_API_KEY ANTHROPIC_SEARCH_KEY ANTHROPIC_SEARCH_MODEL ASK_DAILY_LIMIT HA_WEBHOOK_URL HA_PLAY_WEBHOOK_URL WISHLIST_URL WISHLIST_MOVIE_URL
+# /etc/conf.d/matinee is root-only and the app runs as matinee, so it cannot read the file itself: tell it the
+# settings below came from that file (settings.py refuses to start beside a config it cannot read otherwise).
+MATINEE_CONF_EXPORTED=1
+export PORT DATA_DIR CF_TEAM_DOMAIN CF_AUD ADMIN_EMAILS LAN_EDIT LAN_HOSTS PUBLIC_VIEW TMDB_READ_TOKEN MATINEE_API_KEY MATINEE_READ_KEY OMDB_API_KEY ANTHROPIC_SEARCH_KEY ANTHROPIC_SEARCH_MODEL ASK_DAILY_LIMIT HA_WEBHOOK_URL HA_PLAY_WEBHOOK_URL WISHLIST_URL WISHLIST_MOVIE_URL MATINEE_CONF_EXPORTED
 supervisor="supervise-daemon"
 respawn_delay=5
 respawn_max=10
@@ -332,6 +335,8 @@ respawn_period=600
 command="/usr/bin/gunicorn"
 command_args="--preload --workers 2 --threads 4 --timeout 60 --bind 0.0.0.0:${PORT} --chdir /opt/matinee --access-logfile /var/log/matinee.log --error-logfile /var/log/matinee.log app:app"
 command_user="matinee"
+# what gunicorn prints before it opens its own log (an app that refuses to start) lands in the same file
+error_log="/var/log/matinee.log"
 depend() { need net; after firewall; }
 start_pre() { checkpath -f -m 0640 -o matinee:matinee /var/log/matinee.log; }
 EOF

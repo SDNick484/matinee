@@ -1098,3 +1098,16 @@ def test_sandbox_a_failed_upgrade_leaves_the_mcp_commit_file_alone(tmp_path):
     r = sb.run(sb.app("NEW", commit=NEW_COMMIT, bad=True))
     assert r.returncode != 0 and sb.mark("/opt/matinee") == "OLD"
     assert sb.path("/opt/matinee-mcp/COMMIT").read_text(encoding="utf-8") == OLD_COMMIT
+
+
+def test_the_app_can_start_beside_its_root_only_config():
+    """The config file is 600 root:root and gunicorn runs as the matinee user, so the app cannot read the file: the
+    init script must export the settings and say that it did (MATINEE_CONF_EXPORTED), or settings.py refuses to
+    start. It must also send what gunicorn prints before its own log opens to the log, so such a refusal is seen."""
+    head = (ROOT / "installer" / "setup-head.sh").read_text(encoding="utf-8")
+    init = head.split("cat > /etc/init.d/matinee <<'EOF'", 1)[1].split("\nEOF\n", 1)[0]
+    assert 'chmod 600 "$CONF"; chown root:root "$CONF"' in head
+    assert 'command_user="matinee"' in init
+    assert "\nMATINEE_CONF_EXPORTED=1\n" in init
+    assert re.search(r"^export PORT .*\bMATINEE_CONF_EXPORTED\b", init, re.M)
+    assert 'error_log="/var/log/matinee.log"' in init

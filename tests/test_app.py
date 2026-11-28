@@ -123,8 +123,9 @@ def test_setup_head_exports_all_env_vars():
     export_match = re.search(r"^export\s+PORT\s+(.+)$", setup_head, re.M)
     assert export_match, "setup-head.sh missing export line"
     exported_vars = set(export_match.group(0).split()[1:])
-    # /etc/conf.d/matinee is root-only (chmod 600) and _load_env() swallows the PermissionError, so this
-    # export line is the only way a setting reaches gunicorn. Every name the app reads must be on it.
+    # /etc/conf.d/matinee is root-only (chmod 600) and gunicorn runs as matinee, so this export line is the only
+    # way a setting reaches the app; MATINEE_CONF_EXPORTED on it is what lets settings.py start beside a file it
+    # cannot read. Every name the app reads must be on it.
     read = set()
     for f in ("app.py", "ask.py", *(f"{m}.py" for m in matinee._SPLIT_MODULES)):
         src = (Path(matinee.APP_DIR) / f).read_text()
