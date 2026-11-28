@@ -34,7 +34,9 @@ def _seed_all():
 
 
 def _open(browser, url, height=915):
-    page = browser.new_page(viewport={"width": 412, "height": height})
+    # page.route cannot see a request the service worker makes, so these pages run without it (test_offline_ui.py
+    # tests the worker)
+    page = browser.new_page(viewport={"width": 412, "height": height}, service_workers="block")
     errors = []
     page.on("pageerror", lambda e: errors.append(str(e)))
     page.goto(url)

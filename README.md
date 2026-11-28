@@ -181,6 +181,51 @@ everything behind `/admin`.
 
 ---
 
+## Install on your phone
+
+Matinee can sit on a phone's home screen with its own icon, open full-screen, and answer "do I own this?" in a shop
+with no signal, from the last collection it saw.
+
+Install it from the HTTPS address (`https://movies.example.com/`, the Cloudflare tunnel). Browsers run the offline
+part (a service worker) only over HTTPS or on `localhost`, so `http://192.168.1.100:8771` works as before but not
+offline.
+
+- **Android (Chrome):** open `https://movies.example.com/`, tap the **⋮** menu, then **Add to Home screen** (or
+  **Install app**), and confirm.
+- **iPhone and iPad (Safari, iOS 16.4 or later):** open `https://movies.example.com/`, tap **Share**, then **Add to
+  Home Screen**, and tap **Add**.
+
+The icon opens `/`, the collection. Open the app online once after installing (and after each upgrade) so it can
+save what it needs.
+
+**What works offline**
+
+- The app opens from the copy of the page, stylesheet, scripts and fonts saved at the last visit.
+- The grid shows the collection as it was last loaded online, under the line
+  "Offline, showing the collection as of Nov 27, 2026, 6:42 PM". Searching by title works on that copy; a filter or
+  sort that was used online is kept too, and another one needs a connection.
+- A title opened online before opens again, with the posters already seen. One never opened says it isn't saved
+  on this device.
+- Nothing can be changed offline, and nothing is queued to send later. The editor's pages (`/admin`) need the
+  connection: they do not open offline, and if the signal drops while one is open, its buttons and fields are
+  disabled until it is back.
+- With poor signal the app waits 3 seconds for the server, then shows the saved copy and keeps it up to date once
+  the answer arrives.
+
+**What the phone keeps.** Only what the public `/api` already serves to anyone: `/api/titles`, a title's
+`/api/titles/<id>`, `/api/facets`, `/api/locations` and the posters. Never anything under `/admin` (page or API),
+watch notes, people or who watched, an answer to a request that carried `MATINEE_API_KEY`, `MATINEE_READ_KEY` or a
+Cloudflare Access sign-in (the server marks those `Cache-Control: no-store`), or any answer marked `no-store`. With
+`PUBLIC_VIEW=0` it keeps only the app's own files and no collection at all, so a private collection does not open
+offline; switching `PUBLIC_VIEW` off deletes the saved collection from each phone the next time it opens Matinee
+online.
+
+**Updates.** Online, the page always comes from the server. Each upgrade changes `/sw.js`, so the next online visit
+saves the new files and deletes the old ones. To remove the app, delete its icon; to remove the saved copy, clear
+the site's data in the browser's settings.
+
+---
+
 ## Adding a Movie
 
 1. Navigate to `https://movies.example.com/admin` (or `http://<server-ip>:8771/admin` on local LAN).

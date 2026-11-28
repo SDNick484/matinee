@@ -10,6 +10,7 @@ Model:  title (one movie, keyed by TMDB id; cached TMDB metadata + local poster/
 Public:  /                 poster grid, detail pages, About (no editor emails)
          /api/...          read-only JSON
          /images/<file>    cached TMDB posters and backdrops
+         /sw.js, /manifest.webmanifest, /favicon.ico, /apple-touch-icon.png   install on a phone, offline shelf
 Editors: /admin            same UI with editing; put this path behind Cloudflare Access
          /admin/api/       full JSON (watch notes included) + writes (TMDB search, copies, refresh, delete);
                            requires a verified Access JWT (or a direct LAN request when LAN_EDIT=1,
@@ -277,10 +278,17 @@ def security_headers(resp):
     return resp
 
 
+def credentialed():
+    """True when the request presents a key or a Cloudflare Access JWT (verified or not). A browser's service worker
+    cannot see the JWT Cloudflare adds, so the server marks such answers no-store and the worker keeps none."""
+    return bool(presented_key() or request.headers.get("Cf-Access-Jwt-Assertion"))
+
+
 @app.after_request
 def admin_api_no_store(resp):
-    """The editor API carries notes, people and private copy data, so no browser or proxy keeps an answer."""
-    if request.path.startswith("/admin/api/"):
+    """The editor API carries notes, people and private copy data, so no browser or proxy keeps an answer. A public
+    /api answer to a request with editor credentials is kept by nothing either (static/sw.js honours no-store)."""
+    if request.path.startswith("/admin/api/") or (request.path.startswith("/api/") and credentialed()):
         resp.headers["Cache-Control"] = "no-store"
     return resp
 
@@ -349,11 +357,12 @@ def page_csp(nonce=None):
     """The Content-Security-Policy for the HTML pages: scripts run only from this origin, plus the inline import map
     when it carries this response's nonce. Styles may be inline (style="" is used throughout the SPA). Images come
     from this origin, TMDB (Add search thumbnails), data: (the select arrow in style.css) and blob: (the cover
-    preview). Nothing else: no eval, no plugins, no <base>, forms post only here."""
+    preview). The service worker (/sw.js) and the manifest come from this origin. Nothing else: no eval, no plugins,
+    no <base>, forms post only here."""
     script = "'self'" + (f" 'nonce-{nonce}'" if nonce else "")
     return (f"default-src 'self'; script-src {script}; img-src 'self' https://image.tmdb.org data: blob:; "
-            "style-src 'self' 'unsafe-inline'; connect-src 'self'; object-src 'none'; base-uri 'none'; "
-            "form-action 'self'; frame-ancestors 'self'")
+            "style-src 'self' 'unsafe-inline'; connect-src 'self'; worker-src 'self'; manifest-src 'self'; "
+            "object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'self'")
 
 
 def _module_tags(versions, nonce=""):
@@ -418,7 +427,7 @@ def static_files(p):
         # so it can never run an old module beside a new one.
         resp = send_from_directory(APP_DIR / "static", p, max_age=0)
         resp.cache_control.no_cache = True
-    elif p.startswith("fonts/") or p == "tmdb.svg":  # not versioned: a day, revalidated by ETag after that
+    elif p.startswith(("fonts/", "icons/")) or p == "tmdb.svg":  # not versioned: a day, then revalidated by ETag
         resp = send_from_directory(APP_DIR / "static", p, max_age=86400)
     else:
         resp = send_from_directory(APP_DIR / "static", p, max_age=60)
@@ -445,6 +454,61 @@ def _gzip_static(resp, path):
     resp.headers["Content-Encoding"] = "gzip"
     resp.set_etag(identity + "-gzip")
     resp.make_conditional(request)
+
+
+# ===================================================================== install and offline (static/sw.js)
+# The worker keeps the shell (the page and the assets the import map names) and, with PUBLIC_VIEW=1 only, the last
+# good public /api/titles, /api/facets, /api/locations and posters. static/sw.js says what it never keeps.
+SW_EXTRAS = ("fonts/figtree-latin-wght.woff2", "fonts/figtree-latin-ext-wght.woff2", "tmdb.svg", "icons/favicon.svg")
+SW_CONFIG_RE = re.compile(r"^const CONFIG = .*;$", re.M)
+DAY = 86400
+
+
+def shell_assets(versions):
+    """The stylesheet and every module at the URLs render_index puts in the page (its link, import map and entry)."""
+    return [f"/static/{k}?v={v}" for k, v in sorted(versions.items())]
+
+
+def sw_config(source):
+    """What /sw.js is told: the shell to precache, whether the collection is public (else it keeps no page and no
+    data), and a version naming its cache. Any change to a hash, PUBLIC_VIEW or the worker's code makes a new
+    version, so the browser installs the worker afresh and activate deletes the old shell."""
+    static = APP_DIR / "static"
+    cfg = {"public": bool(PUBLIC_VIEW), "assets": shell_assets(asset_versions()),
+           "extras": [f"/static/{x}" for x in SW_EXTRAS if (static / x).is_file()]}
+    seed = source + json.dumps(cfg, sort_keys=True)
+    return {"version": hashlib.sha256(seed.encode("utf-8")).hexdigest()[:12], **cfg}
+
+
+@app.get("/sw.js")
+def service_worker():
+    """static/sw.js with its CONFIG line filled in, from the root so its scope is the whole app. no-cache plus an
+    ETag: every update check asks, and an unchanged worker costs a 304."""
+    source = (APP_DIR / "static" / "sw.js").read_text(encoding="utf-8")
+    line = "const CONFIG = " + json.dumps(sw_config(source)) + ";"
+    resp = app.response_class(SW_CONFIG_RE.sub(lambda _m: line, source, count=1), mimetype="text/javascript")
+    resp.headers["Cache-Control"] = "no-cache"
+    resp.headers["Content-Security-Policy"] = "default-src 'none'; connect-src 'self'"   # the worker's own policy
+    resp.add_etag(weak=True)   # weak: gzip_text may compress the body after this
+    return resp.make_conditional(request)
+
+
+@app.get("/manifest.webmanifest")
+def web_manifest():
+    return send_from_directory(APP_DIR / "static", "manifest.webmanifest", max_age=DAY,
+                               mimetype="application/manifest+json")
+
+
+@app.get("/favicon.ico")
+def favicon():
+    return send_from_directory(APP_DIR / "static" / "icons", "favicon.ico", max_age=DAY,
+                               mimetype="image/vnd.microsoft.icon")
+
+
+@app.get("/apple-touch-icon.png")
+@app.get("/apple-touch-icon-precomposed.png")
+def apple_touch_icon():
+    return send_from_directory(APP_DIR / "static" / "icons", "apple-touch-icon.png", max_age=DAY)
 
 
 @app.get("/images/<path:p>")

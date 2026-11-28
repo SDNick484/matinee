@@ -132,6 +132,7 @@ jobs:
       - name: Verify JavaScript syntax (every ES module in static/js/)
         run: |
           for f in static/js/*.js; do node --check "$f"; done
+          node --check static/sw.js   # the service worker: a classic script, so it lives outside static/js/
           # Without static/js/package.json ("type": "module"), node --check exits 0 on a broken file that uses
           # `import`. Prove the marker still makes Node parse modules: a broken copy beside it must be rejected.
           t=$(mktemp -d)
@@ -184,6 +185,7 @@ jobs:
       - name: Verify JavaScript syntax under Alpine (every ES module in static/js/)
         run: |
           for f in static/js/*.js; do node --check "$f"; done
+          node --check static/sw.js   # the service worker: a classic script, so it lives outside static/js/
           # Without static/js/package.json ("type": "module"), node --check exits 0 on a broken file that uses
           # `import`. Prove the marker still makes Node parse modules: a broken copy beside it must be rejected.
           t=$(mktemp -d)
