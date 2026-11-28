@@ -318,7 +318,15 @@ def access(monkeypatch):
     jwk = json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(key.public_key()))
     jwk.update(kid="key-1", use="sig", alg="RS256")
     fetches = []
-    monkeypatch.setattr(jwt.PyJWKClient, "fetch_data", lambda self: fetches.append(1) or {"keys": [jwk]})
+
+    def endpoint(*args, **kwargs):
+        fetches.append(1)
+        return io.BytesIO(json.dumps({"keys": [jwk]}).encode())
+    # Stub the HTTP layer, not PyJWKClient.fetch_data: how fetch_data fills the client's cache differs between PyJWT
+    # versions (Alpine ships an older one), and the throttle has to work with whichever it gets. 2.10 and older call
+    # urllib.request.urlopen; newer builds an opener.
+    monkeypatch.setattr("urllib.request.urlopen", endpoint)
+    monkeypatch.setattr("urllib.request.OpenerDirector.open", lambda self, *a, **kw: endpoint())
     monkeypatch.setattr("app.CF_TEAM_DOMAIN", "family.cloudflareaccess.com")
     monkeypatch.setattr("app.CF_AUD", "matinee-aud")
     monkeypatch.setattr("app.ADMIN_EMAILS", {"nick@example.com"})

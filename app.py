@@ -139,28 +139,35 @@ class JwksThrottle:
         self.min_interval = min_interval
         self.clock = clock
         self.last_fetch = None       # when the client last went to the network, whether or not it worked
+        self.known = set()           # key ids in the last key set that arrived
         self.lock = threading.Lock()
         fetch_data = client.fetch_data
 
         def fetch_and_record():
             try:
-                return fetch_data()
+                data = fetch_data()
             finally:
                 self.last_fetch = self.clock()
+            self.known = self.key_ids(data)
+            return data
         client.fetch_data = fetch_and_record
 
-    def cached_key_ids(self):
-        cache = self.client.jwk_set_cache
-        if cache is None or cache.is_expired():
+    @staticmethod
+    def key_ids(data):
+        """The key ids in what fetch_data returned. That is the parsed JSON (a dict) in older PyJWT and may be a
+        PyJWKSet in newer, and the client's own cache holds a dict in one and a PyJWKSet in the other, so this
+        reads the one value every version hands back rather than the cache."""
+        try:
+            keys = data.get("keys", []) if isinstance(data, dict) else data.keys
+            return {k.get("kid") if isinstance(k, dict) else k.key_id for k in keys}
+        except (AttributeError, TypeError):
             return set()
-        keys = cache.get()
-        return {k.key_id for k in keys.keys} if keys is not None else set()
 
     def get_signing_key_from_jwt(self, token):
         import jwt
         kid = jwt.get_unverified_header(token).get("kid")
         with self.lock:
-            if (kid not in self.cached_key_ids() and self.last_fetch is not None
+            if (kid not in self.known and self.last_fetch is not None
                     and self.clock() - self.last_fetch < self.min_interval):
                 raise jwt.PyJWKClientError(f"Unable to find a signing key that matches {kid!r}")
             return self.client.get_signing_key_from_jwt(token)
