@@ -65,12 +65,31 @@ pct exec <CT_ID> -- sh /root/setup-matinee.sh
 ```
 
 The installer is idempotent and safe to re-run:
-- Installs Alpine dependencies (`python3`, `py3-flask`, `py3-gunicorn`, `py3-jwt`, `py3-cryptography`, `sqlite`).
+- Installs Alpine dependencies (`python3`, `py3-flask`, `py3-gunicorn`, `py3-jwt`, `py3-cryptography`, `sqlite`, `logrotate`).
 - Upgrades the app files in `/opt/matinee`.
 - Preserves existing database and images in `/var/lib/matinee`.
 - Automatically preserves existing configuration in `/etc/conf.d/matinee`.
 
-To uninstall while keeping data and backups:
+**An upgrade can be undone, and the service is down only for the swap.** The installer unpacks the new version beside
+the old one and refreshes the `matinee-mcp` venv first, while the old version keeps serving. It then runs
+`matinee-backup pre-upgrade` (the new copy of the script, from the package, so a host with an older script is covered
+too; if the backup fails the installer stops with nothing changed), stops the services, swaps the directories, starts
+Matinee and waits for `/healthz`. If any step after the stop fails, or the new version does not answer, the installer
+puts `/opt/matinee.old` back, starts the services again and exits non-zero. The previous version stays in
+`/opt/matinee.old` until the next upgrade. A fresh install has no previous version and takes the usual first backup.
+
+To roll back by hand after a good-looking upgrade (the installer prints these with the real backup file name):
+```sh
+rc-service matinee-mcp stop; rc-service matinee stop
+mv /opt/matinee /opt/matinee.swap && mv /opt/matinee.old /opt/matinee && mv /opt/matinee.swap /opt/matinee.old
+# only if the data looks wrong too: put the pre-upgrade copy back (docs/restore.md, "Restore a pre-upgrade copy")
+rc-service matinee restart; rc-service matinee-mcp restart
+```
+The `matinee-mcp` venv is refreshed in place (`pip install --upgrade`), so a rollback restores the previous app code
+but not the previous MCP libraries.
+
+To uninstall while keeping data and backups (it removes the app, services, the `matinee` and `matinee-mcp` users, the
+log-rotation file and the health-check entries the installer added):
 ```bash
 pct exec <CT_ID> -- sh /root/setup-matinee.sh --uninstall
 ```
