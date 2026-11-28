@@ -1,7 +1,7 @@
 """Matinee settings, read once at import from the environment; /etc/conf.d/matinee (or a local .env next to
 app.py) fills in anything the environment leaves unset. Split out of app.py, which re-exports every name here:
 patch app.<NAME>, which also rebinds it in this module (see _AppModule in app.py)."""
-import os, re
+import os, re, sys
 from pathlib import Path
 
 
@@ -27,8 +27,11 @@ def _load_env():
                             v = v[1:-1]
                         if k and k not in os.environ:
                             os.environ[k] = v
-            except Exception:
-                pass
+            except (OSError, ValueError) as exc:
+                # A config that exists but cannot be read must not start the app on the open defaults (LAN_EDIT=1,
+                # PUBLIC_VIEW=1): every LAN client would be an editor. A missing file is still fine (development).
+                raise SystemExit(f"Matinee won't start: cannot read config file {conf_file} "
+                                 f"({getattr(exc, 'strerror', None) or exc}). Fix its owner and mode, or remove it.")
 
 _load_env()
 
@@ -49,6 +52,17 @@ def parse_hosts(raw):
 
 # host names (besides IP literals and localhost) that a LAN_EDIT request may use; see lan_host()
 LAN_HOSTS = parse_hosts(os.environ.get("LAN_HOSTS", ""))
+_HOST_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
+
+
+def bad_lan_hosts(hosts):
+    """The LAN_HOSTS entries that cannot be a host name (an IP address, or a stray value such as 1): they allow nothing."""
+    return sorted(h for h in hosts if not (all(_HOST_LABEL.fullmatch(p) for p in h.split(".")) and re.search("[a-z]", h)))
+
+
+for _bad in bad_lan_hosts(LAN_HOSTS):
+    print(f"Matinee: LAN_HOSTS entry {_bad!r} is not a host name, so it allows nothing "
+          f"(IP addresses and localhost need no entry); see .env.example", file=sys.stderr)
 PUBLIC_VIEW = os.environ.get("PUBLIC_VIEW", "1") == "1"
 MATINEE_API_KEY = os.environ.get("MATINEE_API_KEY", "").strip()
 
