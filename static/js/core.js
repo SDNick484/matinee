@@ -77,6 +77,31 @@
   }
   const escapeHtml = esc;
 
+  // Inline handlers are not used (they would evaluate title text as script). Markup carries data attributes instead,
+  // and one capture-phase listener on the document handles them (an <img> error does not bubble).
+  //   data-poster-fallback="<title>" [data-poster-year="<year>"]: a failed poster becomes a .poster-ph placeholder.
+  //   data-hide-on-error: a failed image is hidden. data-remove-on-error: a failed image is removed.
+  //   data-reload: a click reloads the page.
+  document.addEventListener("error", (ev) => {
+    const img = ev.target;
+    if (!(img instanceof HTMLImageElement)) return;
+    if (img.hasAttribute("data-poster-fallback")) {
+      const ph = document.createElement("div");
+      ph.className = "poster-ph";
+      ph.append(img.getAttribute("data-poster-fallback"));
+      const year = img.getAttribute("data-poster-year");
+      if (year) ph.append(document.createElement("br"), year);
+      img.replaceWith(ph);
+    } else if (img.hasAttribute("data-hide-on-error")) {
+      img.style.display = "none";
+    } else if (img.hasAttribute("data-remove-on-error")) {
+      img.remove();
+    }
+  }, true);
+  document.addEventListener("click", (ev) => {
+    if (ev.target instanceof Element && ev.target.closest("[data-reload]")) location.reload();
+  });
+
   let toastTimer = null;
   function toast(msg, duration = 4000) {
     const el = document.getElementById("toast");

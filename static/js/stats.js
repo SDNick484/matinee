@@ -30,7 +30,7 @@ import { getChipIcon, icon } from "./icons.js";
           <div class="empty-state">
             <h2>Unable to load stats</h2>
             <p>${esc(err.message || "Failed to connect to Matinee server")}</p>
-            <button class="btn" onclick="location.reload()">Retry</button>
+            <button class="btn" data-reload>Retry</button>
           </div>
         </div>
       `;

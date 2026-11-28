@@ -117,7 +117,7 @@ import { playBarHtml, wirePlay } from "./play.js";
 
     const posterDetailSrc = title.poster_large_url || title.poster_url || (title.poster_file ? `/images/${esc(title.poster_file)}` : null);
     const posterHtml = posterDetailSrc
-      ? `<img src="${posterDetailSrc}" alt="${esc(title.title)}" onerror="this.onerror=null;this.parentElement.innerHTML='<div class=\\'poster-ph\\'>${esc(title.title)}</div>';">`
+      ? `<img src="${esc(posterDetailSrc)}" alt="${esc(title.title)}" data-poster-fallback="${esc(title.title)}">`
       : `<div class="poster-ph" style="height:100%">${esc(title.title)}</div>`;
 
     const copies = title.copies || [];

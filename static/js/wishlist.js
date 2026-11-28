@@ -231,7 +231,7 @@ import { closeModal } from "./forms.js";
           ? `<div class="empty-state" style="margin-top:var(--s4)"><h2>Nothing wanted yet</h2><p>Use Want to buy on a title page, or when you add a movie.</p></div>`
           : `<div class="results-list" id="wanted-list">${wants.map((w) => {
               const thumb = w.poster_url
-                ? `<img class="result-thumb" src="${esc(w.poster_url)}" loading="lazy" alt="" onerror="this.style.display='none';">`
+                ? `<img class="result-thumb" src="${esc(w.poster_url)}" loading="lazy" alt="" data-hide-on-error>`
                 : `<div class="result-thumb poster-ph" style="font-size:10px">${esc(w.title)}</div>`;
               return `<a class="result-card wanted-row" href="#/t/${w.title_id}" data-title-id="${w.title_id}">
                 ${thumb}

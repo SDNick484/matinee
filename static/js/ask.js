@@ -15,7 +15,7 @@ import { getChipIcon, icon } from "./icons.js";
     const thumb = `
       <span class="title-row-thumb">
         <span class="poster-ph" aria-hidden="true">${esc(t.title)}</span>
-        ${src ? `<img src="${esc(src)}" alt="" loading="lazy" onerror="this.remove()">` : ""}
+        ${src ? `<img src="${esc(src)}" alt="" loading="lazy" data-remove-on-error>` : ""}
       </span>`;
     const chips = (t.formats || [])
       .map((fmt) => `<span class="chip ${getChipClass(fmt)}">${getChipIcon(fmt)}${esc(fmt)}</span>`)
