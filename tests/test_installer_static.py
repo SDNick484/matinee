@@ -752,7 +752,7 @@ class Sandbox:
     def path(self, p):
         return self.root / p.lstrip("/")
 
-    def app(self, mark, *, backup_exit=0, bad=False):
+    def app(self, mark, *, backup_exit=0, bad=False, commit=None):
         """Make a payload tarball (base64) of an app tagged `mark`."""
         self.n += 1
         d = self.tmp_path / f"payload{self.n}" / "matinee"
@@ -766,6 +766,8 @@ class Sandbox:
             (d / "ops" / name).chmod(0o755)
         (d / "requirements-mcp.txt").write_text("mcp\n")
         (d / "MARK").write_text(mark)
+        if commit is not None:
+            (d / "COMMIT").write_text(commit, encoding="utf-8")
         if bad:
             (d / "BAD").write_text("")
         tar = subprocess.run(["tar", "-czf", "-", "matinee"], cwd=d.parent, capture_output=True, check=True).stdout
@@ -961,3 +963,138 @@ def test_sandbox_uninstall_leaves_a_hand_made_logrotate_file(tmp_path):
     (sb.path("/etc/logrotate.d") / "matinee").write_text(f"{sb.root}/var/log/matinee.log {{\n    rotate 2\n}}\n")
     assert sb.run("", "--uninstall").returncode == 0
     assert (sb.path("/etc/logrotate.d") / "matinee").exists()
+
+
+# ------------------------------------------------------------------ commit stamp
+# build.sh runs in a temp git checkout whose sources are empty placeholders (only the stamp is under test); the
+# payload it writes is opened, and the COMMIT inside it is what the host gets.
+def _build_checkout(tmp_path):
+    tree = tmp_path / "tree"
+    (tree / "installer").mkdir(parents=True)
+    (tree / "installer" / "build.sh").write_text(BUILD, encoding="utf-8")
+    (tree / "installer" / "setup-head.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+    names = re.search(r'^cp -r (.*) "\$STAGE/matinee/"$', BUILD, re.M).group(1).split()
+    for n in names:
+        if n in ("ops", "static", "tests"):
+            (tree / n).mkdir()
+            (tree / n / "placeholder").write_text("")
+        else:
+            (tree / n).write_text("", encoding="utf-8")
+    git = ["git", "-C", str(tree), "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false"]
+    subprocess.run(["git", "init", "-q", str(tree)], check=True)
+    subprocess.run([*git, "add", "-A"], check=True)
+    subprocess.run([*git, "commit", "-q", "-m", "fixture"], check=True)
+    return tree, git
+
+
+def _build(tree):
+    r = subprocess.run(["sh", "installer/build.sh"], cwd=tree, capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+    return r
+
+
+def _payload_file(tree, name):
+    import base64, io, tarfile
+    text = (tree / "dist" / "setup-matinee.sh").read_text(encoding="utf-8")
+    tar = base64.b64decode(text.split("\n__PAYLOAD_BELOW__\n", 1)[1])
+    with tarfile.open(fileobj=io.BytesIO(tar)) as t:
+        if f"matinee/{name}" not in t.getnames():
+            return None
+        return t.extractfile(f"matinee/{name}").read().decode("utf-8")
+
+
+def test_build_writes_the_commit_file_into_the_payload(tmp_path):
+    tree, _ = _build_checkout(tmp_path)
+    head = subprocess.run(["git", "-C", str(tree), "rev-parse", "--short", "HEAD"], capture_output=True, text=True,
+                          check=True).stdout.strip()
+    date = subprocess.run(["git", "-C", str(tree), "log", "-1", "--format=%cs"], capture_output=True, text=True,
+                          check=True).stdout.strip()
+    r = _build(tree)
+    lines = _payload_file(tree, "COMMIT").splitlines()
+    assert lines == [head, "", date], lines       # no remote: an empty repo line, no dirty line
+    assert re.fullmatch(r"[0-9a-f]{7,40}", lines[0]) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", date)
+    assert "uncommitted" not in r.stdout + r.stderr
+
+
+def test_build_names_the_github_repo_without_any_credential_in_the_remote(tmp_path):
+    tree, git = _build_checkout(tmp_path)
+    subprocess.run([*git, "remote", "add", "origin", "https://x-access-token:SECRET@github.com/SDNick484/matinee.git"],
+                   check=True)
+    _build(tree)
+    lines = _payload_file(tree, "COMMIT").splitlines()
+    assert lines[1] == "SDNick484/matinee"
+    assert "SECRET" not in _payload_file(tree, "COMMIT")
+
+
+def test_build_from_a_dirty_tree_warns_and_marks_the_commit(tmp_path):
+    tree, _ = _build_checkout(tmp_path)
+    (tree / "app.py").write_text("changed\n", encoding="utf-8")
+    r = _build(tree)
+    assert "uncommitted" in r.stdout + r.stderr
+    lines = _payload_file(tree, "COMMIT").splitlines()
+    assert lines[3] == "dirty" and re.fullmatch(r"[0-9a-f]{7,40}", lines[0])
+
+
+def test_build_outside_git_ships_no_commit_file(tmp_path):
+    tree = tmp_path / "tree"
+    _build_checkout(tmp_path)                       # lays the files down, with a .git we then remove
+    subprocess.run(["rm", "-rf", str(tree / ".git")], check=True)
+    _build(tree)
+    assert _payload_file(tree, "COMMIT") is None
+
+
+# ------------------------------------------------------------------ commit stamp in the installer
+OLD_COMMIT = "aaaaaaa\nSDNick484/matinee\n2026-11-20\n"
+NEW_COMMIT = "bbbbbbb\nSDNick484/matinee\n2026-11-27\n"
+
+
+def test_sandbox_upgrade_names_the_commit_it_replaces_and_the_one_it_installs(tmp_path):
+    sb = Sandbox(tmp_path)
+    sb.install_old("OLD")
+    sb.path("/opt/matinee/COMMIT").write_text(OLD_COMMIT, encoding="utf-8")
+    r = sb.run(sb.app("NEW", commit=NEW_COMMIT + "dirty\n"))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "upgrading aaaaaaa \u2192 bbbbbbb-dirty" in r.stdout
+
+
+def test_sandbox_upgrade_from_a_build_without_a_commit_file_says_unknown(tmp_path):
+    sb = Sandbox(tmp_path)
+    sb.install_old("OLD")
+    r = sb.run(sb.app("NEW", commit=NEW_COMMIT))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "upgrading unknown \u2192 bbbbbbb" in r.stdout
+
+
+def test_sandbox_fresh_install_prints_no_upgrade_line(tmp_path):
+    sb = Sandbox(tmp_path)
+    sb.path("/opt/matinee-mcp/venv/bin").mkdir(parents=True)
+    r = sb.run(sb.app("NEW", commit=NEW_COMMIT))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "upgrading" not in r.stdout
+
+
+def test_sandbox_matinee_mcp_gets_the_same_commit_file(tmp_path):
+    sb = Sandbox(tmp_path)
+    sb.install_old("OLD")
+    r = sb.run(sb.app("NEW", commit=NEW_COMMIT))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert sb.path("/opt/matinee-mcp/COMMIT").read_text(encoding="utf-8") == NEW_COMMIT
+    assert sb.path("/opt/matinee/COMMIT").read_text(encoding="utf-8") == NEW_COMMIT
+
+
+def test_sandbox_a_payload_without_a_commit_file_clears_the_stale_mcp_copy(tmp_path):
+    sb = Sandbox(tmp_path)
+    sb.install_old("OLD")
+    sb.path("/opt/matinee-mcp/COMMIT").write_text(OLD_COMMIT, encoding="utf-8")
+    r = sb.run(sb.app("NEW"))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert not sb.path("/opt/matinee-mcp/COMMIT").exists()
+
+
+def test_sandbox_a_failed_upgrade_leaves_the_mcp_commit_file_alone(tmp_path):
+    sb = Sandbox(tmp_path)
+    sb.install_old("OLD")
+    sb.path("/opt/matinee-mcp/COMMIT").write_text(OLD_COMMIT, encoding="utf-8")
+    r = sb.run(sb.app("NEW", commit=NEW_COMMIT, bad=True))
+    assert r.returncode != 0 and sb.mark("/opt/matinee") == "OLD"
+    assert sb.path("/opt/matinee-mcp/COMMIT").read_text(encoding="utf-8") == OLD_COMMIT

@@ -7,6 +7,24 @@ trap 'rm -rf "$STAGE"' EXIT
 mkdir -p dist "$STAGE/matinee"
 cp -r app.py ask.py settings.py common.py db.py clients.py images.py people.py browse.py export.py wishlist.py lists.py watched_days.py youtube.py fandango.py play.py recommend.py mcp_server.py mcp_http.py mcp_remote.py requirements-mcp.txt README.md .env.example ops static tests "$STAGE/matinee/"
 
+# COMMIT: what this build is, for /healthz, the installer's upgrade line and matinee-mcp. Line 1 is the short hash
+# (the only part /healthz shows), line 2 owner/name of a GitHub origin (else empty), line 3 the commit date, and line 4
+# "dirty" when tracked files have uncommitted changes. Outside git there is no file and the app says commit null.
+if HASH=$(git rev-parse --short HEAD 2>/dev/null); then
+  REPO=$(git config --get remote.origin.url 2>/dev/null | sed -n 's#^.*github\.com[:/]\([^/]*/[^/]*\)$#\1#p' | sed 's/\.git$//' | grep -E '^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$' || true)
+  {
+    echo "$HASH"
+    echo "$REPO"
+    git log -1 --format=%cs
+    if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+      echo dirty
+      echo "warning: building from a tree with uncommitted changes: the payload's COMMIT says dirty" >&2
+    fi
+  } > "$STAGE/matinee/COMMIT"
+else
+  echo "warning: not a git checkout: no COMMIT in the payload, so /healthz will say commit null" >&2
+fi
+
 # Clean cache directories portably (avoid find -exec + which BusyBox find can reject)
 find "$STAGE" \( -name __pycache__ -o -name .pytest_cache \) -exec rm -rf {} \; 2>/dev/null || true
 
