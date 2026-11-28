@@ -1,0 +1,3 @@
+{"id": "msg_01Refusal", "type": "message", "role": "assistant", "model": "claude-haiku-5-5",
+ "content": [], "stop_reason": "refusal", "stop_sequence": null,
+ "usage": {"input_tokens": 1180, "output_tokens": 0}}
