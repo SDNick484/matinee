@@ -5,7 +5,7 @@
 // Ported from the Christmas app's calendar.js.
 import { api, esc, isAdmin, state } from "./core.js";
 import { icon } from "./icons.js";
-import { closeModal } from "./forms.js";
+import { openModal } from "./modal.js";
 
   const CAL_MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October",
     "November", "December"];
@@ -61,33 +61,20 @@ import { closeModal } from "./forms.js";
       + `<span class="cal-row-title">${esc(label)}</span></a>`;
   }
 
-  // The same sheet as lists.js's: a dialog in #modal-root. A row is a link, and handleRoute closes the sheet on the
-  // hash change; Escape is closed by forms.js.
-  function openCalDaySheet(opener, date, entries) {
-    const modalRoot = document.getElementById("modal-root");
-    if (!modalRoot) return;
+  // The same sheet as lists.js's: a dialog from modal.js, which also closes it on Escape and gives focus back to the day
+  // that opened it. A row is a link, and handleRoute closes the sheet on the hash change.
+  function openCalDaySheet(date, entries) {
     const [year, month, day] = date.split("-").map(Number);
     const title = `${CAL_WEEKDAYS[calWeekday(year, month, day)]}, ${CAL_MONTHS[month - 1]} ${day}, ${year}`;
-    modalRoot.innerHTML = `
-      <div class="modal-overlay" id="modal-overlay">
-        <div class="modal-dialog cal-dialog" id="calendar-sheet" role="dialog" aria-modal="true" aria-labelledby="calendar-sheet-title">
-          <div class="modal-header">
-            <div class="modal-title" id="calendar-sheet-title">${icon("calendar")} ${esc(title)}</div>
-            <button type="button" class="btn-close" id="btn-modal-close" aria-label="Close">✕</button>
-          </div>
-          <div class="cal-rows">${entries.map(calRowHtml).join("")}</div>
-        </div>
-      </div>`;
-    watchCalPosters(modalRoot);
-    const close = () => {
-      closeModal();
-      if (opener.isConnected) opener.focus();
-    };
-    document.getElementById("btn-modal-close").addEventListener("click", close);
-    document.getElementById("modal-overlay").addEventListener("click", (e) => {
-      if (e.target.id === "modal-overlay") close();
+    const modal = openModal({
+      title,
+      iconHTML: icon("calendar"),
+      className: "cal-dialog",
+      id: "calendar-sheet",
+      titleId: "calendar-sheet-title",
+      content: `<div class="cal-rows">${entries.map(calRowHtml).join("")}</div>`,
     });
-    document.getElementById("btn-modal-close").focus();
+    if (modal) watchCalPosters(modal.dialog);
   }
 
   // ================================================================= the month
@@ -151,7 +138,7 @@ import { closeModal } from "./forms.js";
     document.getElementById("calendar-status").textContent = Object.keys(data.days || {}).length
       ? "" : `Nothing watched in ${CAL_MONTHS[mon - 1]} ${year}.`;
     box.querySelectorAll("button.cal-day").forEach((cell) => {
-      cell.addEventListener("click", () => openCalDaySheet(cell, cell.dataset.date, data.days[cell.dataset.date]));
+      cell.addEventListener("click", () => openCalDaySheet(cell.dataset.date, data.days[cell.dataset.date]));
     });
   }
 

@@ -2,7 +2,7 @@
 // membership sheet, and the Lists manager (a section of the Settings page). Lists never appear on the grid or the dashboard.
 import { api, esc, isAdmin, toast } from "./core.js";
 import { icon } from "./icons.js";
-import { closeModal } from "./forms.js";
+import { openModal } from "./modal.js";
 
   const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   const MD_RE = /^(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$/;
@@ -48,34 +48,13 @@ import { closeModal } from "./forms.js";
     container.querySelector("#btn-title-lists")?.addEventListener("click", () => openMembershipSheet(title, onChange));
   }
 
-  function sheetHTML(cls, label, title, sub, body) {
-    return `
-      <div class="modal-overlay" id="modal-overlay">
-        <div class="modal-dialog ${cls}" role="dialog" aria-modal="true" aria-label="${esc(label)}">
-          <div class="modal-header">
-            <div>
-              <div class="modal-title">${icon("list")} ${esc(title)}</div>
-              ${sub ? `<div class="list-sub">${sub}</div>` : ""}
-            </div>
-            <button type="button" class="btn-close" id="btn-modal-close" aria-label="Close">✕</button>
-          </div>
-          ${body}
-        </div>
-      </div>`;
-  }
-
-  function bindClose(onClose) {
-    document.getElementById("btn-modal-close")?.addEventListener("click", onClose);
-    document.getElementById("btn-modal-cancel")?.addEventListener("click", onClose);
-    document.getElementById("modal-overlay")?.addEventListener("click", (e) => {
-      if (e.target.id === "modal-overlay") onClose();
-    });
+  // The sheet both lists dialogs share. `sub` is plain text (openModal escapes it); `onClose` runs once it is closed.
+  function openSheet(cls, title, sub, body, onClose) {
+    return openModal({ title, iconHTML: icon("list"), subtitle: sub, subtitleClass: "list-sub", className: cls, content: body, onClose });
   }
 
   // ================================================================= One list (anyone)
   async function openListSheet(listId) {
-    const modalRoot = document.getElementById("modal-root");
-    if (!modalRoot) return;
     let data;
     try {
       data = await api(`${listsApiBase()}/lists/${listId}`);
@@ -85,7 +64,7 @@ import { closeModal } from "./forms.js";
     }
     const titles = data.titles || [];
     const sub = [`${titles.length} ${titles.length === 1 ? "movie" : "movies"}`, windowText(data),
-      data.in_season ? "in season" : ""].filter(Boolean).map(esc).join(" · ");
+      data.in_season ? "in season" : ""].filter(Boolean).join(" · ");
     const rows = titles.length
       ? titles.map((t) => `
           <a class="list-title-row" href="#/t/${Number(t.id)}">
@@ -96,30 +75,14 @@ import { closeModal } from "./forms.js";
             </span>
           </a>`).join("")
       : `<div class="list-empty">Nothing on this list yet.</div>`;
-    modalRoot.innerHTML = sheetHTML("list-dialog", data.name, data.name, sub, `<div class="list-titles">${rows}</div>`);
-    bindClose(closeModal);
+    openSheet("list-dialog", data.name, sub, `<div class="list-titles">${rows}</div>`);
   }
 
   // ================================================================= Membership sheet (editors)
   let membershipChanged = false;
   let membershipDone = null;
 
-  function membershipOpen() {
-    return Boolean(document.querySelector("#modal-root .list-membership-dialog"));
-  }
-
-  function closeMembership() {
-    const wasOpen = membershipOpen();
-    closeModal();
-    if (wasOpen && membershipChanged && membershipDone) {
-      membershipChanged = false;
-      membershipDone();
-    }
-  }
-
   async function openMembershipSheet(title, onChange) {
-    const modalRoot = document.getElementById("modal-root");
-    if (!modalRoot) return;
     let data;
     try {
       data = await api("/admin/api/lists");
@@ -138,10 +101,16 @@ import { closeModal } from "./forms.js";
       </button>`).join("");
     const body = `
       <div class="list-toggles" role="group" aria-label="Lists for ${esc(title.title)}">${rows}</div>
-      <div class="modal-actions"><button type="button" class="btn people-btn" id="btn-modal-cancel">Done</button></div>`;
-    modalRoot.innerHTML = sheetHTML("list-membership-dialog", `Lists for ${title.title}`, "Lists", esc(title.title), body);
-    bindClose(closeMembership);
-    modalRoot.querySelectorAll(".list-toggle").forEach((btn) => {
+      <div class="modal-actions"><button type="button" class="btn people-btn" id="btn-modal-cancel" data-modal-close>Done</button></div>`;
+    // Closing it by any means (Done, the cross, Escape, the backdrop) re-renders the title page if something was saved.
+    const sheet = openSheet("list-membership-dialog", "Lists", title.title, body, () => {
+      if (membershipChanged && membershipDone) {
+        membershipChanged = false;
+        membershipDone();
+      }
+    });
+    if (!sheet) return;
+    sheet.dialog.querySelectorAll(".list-toggle").forEach((btn) => {
       btn.addEventListener("click", async () => {
         const listId = Number(btn.dataset.listId);
         const want = btn.getAttribute("aria-pressed") !== "true";
@@ -161,11 +130,6 @@ import { closeModal } from "./forms.js";
   }
 
   // ================================================================= Lists manager (Settings page)
-  // Escape: forms.js closes any modal on window; this runs first (document) so a saved change still re-renders.
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && membershipOpen()) closeMembership();
-  });
-
   function managerRowHTML(l, idx, total) {
     const soon = l.kind === "watch_soon";
     const mdInput = (field, value, label) => `<input type="text" class="form-input lists-md" data-field="${field}" value="${esc(value || "")}" placeholder="MM-DD" maxlength="5" inputmode="numeric" autocomplete="off" aria-label="${label} for ${esc(l.name)}">`;

@@ -1,10 +1,11 @@
 // Matinee — copy form modal, custom covers, closeModal and global key/click handlers.
-import { api, centsToDollars, dollarsToCents, esc, FORMATS, redrawIfCurrent, SERVICES, state, toast } from "./core.js";
+import { api, centsToDollars, closeFilterPopovers, dollarsToCents, esc, FORMATS, redrawIfCurrent, SERVICES, state, toast } from "./core.js";
 import { icon } from "./icons.js";
 import { navigate } from "./router.js";
 import { renderDetail } from "./detail.js";
 import { resumeBarcodeScanner } from "./add.js";
 import { openWantModal } from "./wishlist.js";
+import { closeModals, onModalClose, openModal } from "./modal.js";
 
   // ================================================================= "More": edition, digital code, date, price
   // One disclosure shared by the add and edit forms (ids start with `p`: "add-" or "edit-"). Closed on a new copy,
@@ -171,9 +172,6 @@ import { openWantModal } from "./wishlist.js";
 
   // ================================================================= Copy Form Modal (8.2)
   async function openCopyModal(movie, prefill = {}) {
-    const modalRoot = document.getElementById("modal-root");
-    if (!modalRoot) return;
-
     let locationsList = [];
     try {
       const locData = await api("/api/locations");
@@ -186,17 +184,10 @@ import { openWantModal } from "./wishlist.js";
     const initialFormat = prefill.format || (initialKind === "physical" ? "4K UHD" : "Digital HD");
     const initialService = prefill.service || "";
 
-    modalRoot.innerHTML = `
-      <div class="modal-overlay" id="modal-overlay">
-        <div class="modal-dialog">
-          <div class="modal-header">
-            <div>
-              <div class="modal-title">${esc(movie.title)}</div>
-              <div style="font-size:var(--fs-xs);color:var(--ink-3)">${movie.year || ""}</div>
-            </div>
-            <button type="button" class="btn-close" id="btn-modal-close" aria-label="Close">✕</button>
-          </div>
-
+    const modal = openModal({
+      title: movie.title,
+      subtitle: movie.year ? String(movie.year) : "",
+      content: `
           <div id="modal-owned-status">
             ${
               prefill.duplicateNotice
@@ -245,15 +236,15 @@ import { openWantModal } from "./wishlist.js";
             ${moreFieldsHTML("add-", { kind: initialKind })}
 
             <div class="form-actions">
-              <button type="button" class="btn btn-ghost" id="btn-modal-cancel">Cancel</button>
+              <button type="button" class="btn btn-ghost" id="btn-modal-cancel" data-modal-close>Cancel</button>
               <button type="button" class="btn btn-ghost" id="btn-want-to-buy" style="display:none">Want to buy…</button>
               <button type="submit" class="btn" id="btn-save-copy">Save Copy</button>
               <button type="button" class="btn btn-ghost" id="btn-save-add-another">Save &amp; Add Another</button>
             </div>
           </form>
-        </div>
-      </div>
-    `;
+      `,
+    });
+    if (!modal) return;
 
     // Local form state
     const formState = {
@@ -373,13 +364,7 @@ import { openWantModal } from "./wishlist.js";
 
     // Bind the form's handlers now, before any request: a tap on Save Copy before the owned-copies answer arrives
     // would otherwise be a native form submit (the page reloads and nothing is saved).
-    // Modal close & click outside
-    document.getElementById("btn-modal-close")?.addEventListener("click", closeModal);
-    document.getElementById("btn-modal-cancel")?.addEventListener("click", closeModal);
-    document.getElementById("modal-overlay")?.addEventListener("click", (e) => {
-      if (e.target.id === "modal-overlay") closeModal();
-    });
-
+    // The close button, Cancel (data-modal-close), the backdrop and Escape are openModal's, bound already.
     document.getElementById("copy-form")?.addEventListener("submit", (e) => {
       e.preventDefault();
       submitCopy(false);
@@ -390,10 +375,9 @@ import { openWantModal } from "./wishlist.js";
     });
 
     // Check what is already owned from TMDB API
-    const overlay = document.getElementById("modal-overlay");
     try {
       const owned = await api(`/admin/api/tmdb/${movie.tmdb_id}/owned`);
-      if (!overlay?.isConnected) return;   // the form was closed (or saved) before the answer came
+      if (!modal.overlay.isConnected) return;   // the form was closed (or saved) before the answer came
       formState.ownedCopies = owned.copies || [];
       showWantButton(owned);
       const statusBox = document.getElementById("modal-owned-status");
@@ -496,9 +480,6 @@ import { openWantModal } from "./wishlist.js";
 
   // Modal for editing an existing copy
   async function openEditCopyModal(copy, title) {
-    const modalRoot = document.getElementById("modal-root");
-    if (!modalRoot) return;
-
     let locationsList = [];
     try {
       const locData = await api("/api/locations");
@@ -507,17 +488,10 @@ import { openWantModal } from "./wishlist.js";
       locationsList = [];
     }
 
-    modalRoot.innerHTML = `
-      <div class="modal-overlay" id="modal-overlay">
-        <div class="modal-dialog">
-          <div class="modal-header">
-            <div>
-              <div class="modal-title">Edit Copy</div>
-              <div style="font-size:var(--fs-xs);color:var(--ink-3)">${esc(title.title)}</div>
-            </div>
-            <button type="button" class="btn-close" id="btn-modal-close" aria-label="Close">✕</button>
-          </div>
-
+    if (!openModal({
+      title: "Edit Copy",
+      subtitle: title.title,
+      content: `
           <form id="edit-copy-form" style="display:flex;flex-direction:column;gap:var(--s4)">
             <div class="form-group">
               <label class="form-label">Kind</label>
@@ -550,13 +524,12 @@ import { openWantModal } from "./wishlist.js";
             ${moreFieldsHTML("edit-", copy)}
 
             <div class="form-actions">
-              <button type="button" class="btn btn-ghost" id="btn-modal-cancel">Cancel</button>
+              <button type="button" class="btn btn-ghost" id="btn-modal-cancel" data-modal-close>Cancel</button>
               <button type="submit" class="btn" id="btn-edit-save">Save Changes</button>
             </div>
           </form>
-        </div>
-      </div>
-    `;
+      `,
+    })) return;
 
     const formState = {
       kind: copy.kind,
@@ -642,12 +615,6 @@ import { openWantModal } from "./wishlist.js";
     renderCodeGrid("edit-", formState);
     watchLinkFields("edit-");
 
-    document.getElementById("btn-modal-close")?.addEventListener("click", closeModal);
-    document.getElementById("btn-modal-cancel")?.addEventListener("click", closeModal);
-    document.getElementById("modal-overlay")?.addEventListener("click", (e) => {
-      if (e.target.id === "modal-overlay") closeModal();
-    });
-
     document.getElementById("edit-copy-form")?.addEventListener("submit", async (e) => {
       e.preventDefault();
       const locSelect = document.getElementById("edit-select-copy-location");
@@ -715,44 +682,34 @@ import { openWantModal } from "./wishlist.js";
   }
 
   function openCoverPreviewModal(title, blob, onUpload) {
-    const modalRoot = document.getElementById("modal-root");
-    if (!modalRoot) return;
     const url = URL.createObjectURL(blob);
     const sizeKb = Math.max(1, Math.round(blob.size / 1024));
-    modalRoot.innerHTML = `
-      <div class="modal-overlay" id="modal-overlay">
-        <div class="modal-dialog cover-preview-dialog" role="dialog" aria-modal="true" aria-labelledby="cover-preview-title">
-          <div class="modal-header">
-            <div>
-              <div class="modal-title" id="cover-preview-title">${icon("image")} New cover</div>
-              <div style="font-size:var(--fs-xs);color:var(--ink-3)">${esc(title.title)} · ${sizeKb} KB</div>
-            </div>
-            <button type="button" class="btn-close" id="btn-modal-close" aria-label="Close">✕</button>
-          </div>
+    const modal = openModal({
+      title: "New cover",
+      iconHTML: icon("image"),
+      subtitle: `${title.title} · ${sizeKb} KB`,
+      className: "cover-preview-dialog",
+      titleId: "cover-preview-title",
+      onClose: () => URL.revokeObjectURL(url),
+      content: `
           <img class="cover-preview-img" src="${url}" alt="New cover for ${esc(title.title)}">
           <div class="modal-actions">
-            <button type="button" class="btn btn-ghost" id="btn-cover-cancel">Cancel</button>
+            <button type="button" class="btn btn-ghost" id="btn-cover-cancel" data-modal-close>Cancel</button>
             <button type="button" class="btn" id="btn-cover-upload">Use this cover</button>
           </div>
-        </div>
-      </div>
-    `;
-    const done = () => {
-      URL.revokeObjectURL(url);
-      closeModal();
-    };
-    document.getElementById("btn-modal-close")?.addEventListener("click", done);
-    document.getElementById("btn-cover-cancel")?.addEventListener("click", done);
-    document.getElementById("modal-overlay")?.addEventListener("click", (e) => {
-      if (e.target.id === "modal-overlay") done();
+      `,
     });
+    if (!modal) {
+      URL.revokeObjectURL(url);
+      return;
+    }
     document.getElementById("btn-cover-upload")?.addEventListener("click", async (e) => {
       const btn = e.currentTarget;
       btn.disabled = true;
       btn.textContent = "Uploading…";
       try {
         await onUpload();
-        done();
+        modal.close();
       } catch (err) {
         toast(err.message || "Upload failed");
         btn.disabled = false;
@@ -761,9 +718,11 @@ import { openWantModal } from "./wishlist.js";
     });
   }
 
+  // Closes whatever modal is open (a saved form, a route change); modal.js also closes one on Escape, its close
+  // button and a tap on the backdrop, and each of those resumes the barcode scanner through the hook below.
+  onModalClose(resumeBarcodeScanner);
   function closeModal() {
-    const modalRoot = document.getElementById("modal-root");
-    if (modalRoot) modalRoot.innerHTML = "";
+    closeModals();
     resumeBarcodeScanner();
   }
 
@@ -780,7 +739,8 @@ import { openWantModal } from "./wishlist.js";
       && !document.querySelector("#modal-root > *, .modal-overlay, .filter-popover.open");
   }, true);
 
-  // Close modal or filter popovers on Escape key, or navigate adjacent movies on ArrowLeft/ArrowRight
+  // Close filter popovers on Escape key, or navigate adjacent movies on ArrowLeft/ArrowRight. An open modal takes the
+  // Escape first (modal.js stops it here), so this runs when none is open.
   window.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
       if (escapeLeavesTitle) {
@@ -788,12 +748,7 @@ import { openWantModal } from "./wishlist.js";
         location.hash = state.grid.lastHash || "#/";
         return;
       }
-      closeModal();
-      state.openPopoverId = null;
-      document.querySelectorAll(".filter-popover.open").forEach((p) => {
-        p.classList.remove("open");
-        p.querySelector(".filter-btn")?.setAttribute("aria-expanded", "false");
-      });
+      closeFilterPopovers();
     } else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
       if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
       if (state.route.path === "/t/:id") {
@@ -821,13 +776,7 @@ import { openWantModal } from "./wishlist.js";
 
   // Close filter popovers on outside click
   document.addEventListener("click", (e) => {
-    if (!e.target.closest(".filter-popover")) {
-      state.openPopoverId = null;
-      document.querySelectorAll(".filter-popover.open").forEach((p) => {
-        p.classList.remove("open");
-        p.querySelector(".filter-btn")?.setAttribute("aria-expanded", "false");
-      });
-    }
+    if (!e.target.closest(".filter-popover")) closeFilterPopovers();
   });
 
 export {

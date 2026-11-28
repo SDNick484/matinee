@@ -645,43 +645,6 @@ main#view {
   text-decoration: underline;
 }
 
-.filter-scroll {
-  display: flex;
-  align-items: center;
-  gap: var(--s2);
-  overflow-x: auto;
-  padding-bottom: 2px;
-  -webkit-overflow-scrolling: touch;
-  scrollbar-width: none;
-}
-.filter-scroll::-webkit-scrollbar {
-  display: none;
-}
-.filter-pill {
-  height: 32px;
-  padding: 0 var(--s3);
-  border-radius: var(--r-chip);
-  border: 1px solid var(--line);
-  background: var(--card);
-  color: var(--ink-2);
-  font-size: var(--fs-sm);
-  font-weight: 600;
-  display: inline-flex;
-  align-items: center;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: all 0.15s ease;
-}
-.filter-pill:hover {
-  background: var(--raised);
-  color: var(--ink);
-}
-.filter-pill.active {
-  background: var(--accent);
-  color: var(--accent-ink);
-  border-color: var(--accent);
-}
-
 /* Stats Page */
 .stats-view {
   max-width: 960px;
@@ -952,44 +915,6 @@ main#view {
 @media (hover: hover) {
   .stat-rating-row:hover .stat-rating-score { color: var(--accent); }
 }
-
-/* Placeholders */
-.placeholders-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: var(--s3);
-}
-.placeholder-card {
-  border: 1px dashed var(--line);
-  background: rgba(22, 22, 28, 0.5);
-  border-radius: var(--r-card);
-  padding: var(--s4);
-  display: flex;
-  flex-direction: column;
-  gap: var(--s2);
-}
-.placeholder-badge {
-  align-self: flex-start;
-  font-size: var(--fs-xs);
-  font-weight: 700;
-  color: var(--amber);
-  background: rgba(242, 181, 68, 0.12);
-  padding: 2px 8px;
-  border-radius: var(--r-chip);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-.placeholder-card h3 {
-  font-size: var(--fs-md);
-  font-weight: 700;
-}
-.placeholder-card p {
-  font-size: var(--fs-sm);
-  color: var(--ink-2);
-  line-height: 1.5;
-}
-
-
 
 .sort-select {
   height: 32px;
@@ -1434,22 +1359,6 @@ main#view {
   align-items: center;
   gap: var(--s2);
   flex-wrap: wrap;
-}
-.watch-historical-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  font-size: var(--fs-xs);
-  color: var(--ink-2);
-  cursor: pointer;
-  user-select: none;
-  min-height: 44px;
-}
-.watch-historical-label input[type="checkbox"] {
-  cursor: pointer;
-  width: 18px;
-  height: 18px;
-  accent-color: var(--accent);
 }
 .badge-subtle {
   display: inline-flex;
@@ -3341,3 +3250,65 @@ button.cal-day:focus-visible {
 }
 .play-note .play-note-dismiss { min-height: 44px; }
 .movie-night-pick { display: flex; flex-direction: column; gap: var(--s3); width: 100%; min-width: 0; }
+
+/* Modals and sheets (static/js/modal.js): the line under a heading, a dialog that takes focus itself, the batch review. */
+.modal-sub {
+  font-size: var(--fs-xs);
+  color: var(--ink-3);
+}
+.modal-dialog:focus {
+  outline: none;
+}
+.batch-dialog {
+  max-width: 600px;
+  max-height: 85vh;
+}
+/* A search result is a button (keyboard and screen reader reachable); it keeps the look of the old card. */
+button.result-card {
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+}
+
+/* Touch screens: the small controls get a 44px hit area. */
+@media (pointer: coarse) {
+  .clear-btn {
+    right: 0;
+    width: 44px;
+    height: 44px;
+  }
+  .nav-arrow-btn {
+    min-width: 44px;
+    height: 44px;
+  }
+  .btn-sm,
+  .filter-reset-btn,
+  .toggle-btn,
+  .select-chip {
+    min-height: 44px;
+  }
+  .btn-delete-watch {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
+
+/* People who ask their system for less motion get none: no transitions, no animations. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+  /* the autofill colour is held by a transition that never ends; without it the browser's own light fill shows */
+  input:-webkit-autofill,
+  input:-webkit-autofill:hover,
+  input:-webkit-autofill:focus,
+  select:-webkit-autofill,
+  textarea:-webkit-autofill {
+    transition: background-color 9999s ease-out 0s !important;
+  }
+}

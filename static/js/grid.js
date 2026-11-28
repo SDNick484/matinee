@@ -1,5 +1,5 @@
 // Matinee — poster grid, search and filters (7.2).
-import { api, esc, exportHref, getChipClass, isAdmin, state, toast } from "./core.js";
+import { api, closeFilterPopovers, esc, exportHref, getChipClass, isAdmin, state, toast } from "./core.js";
 import { activePeople } from "./people.js";
 import { getChipIcon, icon } from "./icons.js";
 import { playButtonHtml, wirePlay } from "./play.js";
@@ -297,11 +297,7 @@ import { playButtonHtml, wirePlay } from "./play.js";
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
       const wasOpen = popover.classList.contains("open");
-      document.querySelectorAll(".filter-popover.open").forEach((p) => {
-        p.classList.remove("open");
-        p.querySelector(".filter-btn")?.setAttribute("aria-expanded", "false");
-      });
-      state.openPopoverId = null;
+      closeFilterPopovers();
       if (!wasOpen) {
         popover.classList.add("open");
         btn.setAttribute("aria-expanded", "true");
@@ -427,11 +423,11 @@ import { playButtonHtml, wirePlay } from "./play.js";
     bar.innerHTML = `
       <!-- Medium Dropdown -->
       <div class="filter-popover" id="popover-medium">
-        <button type="button" class="filter-btn ${medium.length ? "active" : ""}" data-toggle="popover" aria-expanded="false" aria-haspopup="true">
+        <button type="button" class="filter-btn ${medium.length ? "active" : ""}" data-toggle="popover" aria-expanded="false">
           <span>${esc(mediumLabel)}</span>
           <span class="caret">▾</span>
         </button>
-        <div class="popover-menu" role="menu">
+        <div class="popover-menu" role="group" aria-label="Medium filter">
           <label class="popover-item is-all">
             <input type="checkbox" data-facet="medium" data-val="" ${medium.length === 0 ? "checked" : ""}>
             <span>All Mediums</span>
@@ -453,11 +449,11 @@ import { playButtonHtml, wirePlay } from "./play.js";
 
       <!-- Quality Dropdown -->
       <div class="filter-popover" id="popover-quality">
-        <button type="button" class="filter-btn ${quality.length ? "active" : ""}" data-toggle="popover" aria-expanded="false" aria-haspopup="true">
+        <button type="button" class="filter-btn ${quality.length ? "active" : ""}" data-toggle="popover" aria-expanded="false">
           <span>${esc(qualityLabel)}</span>
           <span class="caret">▾</span>
         </button>
-        <div class="popover-menu" role="menu">
+        <div class="popover-menu" role="group" aria-label="Quality filter">
           <label class="popover-item is-all">
             <input type="checkbox" data-facet="quality" data-val="" ${quality.length === 0 ? "checked" : ""}>
             <span>All Qualities</span>
@@ -479,11 +475,11 @@ import { playButtonHtml, wirePlay } from "./play.js";
 
       <!-- Genre Dropdown -->
       <div class="filter-popover" id="popover-genre">
-        <button type="button" class="filter-btn ${genre.length ? "active" : ""}" data-toggle="popover" aria-expanded="false" aria-haspopup="true">
+        <button type="button" class="filter-btn ${genre.length ? "active" : ""}" data-toggle="popover" aria-expanded="false">
           <span>${esc(genreLabel)}</span>
           <span class="caret">▾</span>
         </button>
-        <div class="popover-menu" role="menu">
+        <div class="popover-menu" role="group" aria-label="Genre filter">
           <label class="popover-item is-all">
             <input type="checkbox" data-facet="genre" data-val="" ${genre.length === 0 ? "checked" : ""}>
             <span>All Genres</span>
@@ -503,11 +499,11 @@ import { playButtonHtml, wirePlay } from "./play.js";
 
       <!-- Watched Dropdown -->
       <div class="filter-popover" id="popover-watched">
-        <button type="button" class="filter-btn ${watched || whoActive ? "active" : ""}" data-toggle="popover" aria-expanded="false" aria-haspopup="true">
+        <button type="button" class="filter-btn ${watched || whoActive ? "active" : ""}" data-toggle="popover" aria-expanded="false">
           <span>${esc(watchedLabel)}</span>
           <span class="caret">▾</span>
         </button>
-        <div class="popover-menu" role="menu">
+        <div class="popover-menu" role="group" aria-label="Watched filter">
           <label class="popover-item is-all">
             <input type="checkbox" data-facet="watched" data-val="" ${!watched ? "checked" : ""}>
             <span>All Movies</span>
@@ -537,11 +533,11 @@ import { playButtonHtml, wirePlay } from "./play.js";
 
       <!-- Rating Dropdown -->
       <div class="filter-popover" id="popover-rating">
-        <button type="button" class="filter-btn ${rating || score ? "active" : ""}" data-toggle="popover" aria-expanded="false" aria-haspopup="true">
+        <button type="button" class="filter-btn ${rating || score ? "active" : ""}" data-toggle="popover" aria-expanded="false">
           <span>${esc(ratingLabel)}</span>
           <span class="caret">▾</span>
         </button>
-        <div class="popover-menu" role="menu">
+        <div class="popover-menu" role="group" aria-label="Rating filter">
           <label class="popover-item is-all">
             <input type="checkbox" data-facet="rating" data-val="" ${!rating && !score ? "checked" : ""}>
             <span>All Ratings</span>
@@ -571,11 +567,11 @@ import { playButtonHtml, wirePlay } from "./play.js";
         f.locations && f.locations.length
           ? `
       <div class="filter-popover" id="popover-location">
-        <button type="button" class="filter-btn ${locationId ? "active" : ""}" data-toggle="popover" aria-expanded="false" aria-haspopup="true">
+        <button type="button" class="filter-btn ${locationId ? "active" : ""}" data-toggle="popover" aria-expanded="false">
           ${icon("pin")}<span>${esc(locationLabel)}</span>
           <span class="caret">▾</span>
         </button>
-        <div class="popover-menu" role="menu">
+        <div class="popover-menu" role="group" aria-label="Location filter">
           <label class="popover-item is-all">
             <input type="checkbox" data-facet="location" data-val="" ${!locationId ? "checked" : ""}>
             <span>All Locations</span>
@@ -615,16 +611,11 @@ import { playButtonHtml, wirePlay } from "./play.js";
         e.stopPropagation();
         const popover = btn.closest(".filter-popover");
         const isOpen = popover.classList.contains("open");
-        document.querySelectorAll(".filter-popover.open").forEach((p) => {
-          p.classList.remove("open");
-          p.querySelector(".filter-btn")?.setAttribute("aria-expanded", "false");
-        });
+        closeFilterPopovers();
         if (!isOpen) {
           popover.classList.add("open");
           btn.setAttribute("aria-expanded", "true");
           state.openPopoverId = popover.id;
-        } else {
-          state.openPopoverId = null;
         }
       });
     });

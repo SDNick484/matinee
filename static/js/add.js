@@ -3,6 +3,7 @@ import { api, esc, isAdmin, state, TMDB_IMG_THUMB, toast } from "./core.js";
 import { icon } from "./icons.js";
 import { navigate } from "./router.js";
 import { openCopyModal } from "./forms.js";
+import { openModal } from "./modal.js";
 
   // ================================================================= 8.1 / 8.2 Add Flow & Barcode Scanner
   let scannerStream = null;
@@ -415,34 +416,22 @@ import { openCopyModal } from "./forms.js";
         return;
       }
 
-      const modalRoot = document.getElementById("modal-root");
-      if (!modalRoot) return;
-
-      modalRoot.innerHTML = `
-        <div class="modal-overlay" id="modal-overlay">
-          <div class="modal-dialog" style="max-width:600px;max-height:85vh;overflow-y:auto">
-            <div class="modal-header">
-              <div>
-                <div class="modal-title">Review Scanned Discs (${queue.length})</div>
-                <div style="font-size:var(--fs-xs);color:var(--ink-3)">Resolve and import your physical discs in bulk</div>
-              </div>
-              <button type="button" class="btn-close" id="btn-batch-modal-close">✕</button>
-            </div>
-
+      const modal = openModal({
+        title: `Review Scanned Discs (${queue.length})`,
+        subtitle: "Resolve and import your physical discs in bulk",
+        className: "batch-dialog",
+        content: `
             <div id="batch-items-container" style="padding:var(--s3) 0">
               <div style="text-align:center;padding:24px;color:var(--ink-2)">Resolving ${queue.length} barcodes…</div>
             </div>
 
             <div class="form-actions" style="margin-top:var(--s4)">
-              <button type="button" class="btn btn-ghost" id="btn-batch-modal-cancel">Close</button>
+              <button type="button" class="btn btn-ghost" id="btn-batch-modal-cancel" data-modal-close>Close</button>
               <button type="button" class="btn" id="btn-batch-import-all">Import All Selected</button>
             </div>
-          </div>
-        </div>
-      `;
-
-      document.getElementById("btn-batch-modal-close")?.addEventListener("click", () => modalRoot.innerHTML = "");
-      document.getElementById("btn-batch-modal-cancel")?.addEventListener("click", () => modalRoot.innerHTML = "");
+        `,
+      });
+      if (!modal) return;
 
       // Resolve items sequentially
       const itemsContainer = document.getElementById("batch-items-container");
@@ -465,6 +454,7 @@ import { openCopyModal } from "./forms.js";
         }
       }
 
+      if (!modal.overlay.isConnected) return;   // closed (Escape, Close) while the barcodes were resolving
       itemsContainer.innerHTML = resolved
         .map((item, idx) => {
           if (!item.ok) {
@@ -525,7 +515,7 @@ import { openCopyModal } from "./forms.js";
         const remaining = queue.filter((code) => !importedUpcs.has(code));
         setBatchQueue(remaining);
         updateBatchUI();
-        modalRoot.innerHTML = "";
+        modal.close();
         if (failedCount > 0) {
           toast(`Added ${addedCount}, ${failedCount} failed`);
         } else if (addedCount > 0) {
@@ -617,18 +607,18 @@ import { openCopyModal } from "./forms.js";
               const thumbUrl = m.poster_path ? `${TMDB_IMG_THUMB}${m.poster_path}` : "";
               const thumbHtml = thumbUrl
                 ? `<img class="result-thumb" src="${esc(thumbUrl)}" loading="lazy" alt="${esc(m.title)}" data-hide-on-error>`
-                : `<div class="result-thumb poster-ph" style="font-size:10px">${esc(m.title)}</div>`;
+                : `<span class="result-thumb poster-ph" style="font-size:10px">${esc(m.title)}</span>`;
 
               return `
-                <div class="result-card" data-tmdb-id="${m.tmdb_id}">
+                <button type="button" class="result-card" data-tmdb-id="${m.tmdb_id}">
                   ${thumbHtml}
-                  <div class="result-info">
-                    <div class="result-title">${esc(m.title)}</div>
-                    <div class="result-year">${m.year || "Unknown year"}</div>
-                    ${m.overview ? `<div class="result-overview">${esc(m.overview)}</div>` : ""}
+                  <span class="result-info">
+                    <span class="result-title">${esc(m.title)}</span>
+                    <span class="result-year">${m.year || "Unknown year"}</span>
+                    ${m.overview ? `<span class="result-overview">${esc(m.overview)}</span>` : ""}
                     ${m.owned ? `<span class="badge-owned">In collection</span>` : ""}
-                  </div>
-                </div>
+                  </span>
+                </button>
               `;
             })
             .join("")}
