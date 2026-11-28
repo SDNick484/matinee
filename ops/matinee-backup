@@ -1,66 +1,174 @@
 #!/bin/sh
-# Nightly backup of Matinee, the movie collection (installed by setup-matinee.sh). Runs from /etc/periodic/daily:
-#   $LOCAL_DIR/<date>/matinee-matinee.db.gz          (kept KEEP_DAYS days)
+# Backup of Matinee, the movie collection (installed by setup-matinee.sh). Runs from /etc/periodic/daily, and the
+# installer runs it once more with a label before an upgrade ("matinee-backup pre-upgrade"):
+#   $LOCAL_DIR/<date>/matinee-matinee.db.gz                       the scheduled run
+#   $LOCAL_DIR/<date>/matinee-matinee-<label>-<HHMMSS>.db.gz      a run with a label, never overwritten
+#   $LOCAL_DIR/<date>/matinee-custom-covers[-<label>-<HHMMSS>].tar.gz   uploaded covers, same naming
 #   $BACKUP_TARGET/db/<date>/...  + $BACKUP_TARGET/files/matinee/images/   (if BACKUP_TARGET is set)
+# Folders older than KEEP_DAYS are pruned, but only after this run wrote a copy that passed integrity_check and is
+# not empty, and never the folder of today's run. Everything is written to a temp name and renamed, so a failed run
+# leaves the earlier files alone. Files are 600 in 700 folders: the dump holds watch notes, root only.
 # TMDB art in images/ can be re-fetched; copying it just makes a restore instant.
-# Uploaded covers (images/<tmdb_id>-custom-*) cannot be re-fetched, so they are also kept
-#   locally as $LOCAL_DIR/<date>/matinee-custom-covers.tar.gz next to the database copy.
-# Config: /etc/conf.d/ops     Log: /var/log/ops.log
-# (MATINEE_DATA and LOG may be overridden for a local test run.)
+# Uploaded covers (images/<tmdb_id>-custom-*) cannot be re-fetched, so they are also kept locally.
+# Any failure exits non-zero, writes one line to $LOG and to syslog (logger), and calls NOTIFY_CMD if it is executable.
+# Config: /etc/conf.d/ops (LOCAL_DIR, KEEP_DAYS, BACKUP_TARGET, NOTIFY_CMD)   Log: /var/log/ops.log
+# The data folder is DATA_DIR from /etc/conf.d/matinee (default /var/lib/matinee). Runbook: docs/restore.md
+# (MATINEE_DATA, MATINEE_CONF, OPS_CONF, LOG, LOCAL_DIR and NOTIFY_CMD may be overridden for a local test run.)
 set -u
+umask 077
 OPS_CONF=${OPS_CONF:-/etc/conf.d/ops}
-[ -f /etc/conf.d/ct210-ops ] && OPS_CONF=/etc/conf.d/ct210-ops
 # shellcheck source=/dev/null  # optional config, path comes from the environment
 [ -f "$OPS_CONF" ] && . "$OPS_CONF"
 LOCAL_DIR=${LOCAL_DIR:-/var/backups/matinee}
 KEEP_DAYS=${KEEP_DAYS:-14}
 BACKUP_TARGET=${BACKUP_TARGET:-}
-STAMP=$(date +%Y-%m-%d)
+NOTIFY_CMD=${NOTIFY_CMD:-/usr/local/bin/ops-notify}
 LOG=${LOG:-/var/log/ops.log}
-DATA=${MATINEE_DATA:-/var/lib/matinee}
+MATINEE_CONF=${MATINEE_CONF:-/etc/conf.d/matinee}
+STAMP=$(date +%Y-%m-%d)
+log() { echo "$(date '+%F %T') matinee-backup: $*" >> "$LOG" 2>/dev/null || true; }
+# a failure goes to ops.log, to syslog when logger exists, and to stderr (cron mails it)
+flog() {
+  log "FAILED: $*"
+  command -v logger >/dev/null 2>&1 && logger -t matinee-backup -p user.err "FAILED: $*" 2>/dev/null
+  echo "matinee-backup: FAILED: $*" >&2
+  return 0
+}
+
+# a config kept under an older, prefixed name is no longer read: say so rather than use the defaults in silence
+if [ ! -f "$OPS_CONF" ]; then
+  for old in "$(dirname "$OPS_CONF")"/*-ops; do
+    [ -f "$old" ] || continue
+    log "WARNING: $old is not read any more; move its settings to $OPS_CONF"
+    echo "matinee-backup: WARNING: $old is not read any more; move its settings to $OPS_CONF" >&2
+    break
+  done
+fi
+
+# DATA_DIR from the service's config; the file holds secrets, so read the one key rather than sourcing it
+if [ -n "${MATINEE_DATA:-}" ]; then
+  DATA=$MATINEE_DATA
+else
+  DATA=""
+  [ -f "$MATINEE_CONF" ] && DATA=$(sed -n 's/^DATA_DIR=//p' "$MATINEE_CONF" | tail -n 1 | tr -d "\"'")
+  DATA=${DATA:-/var/lib/matinee}
+fi
 DB=$DATA/matinee.db
-log() { echo "$(date '+%F %T') matinee-backup: $*" >> "$LOG"; }
+
+# an optional label ("pre-upgrade") makes a separately named copy that the scheduled run never touches
+label=${1:-}
+suffix=""
+if [ -n "$label" ]; then
+  case "$label" in
+    *[!A-Za-z0-9._-]*|[!A-Za-z0-9]*) echo "usage: matinee-backup [label]   (label: letters, digits, . _ -)" >&2; exit 2;;
+  esac
+  suffix="-$label-$(date +%H%M%S)"
+fi
 
 fail=0
-mkdir -p "$LOCAL_DIR/$STAMP"
-out="$LOCAL_DIR/$STAMP/matinee-matinee.db"
-if [ -f "$DB" ]; then
-  if sqlite3 "$DB" ".backup '$out'" && [ "$(sqlite3 "$out" 'PRAGMA integrity_check;')" = "ok" ]; then
-    gzip -f "$out"
-    log "ok matinee/matinee.db ($(du -h "$out.gz" | cut -f1))"
+dbok=0
+work=""
+trap '[ -n "$work" ] && rm -rf "$work"' EXIT
+trap 'exit 1' INT TERM
+
+notify_failure() {
+  if [ -x "$NOTIFY_CMD" ]; then
+    "$NOTIFY_CMD" "Matinee backup" down "A Matinee backup had a problem. See $LOG." || true
+  fi
+}
+finish() {
+  if [ "$fail" != 0 ]; then notify_failure; fi
+  exit "$fail"
+}
+
+# <base><suffix>.<ext>; a labelled run that lands on an existing name (same second) takes -2, -3 ... instead
+free_name() {  # dir base ext
+  n="$1/$2$suffix.$3"
+  [ -z "$suffix" ] && { echo "$n"; return 0; }   # the scheduled run keeps its plain name and replaces it by rename
+  i=1
+  while [ -e "$n" ]; do i=$((i+1)); n="$1/$2$suffix-$i.$3"; done
+  echo "$n"
+}
+
+command -v sqlite3 >/dev/null 2>&1 || { flog "sqlite3 is not installed."; fail=1; finish; }
+case "$KEEP_DAYS" in ''|*[!0-9]*) KEEP_DAYS=14;; esac
+
+if ! mkdir -p "$LOCAL_DIR/$STAMP" 2>/dev/null; then
+  flog "cannot create $LOCAL_DIR/$STAMP"; fail=1; finish
+fi
+# copies made before this run (or by an older version of this script) were world-readable
+find "$LOCAL_DIR" -type d -exec chmod 700 {} + 2>/dev/null
+find "$LOCAL_DIR" -type f -exec chmod 600 {} + 2>/dev/null
+dest="$LOCAL_DIR/$STAMP"
+work=$(mktemp -d "$dest/.work.XXXXXX") || { flog "cannot create a temp folder in $dest"; fail=1; finish; }
+
+final=""
+if [ ! -f "$DB" ]; then
+  flog "no database at $DB (DATA_DIR from $MATINEE_CONF)"; fail=1
+else
+  raw="$work/matinee.db"
+  if ! sqlite3 "$DB" ".backup '$raw'"; then
+    flog "matinee/matinee.db: sqlite3 .backup failed"; fail=1
+  elif [ ! -s "$raw" ]; then
+    flog "matinee/matinee.db: the copy is empty"; fail=1
+  elif [ "$(sqlite3 "$raw" 'PRAGMA integrity_check;' 2>&1)" != "ok" ]; then
+    flog "matinee/matinee.db: the copy failed integrity_check"; fail=1
+  elif ! gzip -c "$raw" > "$work/matinee.db.gz" || ! gzip -t "$work/matinee.db.gz" || [ ! -s "$work/matinee.db.gz" ]; then
+    flog "matinee/matinee.db: could not compress the copy"; fail=1
   else
-    log "FAILED matinee/matinee.db"; fail=1
+    final=$(free_name "$dest" matinee-matinee db.gz)
+    chmod 600 "$work/matinee.db.gz"
+    if mv -f "$work/matinee.db.gz" "$final"; then
+      dbok=1
+      log "ok matinee/matinee.db -> $(basename "$final") ($(du -h "$final" | cut -f1))"
+    else
+      flog "matinee/matinee.db: could not move the copy to $final"; fail=1
+    fi
   fi
 fi
+
 # shellcheck disable=SC2010  # the grep pattern pins the names to <tmdb_id>-custom-<hex>.<ext>
 covers=$(ls "$DATA/images" 2>/dev/null | grep -E -- '-custom-[0-9a-f]{10}\.(jpg|png|webp)$')
 if [ -n "$covers" ]; then
   # shellcheck disable=SC2086  # names are <tmdb_id>-custom-<hex>.<ext>: no spaces
-  if (cd "$DATA/images" && tar -czf "$LOCAL_DIR/$STAMP/matinee-custom-covers.tar.gz" $covers); then
-    log "ok matinee custom covers ($(echo "$covers" | wc -l | tr -d ' ') files)"
+  if (cd "$DATA/images" && tar -czf "$work/covers.tar.gz" $covers) && [ -s "$work/covers.tar.gz" ]; then
+    cfinal=$(free_name "$dest" matinee-custom-covers tar.gz)
+    chmod 600 "$work/covers.tar.gz"
+    if mv -f "$work/covers.tar.gz" "$cfinal"; then
+      log "ok matinee custom covers ($(echo "$covers" | wc -l | tr -d ' ') files)"
+    else
+      flog "matinee custom covers: could not move the archive to $cfinal"; fail=1
+    fi
   else
-    log "FAILED matinee custom covers"; fail=1
+    flog "matinee custom covers: tar failed"; fail=1
   fi
 fi
-find "$LOCAL_DIR" -mindepth 1 -maxdepth 1 -type d -mtime +"$KEEP_DAYS" -exec rm -rf {} + 2>/dev/null
+
+# prune only behind a good copy from this run; today's folder is never a candidate
+if [ "$dbok" = 1 ]; then
+  find "$LOCAL_DIR" -mindepth 1 -maxdepth 1 -type d -name '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]' \
+    ! -name "$STAMP" -mtime +"$KEEP_DAYS" -exec rm -rf {} + 2>/dev/null
+else
+  log "not pruning old copies: this run did not produce a good database copy"
+fi
 
 if [ -n "$BACKUP_TARGET" ]; then
   if [ -d "$BACKUP_TARGET" ] && [ -w "$BACKUP_TARGET" ]; then
     mkdir -p "$BACKUP_TARGET/db/$STAMP" "$BACKUP_TARGET/files/matinee/images"
-    cp -a "$out.gz" "$BACKUP_TARGET/db/$STAMP/" 2>/dev/null || fail=1
+    if [ -n "$final" ]; then
+      tname=$(basename "$final")
+      if cp -p "$final" "$BACKUP_TARGET/db/$STAMP/.$tname.tmp" && mv -f "$BACKUP_TARGET/db/$STAMP/.$tname.tmp" "$BACKUP_TARGET/db/$STAMP/$tname"; then
+        :
+      else
+        rm -f "$BACKUP_TARGET/db/$STAMP/.$tname.tmp"; flog "could not copy $tname to $BACKUP_TARGET"; fail=1
+      fi
+    fi
     # a refresh rewrites an image under the same name, so -u copies new and updated files only
-    cp -au "$DATA/images/." "$BACKUP_TARGET/files/matinee/images/" || fail=1
+    cp -au "$DATA/images/." "$BACKUP_TARGET/files/matinee/images/" || { flog "could not copy images to $BACKUP_TARGET"; fail=1; }
     log "matinee copied to $BACKUP_TARGET"
   else
-    log "FAILED: BACKUP_TARGET $BACKUP_TARGET is not a writable directory (is it mounted?)"; fail=1
+    flog "BACKUP_TARGET $BACKUP_TARGET is not a writable directory (is it mounted?)"; fail=1
   fi
 fi
 
-if [ "$fail" != 0 ]; then
-  if [ -x /usr/local/bin/ops-notify ]; then
-    /usr/local/bin/ops-notify "Matinee backup" down "Last night's Matinee backup had a problem. See $LOG."
-  elif [ -x /usr/local/bin/ct210-notify ]; then
-    /usr/local/bin/ct210-notify "Matinee backup" down "Last night's Matinee backup had a problem. See $LOG."
-  fi
-fi
-exit $fail
+finish
