@@ -1001,7 +1001,7 @@ JS_FILES = sorted(p.name for p in (matinee.APP_DIR / "static" / "js").glob("*.js
 
 
 def _import_map(html):
-    m = re.search(r'<script type="importmap">(.*?)</script>', html, re.S)
+    m = re.search(r'<script type="importmap"(?: nonce="[^"]+")?>(.*?)</script>', html, re.S)
     assert m, "no import map in the page"
     return json.loads(m.group(1))["imports"]
 
@@ -1025,7 +1025,7 @@ def test_index_import_map_versions_every_module(path):
             assert imports[f"/static/js/{f}"] == f"/static/js/{f}?v={versions[f'js/{f}']}"
     entry = f'<script type="module" src="/static/js/main.js?v={versions["js/main.js"]}"></script>'
     assert entry in html
-    assert html.index('<script type="importmap">') < html.index(entry)   # a map after the first module is ignored
+    assert html.index('<script type="importmap"') < html.index(entry)   # a map after the first module is ignored
     preloads = re.findall(r'<link rel="modulepreload" href="([^"]+)">', html)
     assert sorted(preloads) == sorted(imports.values())
     assert f'href="/static/style.css?v={versions["style.css"]}"' in html

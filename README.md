@@ -158,8 +158,11 @@ Requests through the Cloudflare tunnel are unaffected: they carry `Cf-Ray` and n
 editors there sign in with Access.
 
 Every response also carries `X-Content-Type-Options: nosniff`, `Referrer-Policy: same-origin` and
-`Content-Security-Policy: frame-ancestors 'self'` (no framing by other sites). A stricter script/style CSP is
-not set, because the UI still uses inline event handlers and `style` attributes.
+`Content-Security-Policy: frame-ancestors 'self'` (no framing by other sites). The HTML pages (`/` and `/admin`)
+carry a full policy: scripts run only from this origin, plus the inline import map, which holds a fresh nonce on
+every response; images load from this origin, `image.tmdb.org` (Add search thumbnails), `data:` and `blob:`;
+nothing connects anywhere but here; no plugins, no `<base>`, forms post only here. Inline `style` attributes are
+still allowed. So a missed `esc()` on TMDB or user text can no longer run script in an editor's session.
 
 ---
 

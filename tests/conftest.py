@@ -133,3 +133,63 @@ def utc_host(monkeypatch):
         else:
             os.environ["TZ"] = old_tz
         time.tzset()
+
+
+# ------------------------------------------------------------------ Content-Security-Policy guard for every UI test
+# Every tests/*_ui.py makes its own Playwright browser, so the guard wraps page creation instead: each page made by
+# Browser.new_page or BrowserContext.new_page records `securitypolicyviolation` events and the browser's own CSP
+# console errors, and the test fails at teardown if any were seen. A test that provokes a violation on purpose
+# takes the `csp_violations` list the fixture yields, asserts on it and clears it (tests/test_csp_ui.py).
+_CSP_LISTENER = """
+window.addEventListener("securitypolicyviolation", (e) => {
+  console.error("securitypolicyviolation: " + e.violatedDirective + " blocked " + (e.blockedURI || "inline") +
+                " on " + location.pathname);
+}, true);
+"""
+_CSP_CONSOLE = ("Content Security Policy", "Content-Security-Policy", "securitypolicyviolation")
+
+
+@pytest.fixture(autouse=True)
+def csp_violations(monkeypatch):
+    seen, pages = [], []
+    try:
+        from playwright import sync_api
+    except ImportError:             # no Playwright: the UI tests skip themselves
+        yield seen
+        return
+
+    def watch(page):
+        pages.append(page)
+        page.add_init_script(_CSP_LISTENER)
+        page.on("console", lambda m: seen.append(m.text) if m.type == "error" and any(k in m.text for k in _CSP_CONSOLE) else None)
+        return page
+
+    def wrap(cls):
+        original = cls.new_page
+        monkeypatch.setattr(cls, "new_page", lambda self, *a, **kw: watch(original(self, *a, **kw)))
+
+    wrap(sync_api.Browser)
+    wrap(sync_api.BrowserContext)
+
+    def wait_for_function(self, expression, arg=None, *, timeout=None, polling=None):
+        """Playwright's own wait_for_function eval()s its predicate in the page, which script-src (rightly) refuses.
+        Poll over CDP instead, where an expression or function string runs without eval. `polling` is ignored."""
+        deadline = time.monotonic() + (30000 if timeout is None else timeout) / 1000
+        while True:
+            handle = self.evaluate_handle(expression, arg)
+            if handle.evaluate("v => !!v"):
+                return handle
+            handle.dispose()
+            if timeout != 0 and time.monotonic() > deadline:
+                raise sync_api.TimeoutError(f"wait_for_function timed out: {expression}")
+            self.wait_for_timeout(30)
+
+    monkeypatch.setattr(sync_api.Page, "wait_for_function", wait_for_function)
+    monkeypatch.setattr(sync_api.Frame, "wait_for_function", wait_for_function)
+    yield seen
+    for page in pages:              # let a console message still in flight reach the listener
+        try:
+            page.evaluate("0")
+        except Exception:           # noqa: BLE001 — the test closed the page
+            pass
+    assert not seen, "Content-Security-Policy violations in the page:\n  " + "\n  ".join(dict.fromkeys(seen))

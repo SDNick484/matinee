@@ -220,7 +220,11 @@ def test_security_headers_on_every_response(client, path):
     r = client.get(path)
     assert r.headers["X-Content-Type-Options"] == "nosniff"
     assert r.headers["Referrer-Policy"] == "same-origin"
-    assert r.headers["Content-Security-Policy"] == "frame-ancestors 'self'"
+    csp = r.headers["Content-Security-Policy"]
+    if path in ("/", "/admin"):   # the pages carry the full script policy (tests/test_csp.py), still no framing
+        assert csp.startswith("default-src 'self'; script-src 'self' 'nonce-") and csp.endswith("frame-ancestors 'self'")
+    else:
+        assert csp == "frame-ancestors 'self'"
 
 
 def test_security_headers_on_errors(client):
