@@ -161,6 +161,7 @@ jobs:
             py3-pip \
             sqlite \
             nodejs \
+            git \
             bash \
             tar
 
